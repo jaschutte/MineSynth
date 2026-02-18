@@ -1,0 +1,12 @@
+aag 7 2 0 2 3    # header line
+2                # input 0 (x)
+4                # input 1 (y)
+6                # output 0 (sum bit s)
+12               # output 1 (carry c)
+6 13 15          # AND gate 0 (x ^ y)
+12 2 4           # AND gate 1 (x & y)
+14 3 5           # AND gate 2 (!x & !y)
+i0 x             # symbol for input 0
+i1 y             # symbol for input 1
+o0 s             # symbol for output 0
+o1 c             # symbol for output 1
