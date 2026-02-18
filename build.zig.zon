@@ -1,0 +1,12 @@
+.{
+    .name = .MineSynth,
+    .version = "0.0.0",
+
+    .fingerprint = 0xa6370b8085fddab3,
+    .minimum_zig_version = "0.15.2",
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}
