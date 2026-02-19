@@ -10,7 +10,9 @@ pub fn build(b: *std.Build) void {
             .root_source_file = b.path("src/main.zig"),
             .target = target,
             .optimize = optimize,
-            .imports = &.{},
+            .imports = &.{
+                .{ .name = "aiger", .module = b.createModule(.{ .root_source_file = b.path("src/aiger.zig") }) },
+            },
         }),
     });
     b.installArtifact(exe);
