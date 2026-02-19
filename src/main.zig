@@ -1,4 +1,5 @@
 const std = @import("std");
+const pretty = @import("pretty");
 const aiger = @import("aiger");
 
 pub fn main() !void {
@@ -12,5 +13,5 @@ pub fn main() !void {
 
     const aig = try aiger.Aiger.parse_aag(allocator, content);
     defer _ = aig.deinit();
-    std.debug.print("{any}\n", .{aig});
+    try pretty.print(allocator, aig, .{});
 }

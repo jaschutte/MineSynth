@@ -17,6 +17,9 @@ pub fn build(b: *std.Build) void {
     });
     b.installArtifact(exe);
 
+    const pretty = b.dependency("pretty", .{ .target = target, .optimize = optimize });
+    exe.root_module.addImport("pretty", pretty.module("pretty"));
+
     // Run toplevel command
     const run_step = b.step("run", "Run the app");
     const run_cmd = b.addRunArtifact(exe);

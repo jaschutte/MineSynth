@@ -1,6 +1,12 @@
 .{
     .name = .MineSynth,
     .version = "0.0.0",
+    .dependencies = .{
+        .pretty = .{
+            .url = "https://github.com/timfayz/pretty/archive/refs/heads/main.tar.gz",
+            .hash = "pretty-0.10.6-Tm65r6lPAQCBxgwzehYPeqsCXQDT9kt2ktJuO-2tRfE6",
+        },
+    },
 
     .fingerprint = 0xa6370b8085fddab3,
     .minimum_zig_version = "0.15.2",
