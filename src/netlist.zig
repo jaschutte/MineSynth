@@ -34,6 +34,18 @@ const Net = struct {
             .unnegated => |item| (item.value << 1) | 0b1,
         };
     }
+
+    // Indicates negated status, or literal
+    fn symbol_extra(self: *const Net) []const u8 {
+        return switch (self.tag) {
+            0 => "=False",
+            1 => "=True",
+            else => |tag| if (tag & 0b1 == 0b1)
+                ""
+            else
+                "#",
+        };
+    }
 };
 
 const GateType = enum {
@@ -44,19 +56,30 @@ const GateType = enum {
 const Gate = struct {
     inputs: std.ArrayList(NetPtr),
     outputs: std.ArrayList(NetPtr),
+    symbol: aiger.Symbol,
     kind: GateType,
+
+    var gate_number: u64 = 0;
 
     fn deinit(self: *Gate, gpa: std.mem.Allocator) void {
         self.inputs.deinit(gpa);
         self.outputs.deinit(gpa);
+        gpa.free(self.symbol);
     }
 
-    fn new(kind: GateType) Gate {
+    fn new(kind: GateType, symbol: ?aiger.Symbol) Gate {
         return Gate{
             .inputs = .empty,
             .outputs = .empty,
             .kind = kind,
+            .symbol = symbol orelse "#UNNAMED_GATE",
         };
+    }
+
+    fn new_gate_symbol(allocator: std.mem.Allocator) aiger.Symbol {
+        const symbol = std.fmt.allocPrint(allocator, "gate.{}", .{gate_number}) catch "gate.???";
+        gate_number += 1;
+        return symbol;
     }
 };
 
@@ -71,11 +94,11 @@ pub const Netlist = struct {
     nets_check: std.AutoHashMap(u64, NetPtr),
     gates: std.ArrayList(Gate),
 
-    pub fn get_net(self: *Self, ptr: NetPtr) *Net {
+    pub fn get_net(self: *const Self, ptr: NetPtr) *Net {
         return @ptrCast(self.nets.items.ptr + ptr);
     }
 
-    pub fn get_gate(self: *Self, ptr: GatePtr) *Gate {
+    pub fn get_gate(self: *const Self, ptr: GatePtr) *Gate {
         return @ptrCast(self.gates.items.ptr + ptr);
     }
 
@@ -106,7 +129,7 @@ pub const Netlist = struct {
             return;
         }
 
-        var inverter = Gate.new(GateType.inverter);
+        var inverter = Gate.new(GateType.inverter, Gate.new_gate_symbol(self.allocator));
         try inverter.inputs.append(self.allocator, base_ptr);
         try inverter.outputs.append(self.allocator, negated_ptr);
         try self.gates.append(self.allocator, inverter);
@@ -159,7 +182,7 @@ pub const Netlist = struct {
             try netlist.add_negated_net(item.and_gate.a);
             try netlist.add_negated_net(item.and_gate.b);
 
-            var and_gate = Gate.new(GateType.and_gate);
+            var and_gate = Gate.new(GateType.and_gate, Gate.new_gate_symbol(allocator));
             try and_gate.outputs.append(allocator, out_ptr);
             try and_gate.inputs.append(allocator, a_ptr);
             try and_gate.inputs.append(allocator, b_ptr);
@@ -169,8 +192,33 @@ pub const Netlist = struct {
             try netlist.get_net(a_ptr).binds.append(allocator, gate_ptr);
             try netlist.get_net(b_ptr).binds.append(allocator, gate_ptr);
             try netlist.get_net(out_ptr).binds.append(allocator, gate_ptr);
-
         }
         return netlist;
+    }
+
+    pub fn print_nets(self: *const Self) void {
+        for (self.nets.items) |*net| {
+            std.debug.print("\nNET {s}{s}:\n", .{ net.symbol, net.symbol_extra() });
+            for (net.binds.items) |gate_ptr| {
+                const gate = self.get_gate(gate_ptr);
+                std.debug.print(" -> {s}: {any}\n", .{ gate.symbol, gate.kind });
+            }
+        }
+    }
+
+    pub fn print_gates(self: *const Self) void {
+        for (self.gates.items) |*gate| {
+            std.debug.print("\nGATE {s} ({any}):\n", .{ gate.symbol, gate.kind });
+            std.debug.print(" INPUTS:\n", .{});
+            for (gate.inputs.items) |net_ptr| {
+                const net = self.get_net(net_ptr);
+                std.debug.print(" -> {s}{s}\n", .{net.symbol, net.symbol_extra()});
+            }
+            std.debug.print(" OUTPUTS:\n", .{});
+            for (gate.outputs.items) |net_ptr| {
+                const net = self.get_net(net_ptr);
+                std.debug.print(" -> {s}{s}\n", .{net.symbol, net.symbol_extra()});
+            }
+        }
     }
 };

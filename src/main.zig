@@ -18,7 +18,10 @@ pub fn main() !void {
     var nl = try netlist.Netlist.from_aiger(allocator, aig);
     defer _ = nl.deinit();
 
-    try pretty.print(allocator, nl, .{});
-    try pretty.print(allocator, aig, .{});
+    nl.print_nets();
+    nl.print_gates();
+
+    // try pretty.print(allocator, nl, .{});
+    // try pretty.print(allocator, aig, .{});
 
 }
