@@ -1,5 +1,6 @@
 const std = @import("std");
 const aiger = @import("aiger.zig");
+const physical = @import("physical.zig");
 
 const Error = error{
     MalorderedAiger,
@@ -51,6 +52,19 @@ const Net = struct {
 const GateType = enum {
     inverter,
     and_gate,
+
+    pub inline fn size(self: GateType) u64 {
+        switch (self) {
+            .inverter => physical.Size {
+                .w = 1,
+                .h = 3,
+            },
+            .and_gate => physical.Size {
+                .w = 6,
+                .h = 3,
+            },
+        }
+    }
 };
 
 const Gate = struct {
@@ -94,12 +108,16 @@ pub const Netlist = struct {
     nets_check: std.AutoHashMap(u64, NetPtr),
     gates: std.ArrayList(Gate),
 
-    pub fn get_net(self: *const Self, ptr: NetPtr) *Net {
+    pub inline fn get_net(self: *const Self, ptr: NetPtr) *Net {
         return @ptrCast(self.nets.items.ptr + ptr);
     }
 
-    pub fn get_gate(self: *const Self, ptr: GatePtr) *Gate {
+    pub inline fn get_gate(self: *const Self, ptr: GatePtr) *Gate {
         return @ptrCast(self.gates.items.ptr + ptr);
+    }
+
+    pub inline fn get_gate_size(self: *const Self, ptr: GatePtr) physical.Size {
+        return self.gates.items[ptr].kind.size();
     }
 
     // Creates a net if it does not exist yet, if the net does exist, simply return the pointer to it
