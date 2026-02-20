@@ -10,12 +10,16 @@ pub fn build(b: *std.Build) void {
             .root_source_file = b.path("src/main.zig"),
             .target = target,
             .optimize = optimize,
-            .imports = &.{
-                .{ .name = "aiger", .module = b.createModule(.{ .root_source_file = b.path("src/aiger.zig") }) },
-            },
+            .imports = &.{},
         }),
     });
     b.installArtifact(exe);
+
+    // const aiger_mod = b.createModule(.{ .root_source_file = b.path("src/aiger.zig") });
+    // const netlist_mod = b.createModule(.{ .root_source_file = b.path("src/netlist.zig") });
+    //
+    // exe.root_module.addImport("aiger", aiger_mod);
+    // exe.root_module.addImport("netlist", netlist_mod);
 
     const pretty = b.dependency("pretty", .{ .target = target, .optimize = optimize });
     exe.root_module.addImport("pretty", pretty.module("pretty"));

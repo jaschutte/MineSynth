@@ -1,6 +1,7 @@
 const std = @import("std");
 const pretty = @import("pretty");
-const aiger = @import("aiger");
+const aiger = @import("aiger.zig");
+const netlist = @import("netlist.zig");
 
 pub fn main() !void {
     var gpa: std.heap.DebugAllocator(.{}) = .init;
@@ -13,5 +14,11 @@ pub fn main() !void {
 
     const aig = try aiger.Aiger.parse_aag(allocator, content);
     defer _ = aig.deinit();
+
+    var nl = try netlist.Netlist.from_aiger(allocator, aig);
+    defer _ = nl.deinit();
+
+    try pretty.print(allocator, nl, .{});
     try pretty.print(allocator, aig, .{});
+
 }

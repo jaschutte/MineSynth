@@ -111,14 +111,25 @@ fn parse_symbol_line(line: []const u8) !struct { target: SymbolTarget, index: us
     };
 }
 
-const Literal = union(LiteralType) {
+pub const Literal = union(LiteralType) {
+    const Self = @This();
+
     false: void,
     true: void,
     negated: struct { symbol: Symbol, value: u64 },
     unnegated: struct { symbol: Symbol, value: u64 },
 
-    pub fn get_symbol(self: *const Literal) []const u8 {
-        return switch (self) {
+    pub fn get_inverted(self: *const Self) ?Self {
+        return switch (self.*) {
+            .false => null,
+            .true => null,
+            .negated => |item| Self{ .unnegated = .{ .symbol = item.symbol, .value = item.value } },
+            .unnegated => |item| Self{ .negated = .{ .symbol = item.symbol, .value = item.value } },
+        };
+    }
+
+    pub fn get_symbol(self: *const Self) []const u8 {
+        return switch (self.*) {
             .true => "TRUE",
             .false => "FALSE",
             .negated => self.negated.symbol,
@@ -126,7 +137,7 @@ const Literal = union(LiteralType) {
         };
     }
 
-    fn set_symbol(self: *Literal, new: Symbol) void {
+    fn set_symbol(self: *Self, new: Symbol) void {
         if (self.* == .negated) {
             self.negated.symbol = new;
         }
@@ -135,15 +146,15 @@ const Literal = union(LiteralType) {
         }
     }
 
-    fn parse(word: []const u8) !Literal {
+    fn parse(word: []const u8) !Self {
         const decimal = try std.fmt.parseInt(u64, word, 10);
         return switch (decimal) {
-            0 => Literal{ .false = undefined },
-            1 => Literal{ .true = undefined },
+            0 => Self{ .false = undefined },
+            1 => Self{ .true = undefined },
             else => if (decimal & 0b1 == 0b1)
-                Literal{ .negated = .{ .symbol = word, .value = decimal >> 1 } }
+                Self{ .negated = .{ .symbol = word, .value = decimal >> 1 } }
             else
-                Literal{ .unnegated = .{ .symbol = word, .value = decimal >> 1 } },
+                Self{ .unnegated = .{ .symbol = word, .value = decimal >> 1 } },
         };
     }
 };
