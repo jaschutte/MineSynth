@@ -53,8 +53,8 @@ const GateType = enum {
     inverter,
     and_gate,
 
-    pub inline fn size(self: GateType) u64 {
-        switch (self) {
+    pub inline fn size(self: GateType) physical.Size {
+        return switch (self) {
             .inverter => physical.Size {
                 .w = 1,
                 .h = 3,
@@ -63,7 +63,7 @@ const GateType = enum {
                 .w = 6,
                 .h = 3,
             },
-        }
+        };
     }
 };
 
