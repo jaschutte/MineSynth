@@ -150,7 +150,7 @@ pub const PartitionData = struct {
         }
     }
 
-    pub fn area_left(self: *Self, netlist: *const nl.Netlist) i64 {
+    pub fn area_left(self: *const Self, netlist: *const nl.Netlist) i64 {
         var sum: i64 = 0;
         var key_iter = self.left.keyIterator();
         while (key_iter.next()) |node| {
@@ -159,7 +159,7 @@ pub const PartitionData = struct {
         return sum;
     }
 
-    pub fn bounds(self: *Self, netlist: *const nl.Netlist) Partition.AreaBounds {
+    pub fn bounds(self: *const Self, netlist: *const nl.Netlist) Partition.AreaBounds {
         var area_l: f32 = 0.0;
         var area_r: f32 = 0.0;
         var area_max: f32 = 0.0;
@@ -211,7 +211,8 @@ pub const Partition = struct {
     }
 
     pub fn pretty_print(self: *const Self) void {
-        std.debug.print("\nPARTITION\n", .{});
+        std.debug.print("\nPARTITION {}\n", .{self.data.bounds(self.owner.netlist.?)});
+        std.debug.print(" *- {}\n", .{self.data.area_left(self.owner.netlist.?)});
         std.debug.print(" ::LEFT::", .{});
         var iterator = self.data.left.keyIterator();
         while (iterator.next()) |node| {
@@ -222,24 +223,20 @@ pub const Partition = struct {
         while (iterator.next()) |node| {
             node.*.pretty_print();
         }
-        // std.debug.print(" ::CRITICAL::", .{});
-        // for (self.critical_nodes) |node| {
-        //     node.pretty_print();
-        // }
     }
 
     pub fn calculate_node_gain(self: *const Self, node: *const Node) i64 {
         const nets = self.owner.edges.get(@constCast(node)).?;
         var status: struct { cut: i64, uncut: i64 } = .{ .cut = 0, .uncut = 0 };
+        const is_left = self.data.left.contains(@constCast(node));
         for (nets.items) |net| {
             var left: u64 = 0;
             var right: u64 = 0;
-            for (net.*) |other| {
+            for (net) |other| {
                 if (other == node) continue;
-                left += @intFromBool(self.data.left.contains(@constCast(node)));
-                right += @intFromBool(self.data.right.contains(@constCast(node)));
+                left += @intFromBool(self.data.left.contains(@constCast(other)));
+                right += @intFromBool(self.data.right.contains(@constCast(other)));
             }
-            const is_left = self.data.left.contains(@constCast(node));
             if (is_left) {
                 status.cut += @intFromBool(left == 0);
                 status.uncut += @intFromBool(left != 0);
@@ -303,6 +300,7 @@ pub const Partition = struct {
         var gain: i64 = std.math.maxInt(i64);
         while (gain > 0) {
             gain = try self.fm_step(allocator, bounds);
+            std.debug.print("PASS GAIN {}\n", .{gain});
         }
     }
 
@@ -320,6 +318,7 @@ pub const Partition = struct {
             gain.items[gain_index][index] = self.calculate_node_gain(node);
             node.fixed = false;
         }
+        std.debug.print("GAIN INIT {any}\n", .{gain.items[gain_index]});
         try gain.append(allocator, try allocator.dupe(i64, gain.items[gain_index]));
 
         // The main loop
@@ -330,10 +329,10 @@ pub const Partition = struct {
 
             const nets = self.owner.edges.get(best_node_gain.node).?;
             for (nets.items) |net| {
-                const criticality = self.data.net_criticality(best_node_gain.node, net.*);
+                const criticality = self.data.net_criticality(best_node_gain.node, net);
                 if (!criticality.critical) continue;
 
-                for (net.*) |node| {
+                for (net) |node| {
                     if (node == best_node_gain.node) continue;
                     if (node.fixed) continue;
 
@@ -344,6 +343,7 @@ pub const Partition = struct {
 
             try order.append(allocator, best_node_gain);
             try gain.append(allocator, try allocator.dupe(i64, gain.items[gain_index]));
+            std.debug.print("GAIN.{} :: {any}\n", .{gain_index, gain.items[gain_index]});
             gain_index += 1;
         }
 
@@ -396,7 +396,7 @@ pub const Module = struct {
 
     allocator: std.mem.Allocator,
     nodes: []Node,
-    edges: std.AutoHashMap(*Node, std.ArrayList(*[]*Node)),
+    edges: std.AutoHashMap(*Node, std.ArrayList([]*Node)),
     raw_edges: std.ArrayList([]*Node),
     netlist: ?*const nl.Netlist,
 
@@ -541,7 +541,7 @@ pub const Module = struct {
                 }
             }
 
-            try self.edges.put(node, std.ArrayList(*[]*Node).empty);
+            try self.edges.put(node, std.ArrayList([]*Node).empty);
         }
 
         for (netlist.nets.items) |*net| {
@@ -562,9 +562,9 @@ pub const Module = struct {
             }
             if (hyper_edge.items.len >= 2) {
                 const hyper_slice = try hyper_edge.toOwnedSlice(allocator);
-                for (hyper_edge.items) |node| {
-                    var edges = self.edges.get(node).?;
-                    try edges.append(allocator, @constCast(&hyper_slice));
+                for (hyper_slice) |node| {
+                    var edges = self.edges.getPtr(node).?;
+                    try edges.append(allocator, hyper_slice);
                 }
                 try self.raw_edges.append(allocator, hyper_slice);
             }
