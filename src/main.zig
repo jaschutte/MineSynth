@@ -23,9 +23,14 @@ pub fn main() !void {
     netlist.print_gates();
 
     var module = try partitioning.Module.from_netlist(allocator, &netlist);
-    defer _ = module.deinit(allocator);
+    defer _ = module.deinit();
 
-    module.pretty_print();
+    var partition = try module.initial_partition();
+    defer _ = partition.deinit(allocator);
+    partition.pretty_print();
+
+    try partition.fm_algorithm(allocator);
+    partition.pretty_print();
 
 
     // try pretty.print(allocator, nl, .{});
