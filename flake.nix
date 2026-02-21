@@ -17,6 +17,7 @@
         packages = [
           pkgs.zig
           pkgs.zls
+          pkgs.yosys
         ];
       };
     }

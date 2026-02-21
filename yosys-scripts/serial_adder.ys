@@ -1,0 +1,4 @@
+read_verilog -sv -nolatches ../verilog/serial_adder.sv
+synth -flatten
+aigmap
+write_aiger -ascii -symbols ../aiger-examples/serial-adder.aag
