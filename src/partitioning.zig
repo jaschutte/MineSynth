@@ -300,7 +300,7 @@ pub const Partition = struct {
         var gain: i64 = std.math.maxInt(i64);
         while (gain > 0) {
             gain = try self.fm_step(allocator, bounds);
-            std.debug.print("PASS GAIN {}\n", .{gain});
+            // std.debug.print("PASS GAIN {}\n", .{gain});
         }
     }
 
@@ -318,7 +318,7 @@ pub const Partition = struct {
             gain.items[gain_index][index] = self.calculate_node_gain(node);
             node.fixed = false;
         }
-        std.debug.print("GAIN INIT {any}\n", .{gain.items[gain_index]});
+        // std.debug.print("GAIN INIT {any}\n", .{gain.items[gain_index]});
         try gain.append(allocator, try allocator.dupe(i64, gain.items[gain_index]));
 
         // The main loop
@@ -343,7 +343,7 @@ pub const Partition = struct {
 
             try order.append(allocator, best_node_gain);
             try gain.append(allocator, try allocator.dupe(i64, gain.items[gain_index]));
-            std.debug.print("GAIN.{} :: {any}\n", .{gain_index, gain.items[gain_index]});
+            // std.debug.print("GAIN.{} :: {any}\n", .{gain_index, gain.items[gain_index]});
             gain_index += 1;
         }
 
@@ -398,6 +398,7 @@ pub const Module = struct {
     nodes: []Node,
     edges: std.AutoHashMap(*Node, std.ArrayList([]*Node)),
     raw_edges: std.ArrayList([]*Node),
+    edge_to_net_mapping: std.AutoHashMap(usize, nl.NetPtr),
     netlist: ?*const nl.Netlist,
 
     pub fn area(self: *const Self) ?u64 {
@@ -428,6 +429,8 @@ pub const Module = struct {
             node.deinit(self.allocator);
         }
         self.allocator.free(self.nodes);
+
+        self.edge_to_net_mapping.deinit();
     }
 
     pub fn initial_partition(self: *Self) !Partition {
@@ -515,6 +518,7 @@ pub const Module = struct {
             .netlist = netlist,
             .edges = .init(allocator),
             .raw_edges = .empty,
+            .edge_to_net_mapping = .init(allocator),
         };
 
         for (self.nodes) |*node| {
@@ -544,7 +548,7 @@ pub const Module = struct {
             try self.edges.put(node, std.ArrayList([]*Node).empty);
         }
 
-        for (netlist.nets.items) |*net| {
+        for (0.., netlist.nets.items) |net_idx, *net| {
             var hyper_edge = std.ArrayList(*Node).empty;
             defer _ = hyper_edge.deinit(allocator);
 
@@ -567,6 +571,7 @@ pub const Module = struct {
                     try edges.append(allocator, hyper_slice);
                 }
                 try self.raw_edges.append(allocator, hyper_slice);
+                try self.edge_to_net_mapping.put(self.raw_edges.items.len - 1, net_idx);
             }
         }
 

@@ -3,7 +3,7 @@ const pretty = @import("pretty");
 const aiger = @import("aiger.zig");
 const nl = @import("netlist.zig");
 const partitioning = @import("partitioning.zig");
-const part_json = @import("partitioning_json.zig");
+const graphviz = @import("graphviz.zig");
 
 pub fn main() !void {
     var gpa: std.heap.DebugAllocator(.{}) = .init;
@@ -22,19 +22,19 @@ pub fn main() !void {
     defer _ = netlist.deinit();
 
     // nl.print_nets();
-    netlist.print_gates();
+    // netlist.print_gates();
 
     var module = try partitioning.Module.from_netlist(allocator, &netlist);
     defer _ = module.deinit();
 
     var partition = try module.initial_partition();
     defer _ = partition.deinit(allocator);
-    partition.pretty_print();
+    // partition.pretty_print();
 
+    try graphviz.node_visualizer(allocator, &module, &partition);
     try partition.fm_algorithm(allocator);
-    partition.pretty_print();
-
-    try part_json.node_visualizer(allocator, &module, &partition);
+    // partition.pretty_print();
+    try graphviz.node_visualizer(allocator, &module, &partition);
 
     // try pretty.print(allocator, nl, .{});
     // try pretty.print(allocator, aig, .{});
