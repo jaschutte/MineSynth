@@ -3,6 +3,7 @@ const pretty = @import("pretty");
 const aiger = @import("aiger.zig");
 const nl = @import("netlist.zig");
 const partitioning = @import("partitioning.zig");
+const part_json = @import("partitioning_json.zig");
 
 pub fn main() !void {
     var gpa: std.heap.DebugAllocator(.{}) = .init;
@@ -10,8 +11,8 @@ pub fn main() !void {
 
     const allocator = gpa.allocator();
 
-    const content = try std.fs.cwd().readFileAlloc(allocator, "aiger-examples/half-adder.aag", std.math.maxInt(usize));
-    // const content = try std.fs.cwd().readFileAlloc(allocator, "aiger-examples/serial-adder.aag", std.math.maxInt(usize));
+    // const content = try std.fs.cwd().readFileAlloc(allocator, "aiger-examples/half-adder.aag", std.math.maxInt(usize));
+    const content = try std.fs.cwd().readFileAlloc(allocator, "aiger-examples/serial-adder.aag", std.math.maxInt(usize));
     defer _ = allocator.free(content);
 
     const aig = try aiger.Aiger.parse_aag(allocator, content);
@@ -33,6 +34,7 @@ pub fn main() !void {
     try partition.fm_algorithm(allocator);
     partition.pretty_print();
 
+    try part_json.node_visualizer(allocator, &module, &partition);
 
     // try pretty.print(allocator, nl, .{});
     // try pretty.print(allocator, aig, .{});
