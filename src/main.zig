@@ -3,7 +3,8 @@ const pretty = @import("pretty");
 const aiger = @import("aiger.zig");
 const nl = @import("netlist.zig");
 const partitioning = @import("partitioning.zig");
-const graphviz = @import("graphviz.zig");
+const graph = @import("abstract/graph.zig");
+// const graphviz = @import("graphviz.zig");
 
 pub fn main() !void {
     var gpa: std.heap.DebugAllocator(.{}) = .init;

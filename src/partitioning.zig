@@ -1,6 +1,9 @@
 const std = @import("std");
 const nl = @import("netlist.zig");
 const physical = @import("physical.zig");
+const graph = @import("abstract/graph.zig");
+
+const Node = graph.Node;
 
 pub fn array_contains(comptime T: type, array: []T, find: T) bool {
     for (array) |elem| {
@@ -10,39 +13,6 @@ pub fn array_contains(comptime T: type, array: []T, find: T) bool {
     }
     return false;
 }
-
-pub const NodeKind = enum {
-    gate,
-};
-
-pub const NodeContent = union(NodeKind) {
-    gate: nl.GatePtr,
-};
-
-pub const Node = struct {
-    const Self = @This();
-
-    connects: std.ArrayList(*Node),
-    content: NodeContent,
-    fixed: bool,
-
-    pub fn area(self: *Self, netlist: *const nl.Netlist) u64 {
-        return switch (self.content) {
-            .gate => |gate_ptr| netlist.get_gate(gate_ptr).kind.size().area(),
-        };
-    }
-
-    pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
-        self.connects.deinit(allocator);
-    }
-
-    pub fn pretty_print(self: *const Self) void {
-        std.debug.print("\n NODE: {any} (fixed: {})\n", .{ self.content, self.fixed });
-        for (self.connects.items) |connects| {
-            std.debug.print("  -> {any}\n", .{connects.content});
-        }
-    }
-};
 
 pub const PartitionData = struct {
     const Self = @This();
@@ -456,7 +426,7 @@ pub const Module = struct {
         while (stack.items.len != 0) {
             const node = stack.orderedRemove(0);
 
-            for (node.connects.items) |connected| {
+            for (node.children.items) |connected| {
                 if (!visited.contains(connected)) {
                     try visited.put(connected, undefined);
                     try stack.append(self.allocator, connected);
@@ -502,7 +472,7 @@ pub const Module = struct {
         defer _ = nodes.deinit(allocator);
         for (0..netlist.gates.items.len) |index| {
             const node = Node{
-                .connects = .empty,
+                .children = .empty,
                 .content = NodeContent{ .gate = index },
                 .fixed = false,
             };
@@ -531,7 +501,7 @@ pub const Module = struct {
 
                     // Here we assume the netlist buffer order matches our node buffer
                     // If this is not the case, shit explodes
-                    try node.connects.append(allocator, &self.nodes[connected_gate_ptr]);
+                    try node.children.append(allocator, &self.nodes[connected_gate_ptr]);
                 }
             }
             for (gate.outputs.items) |net_ptr| {
@@ -541,7 +511,7 @@ pub const Module = struct {
 
                     // Here we assume the netlist buffer order matches our node buffer
                     // If this is not the case, shit explodes
-                    try node.connects.append(allocator, &self.nodes[connected_gate_ptr]);
+                    try node.children.append(allocator, &self.nodes[connected_gate_ptr]);
                 }
             }
 
