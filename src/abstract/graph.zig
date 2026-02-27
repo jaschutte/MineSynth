@@ -24,11 +24,11 @@ pub fn Node(comptime NodeBody: type) type {
         body: NodeBody,
         metadata: MetadataKind,
 
-        pub fn area(self: *Self, netlist: *const nl.Netlist) u64 {
-            return switch (self.content) {
-                .gate => |gate_ptr| netlist.get_gate(gate_ptr).kind.size().area(),
-            };
-        }
+        // pub fn area(self: *Self, netlist: *const nl.Netlist) u64 {
+        //     return switch (self.content) {
+        //         .gate => |gate_ptr| netlist.get_gate(gate_ptr).kind.size().area(),
+        //     };
+        // }
 
         pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
             self.children.deinit(allocator);
@@ -56,12 +56,13 @@ pub const GraphConstructors = struct {
 pub fn Graph(comptime NodeBody: type) type {
     return struct {
         const Self = @This();
-        const Source = switch (NodeBody) {
+        pub const Source = switch (NodeBody) {
             GateNode => struct {
                 netlist: *const nl.Netlist,
             },
-            else => void,
+            else => @compileError("Invalid node body"),
         };
+        pub const Body = NodeBody;
 
         gpa: std.mem.Allocator,
 
@@ -81,6 +82,24 @@ pub fn Graph(comptime NodeBody: type) type {
             self.gpa.free(self.nodes);
             self.gpa.free(self.edges);
         }
+
+        pub const node_size = switch (NodeBody) {
+            GateNode => struct {
+                fn size(self: *const Self, node: *const Node(NodeBody)) physical.Size {
+                    return self.source.netlist.get_gate(node).kind.size();
+                }
+            }.size,
+            else => @compileError("Invalid node body"),
+        };
+
+        pub const node_area = switch (NodeBody) {
+            GateNode => struct {
+                fn area(self: *const Self, node: *const Node(NodeBody)) u64 {
+                    return self.node_size(node).area();
+                }
+            }.area,
+            else => @compileError("Invalid node body"),
+        };
 
         pub fn new(gpa: std.mem.Allocator, nodes: []Node, edges: []Edge) !Self {
             var graph = Self{

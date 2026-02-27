@@ -2,7 +2,7 @@ const std = @import("std");
 const pretty = @import("pretty");
 const aiger = @import("aiger.zig");
 const nl = @import("netlist.zig");
-const partitioning = @import("partitioning.zig");
+// const partitioning = @import("partitioning.zig");
 const graph = @import("abstract/graph.zig");
 // const graphviz = @import("graphviz.zig");
 
@@ -22,22 +22,24 @@ pub fn main() !void {
     var netlist = try nl.Netlist.from_aiger(allocator, aig);
     defer _ = netlist.deinit();
 
-    // nl.print_nets();
-    // netlist.print_gates();
+    _ = graph.Node;
 
-    var module = try partitioning.Module.from_netlist(allocator, &netlist);
-    defer _ = module.deinit();
-
-    var partition = try module.initial_partition();
-    defer _ = partition.deinit(allocator);
-    // partition.pretty_print();
-
-    try graphviz.node_visualizer(allocator, &module, &partition);
-    try partition.fm_algorithm(allocator);
-    // partition.pretty_print();
-    try graphviz.node_visualizer(allocator, &module, &partition);
-
-    // try pretty.print(allocator, nl, .{});
-    // try pretty.print(allocator, aig, .{});
-
+    // // nl.print_nets();
+    // // netlist.print_gates();
+    //
+    // var module = try partitioning.Module.from_netlist(allocator, &netlist);
+    // defer _ = module.deinit();
+    //
+    // var partition = try module.initial_partition();
+    // defer _ = partition.deinit(allocator);
+    // // partition.pretty_print();
+    //
+    // try graphviz.node_visualizer(allocator, &module, &partition);
+    // try partition.fm_algorithm(allocator);
+    // // partition.pretty_print();
+    // try graphviz.node_visualizer(allocator, &module, &partition);
+    //
+    // // try pretty.print(allocator, nl, .{});
+    // // try pretty.print(allocator, aig, .{});
+    //
 }
