@@ -3,26 +3,29 @@ const pretty = @import("pretty");
 const aiger = @import("aiger.zig");
 const nl = @import("netlist.zig");
 // const partitioning = @import("partitioning.zig");
-const graph = @import("abstract/graph.zig");
-// const graphviz = @import("graphviz.zig");
+const glib = @import("abstract/graph.zig");
+const graphviz = @import("abstract/graphviz.zig");
 
 pub fn main() !void {
-    var gpa: std.heap.DebugAllocator(.{}) = .init;
-    defer _ = gpa.deinit();
+    var real_gpa: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = real_gpa.deinit();
 
-    const allocator = gpa.allocator();
+    const gpa = real_gpa.allocator();
 
     // const content = try std.fs.cwd().readFileAlloc(allocator, "aiger-examples/half-adder.aag", std.math.maxInt(usize));
-    const content = try std.fs.cwd().readFileAlloc(allocator, "aiger-examples/serial-adder.aag", std.math.maxInt(usize));
-    defer _ = allocator.free(content);
+    const content = try std.fs.cwd().readFileAlloc(gpa, "aiger-examples/serial-adder.aag", std.math.maxInt(usize));
+    defer _ = gpa.free(content);
 
-    const aig = try aiger.Aiger.parse_aag(allocator, content);
+    const aig = try aiger.Aiger.parse_aag(gpa, content);
     defer _ = aig.deinit();
 
-    var netlist = try nl.Netlist.from_aiger(allocator, aig);
+    var netlist = try nl.Netlist.from_aiger(gpa, aig);
     defer _ = netlist.deinit();
 
-    _ = graph.Node;
+
+    var graph = try glib.GraphConstructors.from_netlist(gpa, &netlist);
+    try graphviz.GraphVisualizer(nl.GatePtr).print(gpa, &graph);
+    graph.deinit();
 
     // // nl.print_nets();
     // // netlist.print_gates();
