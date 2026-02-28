@@ -1,25 +1,43 @@
 const std = @import("std");
+const nl = @import("../netlist.zig");
 const glib = @import("graph.zig");
 
 // https://magjac.com/graphviz-visual-editor/
 
+
+pub fn print_gate(gpa: std.mem.Allocator, graph: *const glib.Graph(nl.GatePtr)) !void {
+    var string = std.io.Writer.Allocating.init(gpa);
+    try string.writer.writeAll("graph {\n");
+    // try string.writer.writeAll("    layout = fdp;\n");
+    try string.writer.writeAll("    node [style=filled];\n");
+
+    for (graph.edges.items) |edge| {
+        const symbol = graph.source.netlist.get_net(edge.body.net_id).symbol;
+        try string.writer.print("    {} -- {} [label=\"{s}\"];\n", .{ edge.a, edge.b, symbol });
+    }
+
+    for (graph.nodes.items) |node| {
+        const gate = graph.source.netlist.get_gate(node.body);
+        const symbol = gate.symbol;
+        const color = switch (gate.kind) {
+            .and_gate => "\"#dd9908\"",
+            .inverter => "\"#adadad\"",
+        };
+        try string.writer.print("    {} [label=\"{s}\", fillcolor={s}];\n", .{ node.id, symbol, color });
+    }
+
+    try string.writer.writeAll("}\n");
+
+    std.debug.print("{s}", .{string.written()});
+    string.deinit();
+}
+
 pub fn GraphVisualizer(comptime NodeBody: type) type {
     return struct {
-        pub fn print(gpa: std.mem.Allocator, graph: *const glib.Graph(NodeBody)) !void {
-            var string = std.io.Writer.Allocating.init(gpa);
-            try string.writer.writeAll("graph {\n");
-            try string.writer.writeAll("    layout = fdp;\n");
-            try string.writer.writeAll("    node [style=filled];\n");
-
-            for (graph.edges.items) |edge| {
-                try string.writer.print("    {} -- {};\n", .{ edge.a, edge.b });
-            }
-
-            try string.writer.writeAll("}\n");
-
-            std.debug.print("{s}", .{string.written()});
-            string.deinit();
-        }
+        pub const print = switch (NodeBody) {
+            nl.GatePtr => print_gate,
+            else => @compileError("Unsupported graph type"),
+        };
     };
 }
 
