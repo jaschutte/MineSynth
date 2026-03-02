@@ -7,7 +7,7 @@ const Error = error{
 };
 
 const Net = struct {
-    symbol: aiger.Symbol,
+    literal: aiger.Literal,
     tag: u64,
     binds: std.ArrayList(GatePtr),
     has_inverted_net: bool,
@@ -17,10 +17,9 @@ const Net = struct {
     }
 
     fn create_from_literal(literal: aiger.Literal) Net {
-        const symbol = literal.get_symbol();
         const tag = Net.tag_from_literal(literal);
         return Net{
-            .symbol = symbol,
+            .literal = literal,
             .tag = tag,
             .binds = .empty,
             .has_inverted_net = false,
@@ -33,18 +32,6 @@ const Net = struct {
             .true => 1,
             .negated => |item| item.value << 1,
             .unnegated => |item| (item.value << 1) | 0b1,
-        };
-    }
-
-    // Indicates negated status, or literal
-    fn symbol_extra(self: *const Net) []const u8 {
-        return switch (self.tag) {
-            0 => "=False",
-            1 => "=True",
-            else => |tag| if (tag & 0b1 == 0b1)
-                ""
-            else
-                "#",
         };
     }
 };
