@@ -27,6 +27,8 @@ pub fn print_gate(gpa: std.mem.Allocator, graph: *const glib.Graph(nl.GatePtr)) 
         const color = switch (gate.kind) {
             .and_gate => "\"#e0a143\"",
             .inverter => "\"#8fb2c9\"",
+            .input => "\"#33f747\"",
+            .output => "\"#33f7f0\"",
         };
         try string.writer.print("    {} [label=\"{s}\", fillcolor={s}];\n", .{ node.id, symbol, color });
     }

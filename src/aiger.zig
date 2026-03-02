@@ -148,9 +148,9 @@ pub const Literal = union(LiteralType) {
         }
         if (self.* == .unnegated) {
             if (self.unnegated.symbol) |symbol| {
-                try writer.print(" {s} ({})", .{ symbol, self.unnegated.value << 1 });
+                try writer.print("{s} ({})", .{ symbol, self.unnegated.value << 1 });
             } else {
-                try writer.print(" {}", .{self.unnegated.value << 1});
+                try writer.print("{}", .{self.unnegated.value << 1});
             }
         }
         if (self.* == .negated) {

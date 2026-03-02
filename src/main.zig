@@ -12,8 +12,8 @@ pub fn main() !void {
 
     const gpa = real_gpa.allocator();
 
-    const content = try std.fs.cwd().readFileAlloc(gpa, "aiger-examples/half-adder.aag", std.math.maxInt(usize));
-    // const content = try std.fs.cwd().readFileAlloc(gpa, "aiger-examples/serial-adder.aag", std.math.maxInt(usize));
+    // const content = try std.fs.cwd().readFileAlloc(gpa, "aiger-examples/half-adder.aag", std.math.maxInt(usize));
+    const content = try std.fs.cwd().readFileAlloc(gpa, "aiger-examples/serial-adder.aag", std.math.maxInt(usize));
     defer _ = gpa.free(content);
 
     const aig = try aiger.Aiger.parse_aag(gpa, content);
@@ -22,6 +22,8 @@ pub fn main() !void {
     var netlist = try nl.Netlist.from_aiger(gpa, aig);
     defer _ = netlist.deinit();
 
+    // try netlist.print_nets();
+    // try netlist.print_gates();
 
     var graph = try glib.GraphConstructors.from_netlist(gpa, &netlist);
     try graphviz.GraphVisualizer(nl.GatePtr).print(gpa, &graph);
