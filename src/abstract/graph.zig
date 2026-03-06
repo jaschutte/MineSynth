@@ -136,6 +136,20 @@ pub fn Graph(comptime NodeBody: type) type {
             return &self.nodes.items[index];
         }
 
+        pub fn add_node(self: *Self, node: Node(NodeBody)) !void {
+            try self.nodes.append(self.gpa, node);
+            try self.id2node_idx.put(node.id, self.nodes.items.len - 1);
+            try self.node2edges.putNoClobber(node.id, .empty);
+        }
+
+        // NOTE: when adding edges, **ALWAYS** make sure to have ALL NODES OF THE EDGE registered
+        pub fn add_edge(self: *Self, edge: Edge(NodeBody)) !void {
+            try self.edges.append(self.gpa, edge);
+            try self.id2edge_idx.put(edge.id, self.edges.items.len - 1);
+            try self.node2edges.getPtr(edge.a).?.append(self.gpa, edge.id);
+            try self.node2edges.getPtr(edge.b).?.append(self.gpa, edge.id);
+        }
+
         pub fn remove_node(self: *Self, node: NodeId) !void {
             const index = self.id2node_idx.get(node).?;
             self.nodes.swapRemove(index);
