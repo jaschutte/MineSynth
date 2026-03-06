@@ -150,6 +150,21 @@ pub fn Graph(comptime NodeBody: type) type {
             try self.node2edges.getPtr(edge.b).?.append(self.gpa, edge.id);
         }
 
+        pub fn remove_edge(self: *Self, edge: EdgeId) !void {
+            const index = self.id2node_idx.get(edge).?;
+            self.edges.swapRemove(index);
+            try self.id2edge_idx.put(self.edges.items[index].id, index);
+
+            const node_a = self.node2edges.getPtr(edge.a).?;
+            if (std.mem.indexOf(u64, node_a.items, edge.id)) |node_a_pos| {
+                node_a.swapRemove(node_a_pos);
+            }
+            const node_b = self.node2edges.getPtr(edge.b).?;
+            if (std.mem.indexOf(u64, node_b.items, edge.id)) |node_b_pos| {
+                node_b.swapRemove(node_b_pos);
+            }
+        }
+
         pub fn remove_node(self: *Self, node: NodeId) !void {
             const index = self.id2node_idx.get(node).?;
             self.nodes.swapRemove(index);
