@@ -1,5 +1,7 @@
 const std = @import("std");
 
+pub const Area = u64;
+
 pub const Size = struct {
     const Self = @This();
 
@@ -20,7 +22,7 @@ pub const Size = struct {
         };
     }
 
-    pub inline fn area(self: *const Self) u64 {
+    pub inline fn area(self: *const Self) Area {
         return self.w * self.h;
     }
 };

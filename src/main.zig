@@ -26,7 +26,7 @@ pub fn main() !void {
     // try netlist.print_gates();
 
     var graph = try glib.GraphConstructors.from_netlist(gpa, &netlist);
-    try graphviz.GraphVisualizer(nl.GatePtr).print(gpa, &graph);
+    try graphviz.GraphVisualizer(nl.GatePtr).print(gpa, graph);
     graph.deinit();
 
     // // nl.print_nets();

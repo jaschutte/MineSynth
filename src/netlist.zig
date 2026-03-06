@@ -6,7 +6,7 @@ const Error = error{
     MalorderedAiger,
 };
 
-const Net = struct {
+pub const Net = struct {
     literal: aiger.Literal,
     tag: u64,
     binds: std.ArrayList(GatePtr),
@@ -36,7 +36,7 @@ const Net = struct {
     }
 };
 
-const GateType = enum {
+pub const GateType = enum {
     inverter,
     and_gate,
     input,
@@ -64,7 +64,7 @@ const GateType = enum {
     }
 };
 
-const Gate = struct {
+pub const Gate = struct {
     inputs: std.ArrayList(NetPtr),
     outputs: std.ArrayList(NetPtr),
     symbol: aiger.Symbol,
