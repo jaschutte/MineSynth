@@ -22,9 +22,11 @@ pub fn main() !void {
     var netlist = try nl.Netlist.from_aiger(gpa, aig);
     defer _ = netlist.deinit();
 
+    // try netlist.print_nets();
+    // try netlist.print_gates();
 
     var graph = try glib.GraphConstructors.from_netlist(gpa, &netlist);
-    try graphviz.GraphVisualizer(nl.GatePtr).print(gpa, &graph);
+    try graphviz.GraphVisualizer(nl.GatePtr).print(gpa, graph);
     graph.deinit();
 
     // // nl.print_nets();

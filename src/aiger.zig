@@ -116,8 +116,19 @@ pub const Literal = union(LiteralType) {
 
     false: void,
     true: void,
-    negated: struct { symbol: Symbol, value: u64 },
-    unnegated: struct { symbol: Symbol, value: u64 },
+    // Uneven numbers
+    negated: struct { symbol: ?Symbol, value: u64 },
+    // Even numbers
+    unnegated: struct { symbol: ?Symbol, value: u64 },
+
+    pub fn is_negated(self: *const Self) bool {
+        return switch (self.*) {
+            .false => false,
+            .true => true,
+            .negated => true,
+            .unnegated => false,
+        };
+    }
 
     pub fn get_inverted(self: *const Self) ?Self {
         return switch (self.*) {
@@ -128,13 +139,29 @@ pub const Literal = union(LiteralType) {
         };
     }
 
-    pub fn get_symbol(self: *const Self) []const u8 {
-        return switch (self.*) {
-            .true => "TRUE",
-            .false => "FALSE",
-            .negated => self.negated.symbol,
-            .unnegated => self.unnegated.symbol,
-        };
+    pub fn write_symbol(self: *const Self, writer: *std.io.Writer) !void {
+        if (self.* == .true) {
+            try writer.print("=TRUE", .{});
+            return;
+        }
+        if (self.* == .false) {
+            try writer.print("=FALSE", .{});
+            return;
+        }
+        if (self.* == .unnegated) {
+            if (self.unnegated.symbol) |symbol| {
+                try writer.print("{s} ({})", .{ symbol, self.unnegated.value << 1 });
+            } else {
+                try writer.print("{}", .{self.unnegated.value << 1});
+            }
+        }
+        if (self.* == .negated) {
+            if (self.negated.symbol) |symbol| {
+                try writer.print("!{s} ({})", .{ symbol, self.negated.value << 1 });
+            } else {
+                try writer.print("!{}", .{self.negated.value << 1});
+            }
+        }
     }
 
     fn set_symbol(self: *Self, new: Symbol) void {
@@ -152,9 +179,9 @@ pub const Literal = union(LiteralType) {
             0 => Self{ .false = undefined },
             1 => Self{ .true = undefined },
             else => if (decimal & 0b1 == 0b1)
-                Self{ .negated = .{ .symbol = word, .value = decimal >> 1 } }
+                Self{ .negated = .{ .symbol = null, .value = decimal >> 1 } }
             else
-                Self{ .unnegated = .{ .symbol = word, .value = decimal >> 1 } },
+                Self{ .unnegated = .{ .symbol = null, .value = decimal >> 1 } },
         };
     }
 };

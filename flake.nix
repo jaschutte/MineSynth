@@ -18,6 +18,18 @@
           pkgs.zig
           pkgs.zls
           pkgs.yosys
+          pkgs.aiger
+          pkgs.graphviz
+
+          (pkgs.writeShellScriptBin "gr-zig" ''
+            zig build run |& ${pkgs.graphviz}/bin/dot -Txlib
+          '')
+          (pkgs.writeShellScriptBin "gr-stdin" ''
+            cat /dev/stdin | ${pkgs.graphviz}/bin/dot -Txlib
+          '')
+          (pkgs.writeShellScriptBin "gr-aag" ''
+            aigtodot $1 | ${pkgs.graphviz}/bin/dot -Txlib
+          '')
         ];
       };
     }
