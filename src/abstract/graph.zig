@@ -274,11 +274,6 @@ pub fn Graph(comptime NodeBody: type) type {
             graph.id2edge_idx = .init(gpa);
             graph.source = source;
 
-            // Now this should work
-            // However, I do not trust zig one bit
-            // If this gives corrupted addresses, it's because zig is fcking stupid and copying the
-            // data rather than retaining it on the stack
-            // The fix: use a better language
             for (graph.nodes.items) |*node| {
                 node.owner = graph;
             }

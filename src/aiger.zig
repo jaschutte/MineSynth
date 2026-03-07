@@ -116,7 +116,9 @@ pub const Literal = union(LiteralType) {
 
     false: void,
     true: void,
+    // Uneven numbers
     negated: struct { symbol: ?Symbol, value: u64 },
+    // Even numbers
     unnegated: struct { symbol: ?Symbol, value: u64 },
 
     pub fn is_negated(self: *const Self) bool {

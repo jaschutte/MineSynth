@@ -144,6 +144,7 @@ pub const Netlist = struct {
     // Creates the negated net of a literal, ensuring an inverter (and only 1!) gets placed between
     // the base and negated net
     fn add_negated_net(self: *Self, base_literal: aiger.Literal) !void {
+        if (!base_literal.is_negated()) return undefined;
         const inv_literal = (base_literal.get_inverted()) orelse return;
 
         const base_ptr = try self.add_or_get_net(base_literal);
@@ -156,8 +157,8 @@ pub const Netlist = struct {
         }
 
         var inverter = Gate.new(GateType.inverter, Gate.new_gate_symbol(self.allocator));
-        try inverter.inputs.append(self.allocator, base_ptr);
-        try inverter.outputs.append(self.allocator, negated_ptr);
+        try inverter.outputs.append(self.allocator, base_ptr);
+        try inverter.inputs.append(self.allocator, negated_ptr);
         try self.gates.append(self.allocator, inverter);
         const gate_ptr: GatePtr = self.gates.items.len - 1;
 
@@ -194,9 +195,7 @@ pub const Netlist = struct {
         };
         for (aig.inputs) |item| {
             const input_ptr = try netlist.add_or_get_net(item.input);
-            if (item.input.is_negated()) {
-                try netlist.add_negated_net(item.input);
-            }
+            try netlist.add_negated_net(item.input);
 
             var input = Gate.new(GateType.input, try Gate.new_inout_symbol(allocator, true, item.input));
             try input.outputs.append(allocator, input_ptr);
@@ -206,9 +205,7 @@ pub const Netlist = struct {
         }
         for (aig.outputs) |item| {
             const output_ptr = try netlist.add_or_get_net(item.output);
-            if (item.output.is_negated()) {
-                try netlist.add_negated_net(item.output);
-            }
+            try netlist.add_negated_net(item.output);
 
             var output = Gate.new(GateType.output, try Gate.new_inout_symbol(allocator, false, item.output));
             try output.inputs.append(allocator, output_ptr);
