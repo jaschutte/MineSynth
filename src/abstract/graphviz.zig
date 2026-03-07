@@ -6,7 +6,7 @@ const glib = @import("graph.zig");
 
 pub fn print_gate(gpa: std.mem.Allocator, graph: *const glib.Graph(nl.GatePtr)) !void {
     var string = std.io.Writer.Allocating.init(gpa);
-    try string.writer.writeAll("graph {\n");
+    try string.writer.writeAll("digraph {\n");
     // try string.writer.writeAll("    layout = fdp;\n");
     try string.writer.writeAll("    node [style=filled];\n");
 
@@ -16,7 +16,16 @@ pub fn print_gate(gpa: std.mem.Allocator, graph: *const glib.Graph(nl.GatePtr)) 
             true => "\"#601400\"",
             false => "\"#006004\"",
         };
-        try string.writer.print("    {} -- {} [label=\"", .{ edge.a, edge.b });
+        const non_const_graph: *glib.Graph(nl.GatePtr) = @constCast(graph);
+        const relation = non_const_graph.get_node(edge.a).?.edge_relation(edge.id);
+        const order: struct { arrow: *const [2]u8, from: u64, to: u64 } = switch (relation) {
+            .input => .{ .arrow = "->", .from = edge.b, .to = edge.a },
+            .output => .{ .arrow = "->", .from = edge.a, .to = edge.b },
+            .inout => .{ .arrow = "--", .from = edge.a, .to = edge.b },
+            .none => .{ .arrow = "--", .from = edge.a, .to = edge.b },
+        };
+
+        try string.writer.print("    {} {s} {} [label=\"", .{ order.from, order.arrow, order.to });
         try net.literal.write_symbol(&string.writer);
         try string.writer.print("\", color={s}]\n", .{color});
     }
