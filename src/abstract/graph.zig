@@ -103,6 +103,8 @@ pub fn Node(comptime NodeBody: type) type {
 
 pub fn Edge(comptime NodeBody: type) type {
     return struct {
+        const Self = @This();
+
         pub const Body = switch (NodeBody) {
             GateBody => struct {
                 net_id: nl.NetPtr,
@@ -211,18 +213,21 @@ pub fn Graph(comptime NodeBody: type) type {
             try self.node2edges.getPtr(edge.b).?.append(self.gpa, edge.id);
         }
 
-        pub fn remove_edge(self: *Self, edge: EdgeId) !void {
-            const index = self.id2node_idx.get(edge).?;
-            self.edges.swapRemove(index);
-            try self.id2edge_idx.put(self.edges.items[index].id, index);
-
-            const node_a = self.node2edges.getPtr(edge.a).?;
-            if (std.mem.indexOf(u64, node_a.items, edge.id)) |node_a_pos| {
-                node_a.swapRemove(node_a_pos);
+        pub fn remove_edge(self: *Self, edge_id: EdgeId) !void {
+            const index = self.id2edge_idx.get(edge_id).?;
+            const edge = self.get_edge(edge_id).?;
+            _ = self.edges.swapRemove(index);
+            if (index != self.edges.items.len) {
+                try self.id2edge_idx.put(self.edges.items[index].id, index);
             }
-            const node_b = self.node2edges.getPtr(edge.b).?;
-            if (std.mem.indexOf(u64, node_b.items, edge.id)) |node_b_pos| {
-                node_b.swapRemove(node_b_pos);
+
+            const edges_a = self.node2edges.getPtr(edge.a).?;
+            if (std.mem.indexOfScalar(EdgeId, edges_a.items, edge.id)) |node_a_pos| {
+                _ = edges_a.swapRemove(node_a_pos);
+            }
+            const edges_b = self.node2edges.getPtr(edge.b).?;
+            if (std.mem.indexOfScalar(EdgeId, edges_b.items, edge.id)) |node_b_pos| {
+                _ = edges_b.swapRemove(node_b_pos);
             }
         }
 

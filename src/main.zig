@@ -4,6 +4,7 @@ const aiger = @import("aiger.zig");
 const nl = @import("netlist.zig");
 // const partitioning = @import("partitioning.zig");
 const glib = @import("abstract/graph.zig");
+const glibopt = @import("abstract/preprocessor.zig");
 const graphviz = @import("abstract/graphviz.zig");
 const route = @import("routing.zig");
 
@@ -29,7 +30,9 @@ pub fn main() !void {
     // try netlist.print_gates();
 
     var graph = try glib.GraphConstructors.from_netlist(gpa, &netlist);
-    try graphviz.GraphVisualizer(nl.GatePtr).print(gpa, graph);
+
+    try glibopt.PreProcessor(glib.GateBody).preprocess(graph);
+    try graphviz.GraphVisualizer(glib.GateBody).print(gpa, graph);
     graph.deinit();
 
     const set = route.OrderedSet(route.WorldCoord).init(gpa);
