@@ -12,39 +12,20 @@ const glib = @import("graph.zig");
 
 // Enforce that all INPUTS have are registered as OUTPUT on the other end and vice versa
 pub fn remove_loose_connections(graph: *glib.GateGraph) !void {
-    for (graph.nodes.items) |*node| {
-        const edges = graph.node2edges.getPtr(node.id) orelse continue;
-        var faulty_edges = std.ArrayList(glib.EdgeId).empty;
-        defer _ = faulty_edges.deinit(graph.gpa);
+    var faulty_edges = std.ArrayList(glib.EdgeId).empty;
+    defer _ = faulty_edges.deinit(graph.gpa);
 
-        for (edges.items) |edge_id| {
-            const edge = graph.get_edge(edge_id).?;
-            if (node.edge_relation(edge_id) == .input) {
-                const opposite = switch (edge.a == node.id) {
-                    true => graph.get_node(edge.b),
-                    false => graph.get_node(edge.a),
-                }.?;
-                if (opposite.edge_relation(edge_id) != .output) {
-                    try faulty_edges.append(graph.gpa, edge_id);
-                    continue;
-                }
-            }
+    for (graph.edges.items) |*edge| {
+        const a_connected = graph.get_node(edge.a).?.edge_relation(edge.id);
+        const b_connected = graph.get_node(edge.b).?.edge_relation(edge.id);
 
-            if (node.edge_relation(edge_id) == .output) {
-                const opposite = switch (edge.a == node.id) {
-                    true => graph.get_node(edge.b),
-                    false => graph.get_node(edge.a),
-                }.?;
-                if (opposite.edge_relation(edge_id) != .input) {
-                    try faulty_edges.append(graph.gpa, edge_id);
-                    continue;
-                }
-            }
+        if (!((a_connected == .input and b_connected == .output) or (a_connected == .output and b_connected == .input))) {
+            try faulty_edges.append(graph.gpa, edge.id);
         }
+    }
 
-        for (faulty_edges.items) |faulty_id| {
-            try graph.remove_edge(faulty_id);
-        }
+    for (faulty_edges.items) |faulty_id| {
+        try graph.remove_edge(faulty_id);
     }
 }
 
