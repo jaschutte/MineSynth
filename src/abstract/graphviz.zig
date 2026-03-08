@@ -27,7 +27,7 @@ pub fn print_gate(gpa: std.mem.Allocator, graph: *const glib.Graph(nl.GatePtr)) 
 
         try string.writer.print("    {} {s} {} [label=\"", .{ order.from, order.arrow, order.to });
         try net.literal.write_symbol(&string.writer);
-        try string.writer.print("\", color={s}]\n", .{color});
+        try string.writer.print("\", color={s}, tooltip=\"{}\"]\n", .{color, edge.id});
     }
 
     for (graph.nodes.items) |node| {
@@ -39,7 +39,8 @@ pub fn print_gate(gpa: std.mem.Allocator, graph: *const glib.Graph(nl.GatePtr)) 
             .input => "\"#33f747\"",
             .output => "\"#33f7f0\"",
         };
-        try string.writer.print("    {} [label=\"{s}\", fillcolor={s}];\n", .{ node.id, symbol, color });
+        try string.writer.print("    {} [label=\"{s}\", fillcolor={s}, tooltip=\"{}\"];\n", .{ node.id, symbol, color, node.id });
+
     }
 
     try string.writer.writeAll("}\n");
