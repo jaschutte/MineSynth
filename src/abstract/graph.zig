@@ -27,7 +27,6 @@ pub fn Node(comptime NodeBody: type) type {
             },
         };
 
-        children: std.ArrayList(NodeId),
         body: NodeBody,
         id: NodeId,
         metadata: MetadataKind,
@@ -94,10 +93,6 @@ pub fn Node(comptime NodeBody: type) type {
             }.area,
             else => @compileError("NodeBody does not support retrieving its area"),
         };
-
-        pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
-            self.children.deinit(allocator);
-        }
     };
 }
 
@@ -129,7 +124,6 @@ pub const GraphConstructors = struct {
             try index2id.put(gate_ptr, node_id);
             try nodes.append(gpa, GateNode{
                 .metadata = .none,
-                .children = .empty,
                 .id = node_id,
                 .body = gate_ptr,
                 .owner = undefined,
@@ -239,23 +233,7 @@ pub fn Graph(comptime NodeBody: type) type {
             self.nodes.swapRemove(index);
             try self.id2node_idx.put(self.nodes.items[index].id, index);
 
-            // Ew, big loop
-            // But we have to remove all references to this node if we erase it
-            // At least, all references known to us
-            var remove_ids = std.ArrayList(usize).empty;
-            defer _ = remove_ids.deinit(self.gpa);
-            for (self.nodes.items) |*parent| {
-                remove_ids.clearRetainingCapacity();
-                for (parent.children.items) |child_id| {
-                    if (child_id == node) {
-                        try remove_ids.append(self.gpa, child_id);
-                    }
-                }
-                parent.children.orderedRemoveMany(remove_ids.items);
-            }
-
             // Also remove all edges related to this node
-            self.edges.orderedRemoveMany(self.node2edges.get(node).?.items);
             self.node2edges.remove(node);
         }
 
@@ -263,10 +241,6 @@ pub fn Graph(comptime NodeBody: type) type {
             var val_iter = self.node2edges.valueIterator();
             while (val_iter.next()) |arr| {
                 arr.deinit(self.gpa);
-            }
-
-            for (self.nodes.items) |*node| {
-                node.deinit(self.gpa);
             }
 
             self.nodes.deinit(self.gpa);
@@ -304,13 +278,6 @@ pub fn Graph(comptime NodeBody: type) type {
                 try entry_a.value_ptr.append(gpa, edge.id);
                 const entry_b = try graph.node2edges.getOrPutValue(edge.b, .empty);
                 try entry_b.value_ptr.append(gpa, edge.id);
-            }
-
-            for (graph.edges.items) |*edge| {
-                const a = graph.get_node(edge.a).?;
-                const b = graph.get_node(edge.b).?;
-                try a.children.append(gpa, b.id);
-                try b.children.append(gpa, a.id);
             }
 
             return graph;
