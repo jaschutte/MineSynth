@@ -5,6 +5,7 @@ const nl = @import("netlist.zig");
 // const partitioning = @import("partitioning.zig");
 const glib = @import("abstract/graph.zig");
 const graphviz = @import("abstract/graphviz.zig");
+const route = @import("routing.zig");
 
 pub fn main() !void {
     var real_gpa: std.heap.DebugAllocator(.{}) = .init;
@@ -28,6 +29,9 @@ pub fn main() !void {
     var graph = try glib.GraphConstructors.from_netlist(gpa, &netlist);
     try graphviz.GraphVisualizer(nl.GatePtr).print(gpa, graph);
     graph.deinit();
+
+    const set = route.OrderedSet(route.Coordinate).init(gpa);
+    _ = try route.routeTo(gpa, .{ 0, 0, 0 }, .{ 5, 5, 0 }, set);
 
     // // nl.print_nets();
     // // netlist.print_gates();
