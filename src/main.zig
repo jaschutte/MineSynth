@@ -7,6 +7,8 @@ const glib = @import("abstract/graph.zig");
 const graphviz = @import("abstract/graphviz.zig");
 const route = @import("routing.zig");
 
+const nbt = @import("nbt.zig");
+
 pub fn main() !void {
     var real_gpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = real_gpa.deinit();
@@ -32,6 +34,8 @@ pub fn main() !void {
 
     const set = route.OrderedSet(route.Coordinate).init(gpa);
     _ = try route.routeTo(gpa, .{ 0, 0, 0 }, .{ 5, 5, 0 }, set);
+
+    nbt.nbt_test();
 
     // // nl.print_nets();
     // // netlist.print_gates();
