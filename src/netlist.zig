@@ -62,6 +62,15 @@ pub const GateType = enum {
             },
         };
     }
+
+    pub inline fn delay(self: GateType) physical.Delay {
+        return switch (self) {
+            .input => physical.Delay = 0,
+            .output => physical.Delay = 0,
+            .inverter => physical.Delay = 2,
+            .and_gate => physical.Delay = 3,
+        };
+    }
 };
 
 pub const Gate = struct {
