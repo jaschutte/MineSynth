@@ -20,7 +20,7 @@ pub fn build(b: *std.Build) void {
     b.installArtifact(exe);
     exe.root_module.addIncludePath(b.path("src/extern"));
     exe.root_module.addCSourceFile(.{ .file = b.path("src/extern/nbt.c"), .flags = &.{} });
-    exe.root_module.addCSourceFile(.{ .file = b.path("src/extern/miniz.c"), .flags = &.{} });
+    exe.root_module.addCSourceFile(.{ .file = b.path("src/extern/miniz.c"), .flags = &.{"-fno-sanitize=alignment"} });
 
     // const aiger_mod = b.createModule(.{ .root_source_file = b.path("src/aiger.zig") });
     // const netlist_mod = b.createModule(.{ .root_source_file = b.path("src/netlist.zig") });
