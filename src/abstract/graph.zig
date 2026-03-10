@@ -24,15 +24,8 @@ pub const GraphConstructors = struct {
             for (net.binds.items) |gate_ptr| {
                 if (added_nodes.contains(gate_ptr)) continue;
 
-                const node_id = id.getId();
+                const node_id = try graph.addNode(gate_ptr, .none);
                 try added_nodes.put(gate_ptr, node_id);
-                try graph.addNode(GateGraph.Node{
-                    .id = node_id,
-                    .body = gate_ptr,
-                    .metadata = .none,
-                    // Gets filled in automatically
-                    .owner = null,
-                });
             }
 
             for (net.binds.items) |from_ptr| {
@@ -42,15 +35,7 @@ pub const GraphConstructors = struct {
                     if (added_edges.contains([2]nl.NetPtr{ to_ptr, from_ptr })) continue;
                     try added_edges.put(.{ to_ptr, from_ptr }, undefined);
 
-                    const edge_id = id.getId();
-                    try graph.addEdge(GateGraph.Edge{
-                        .body = net_ptr,
-                        .id = edge_id,
-                        .a = added_nodes.get(from_ptr).?,
-                        .b = added_nodes.get(to_ptr).?,
-                        // Gets filled in automatically
-                        .owner = null,
-                    });
+                    _ = try graph.addEdge(added_nodes.get(from_ptr).?, added_nodes.get(to_ptr).?, net_ptr);
                 }
             }
         }
@@ -182,20 +167,31 @@ pub fn Graph(comptime NodeBody: type) type {
             return self.nodes.getPtr(node_id);
         }
 
-        pub fn addNode(self: *Self, node: Node) !void {
-            try self.nodes.putNoClobber(node.id, node);
-            try self.node2edges.putNoClobber(node.id, .empty);
-
-            self.nodes.getPtr(node.id).?.owner = self;
+        pub fn addNode(self: *Self, body: Body, meta: Node.Metadata) !NodeId {
+            const node_id = id.getId();
+            try self.nodes.putNoClobber(node_id, Node{
+                .id = node_id,
+                .body = body,
+                .metadata = meta,
+                .owner = self,
+            });
+            try self.node2edges.putNoClobber(node_id, .empty);
+            return node_id;
         }
 
         // NOTE: when adding edges, **ALWAYS** make sure to have ALL NODES OF THE EDGE registered
-        pub fn addEdge(self: *Self, edge: Edge) !void {
-            try self.edges.putNoClobber(edge.id, edge);
-            try self.node2edges.getPtr(edge.a).?.append(self.gpa, edge.id);
-            try self.node2edges.getPtr(edge.b).?.append(self.gpa, edge.id);
-
-            self.edges.getPtr(edge.id).?.owner = self;
+        pub fn addEdge(self: *Self, a: NodeId, b: NodeId, body: Edge.Body) !EdgeId {
+            const edge_id = id.getId();
+            try self.edges.putNoClobber(edge_id, Edge{
+                .body = body,
+                .id = edge_id,
+                .a = a,
+                .b = b,
+                .owner = self,
+            });
+            try self.node2edges.getPtr(a).?.append(self.gpa, edge_id);
+            try self.node2edges.getPtr(b).?.append(self.gpa, edge_id);
+            return edge_id;
         }
 
         pub fn removeEdge(self: *Self, edge_id: EdgeId) !void {
