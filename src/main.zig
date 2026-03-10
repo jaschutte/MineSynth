@@ -33,11 +33,11 @@ pub fn main() !void {
     graph.deinit();
 
     const set = route.OrderedSet(route.WorldCoord).init(gpa);
-    _ = try route.routeTo(gpa, .{ 0, 0, 0 }, .{ 5, 0, 0 }, set);
+    try route.routeTo(gpa, .{ 0, 0, 0 }, .{ 25, 0, 15 }, set);
 
     nbt.nbt_test();
 
-    nbt.block_arr_to_schem(gpa);
+    // nbt.block_arr_to_schem(gpa);
 
     // // nl.print_nets();
     // // netlist.print_gates();

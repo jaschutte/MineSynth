@@ -1,20 +1,15 @@
 const std = @import("std");
-const pretty = @import("pretty");
-const aiger = @import("aiger.zig");
-const nl = @import("netlist.zig");
-// const partitioning = @import("partitioning.zig");
-const glib = @import("abstract/graph.zig");
-const graphviz = @import("abstract/graphviz.zig");
-const phys = @import("physical.zig");
-const nbt = @import("nbt.zig");
 const ms = @import("abstract/structures.zig");
+const nbt = @import("nbt.zig");
 
 pub const WorldCoord = @Vector(3, i32);
 
 pub fn OrderedSet(T: type) type {
     return struct {
         const This = @This();
+
         const AllocErr = std.mem.Allocator.Error;
+
         set: std.AutoArrayHashMap(T, void),
 
         pub fn init(a: std.mem.Allocator) This {
@@ -37,7 +32,9 @@ pub fn OrderedSet(T: type) type {
 
         pub fn popFirst(self: *This) T {
             const item = self.set.unmanaged.entries.get(0).key;
+
             self.set.orderedRemoveAt(0);
+
             return item;
         }
 
@@ -51,7 +48,17 @@ pub fn OrderedSet(T: type) type {
     };
 }
 
-const Route = OrderedSet(ms.Block);
+const RouteComponent = enum {
+    dust,
+    repeater,
+    via_up,
+    via_down,
+};
+
+const Parent = struct {
+    prev: WorldCoord,
+    conn_type: RouteComponent,
+};
 
 // any formless volume
 const Volume = OrderedSet(WorldCoord);
@@ -60,72 +67,143 @@ fn coordEq(a: WorldCoord, b: WorldCoord) bool {
     return a[0] == b[0] and a[1] == b[1] and a[2] == b[2];
 }
 
+const QueueItem = struct {
+    coord: WorldCoord,
+    dist: u32,
+    euclid: u32,
+};
+
+fn queueOrder(context: void, a: QueueItem, b: QueueItem) std.math.Order {
+    _ = context;
+    const dist_order = std.math.order(a.dist, b.dist);
+    if (dist_order == .eq) {
+        // Tie-breaker: prefer nodes closer to the start (or target, depending on heuristic intent)
+        return std.math.order(a.euclid, b.euclid);
+    }
+    return dist_order;
+}
+
+const Self = @This();
+
 explored: std.AutoHashMap(WorldCoord, void),
-queue: OrderedSet(WorldCoord),
+distances: std.AutoHashMap(WorldCoord, u32),
+queue: std.PriorityQueue(QueueItem, void, queueOrder),
 forbidden_zones: Volume,
-parents: std.AutoHashMap(WorldCoord, WorldCoord),
-pub fn process(self: *@This(), prev: WorldCoord, coord: WorldCoord) void {
-    if (!self.forbidden_zones.contains(coord) and !self.explored.contains(coord)) {
-        self.explored.put(coord, void{}) catch @panic("oom");
-        self.queue.add(coord) catch @panic("oom");
-        self.parents.put(coord, prev) catch @panic("oom");
+parents: std.AutoHashMap(WorldCoord, Parent),
+
+pub fn process(self: *Self, start: WorldCoord, prev: WorldCoord, coord: WorldCoord, weight: u32, conn_type: RouteComponent) void {
+    if (self.forbidden_zones.contains(coord)) return;
+
+    if (conn_type == .repeater) {
+        const mid = (prev + coord) / @as(WorldCoord, @splat(2));
+        if (self.forbidden_zones.contains(mid)) return;
+    }
+
+    const dist = self.distances.get(prev).? + weight;
+    const distv = self.distances.get(coord);
+
+    // If we found a strictly better path to `coord`
+    if (distv == null or dist < distv.?) {
+        self.distances.put(coord, dist) catch @panic("oom");
+        self.parents.put(coord, .{ .conn_type = conn_type, .prev = prev }) catch @panic("oom");
+
+        const euclid = @abs(coord[0] - start[0]) + @abs(coord[2] - start[2]);
+
+        // Push duplicate entry. The heap sorts by this static item.dist.
+        self.queue.add(.{ .coord = coord, .dist = dist, .euclid = @as(u32, @intCast(euclid)) }) catch @panic("oom");
     }
 }
-pub fn routeTo(a: std.mem.Allocator, from: WorldCoord, to: WorldCoord, forbidden_zones: Volume) !Route {
-    const route = Route.init(a);
 
-    var self = @This(){
+pub fn routeTo(a: std.mem.Allocator, from: WorldCoord, to: WorldCoord, forbidden_zones: Volume) !void {
+    var self = Self{
         .explored = std.AutoHashMap(WorldCoord, void).init(a),
-        .queue = OrderedSet(WorldCoord).init(a),
+        .distances = std.AutoHashMap(WorldCoord, u32).init(a),
+        .queue = std.PriorityQueue(QueueItem, void, queueOrder).init(a, {}),
         .forbidden_zones = forbidden_zones,
-        .parents = std.AutoHashMap(WorldCoord, WorldCoord).init(a),
+        .parents = std.AutoHashMap(WorldCoord, Parent).init(a),
     };
     defer self.explored.deinit();
+    defer self.distances.deinit();
     defer self.queue.deinit();
     defer self.parents.deinit();
-    // shitty draft algorithm outline
-    // run dijkstra's using a graph representing 3d space with edges to forbidden zones removed
-    // add edges up/down which inserts a via structure IF it fits
-    // add/remove edges dynamically based on repeaters fitting
-    // probably do some backtracking if repeaters dont fit idk
-    // im sleepy
 
-    // self.explored = std.AutoHashMap(Coord, void).init(a);
-    // self.queue = OrderedSet(Coord).init(a);
+    try self.distances.put(from, 0);
+    try self.queue.add(.{ .coord = from, .dist = 0, .euclid = 0 });
 
-    // vertices.add(root);
-    // queue.append(&vertices.set.getPtr(root).?.node);
-    try self.queue.add(from);
+    while (self.queue.count() > 0) {
+        const item = self.queue.remove();
+        const u = item.coord;
 
-    while (true) {
-        const v = self.queue.popFirst();
-        if (coordEq(v, to)) {
-            break;
-        }
-        // for all edges
-        const x_vec = WorldCoord{ 1, 0, 0 };
-        // const y_vec = WorldCoord{ 0, 1, 0 };
-        const z_vec = WorldCoord{ 0, 0, 1 };
+        // Lazy Dijkstra: discard popped items that are stale
+        const best_dist = self.distances.get(u) orelse continue;
+        if (item.dist > best_dist) continue;
 
-        var vec = v + x_vec;
-        self.process(v, vec);
-        // vec = v + y_vec;
-        // self.process(v, vec);
-        vec = v + z_vec;
-        self.process(v, vec);
-        vec = v - x_vec;
-        self.process(v, vec);
-        // vec = v - y_vec;
-        // self.process(v, vec);
-        vec = v - z_vec;
-        self.process(v, vec);
+        std.log.info("Exploring {any} with dist {d}\n", .{ u, item.dist });
+
+        if (coordEq(u, to)) break;
+
+        var x_vec = WorldCoord{ 1, 0, 0 };
+        var z_vec = WorldCoord{ 0, 0, 1 };
+
+        // consider regular redstone
+        var vec = u + x_vec;
+        self.process(from, u, vec, 0, .dust);
+        vec = u + z_vec;
+        self.process(from, u, vec, 0, .dust);
+        vec = u - x_vec;
+        self.process(from, u, vec, 0, .dust);
+        vec = u - z_vec;
+        self.process(from, u, vec, 0, .dust);
+
+        // consider repeaters
+        x_vec = WorldCoord{ 2, 0, 0 };
+        z_vec = WorldCoord{ 0, 0, 2 };
+
+        vec = u + x_vec;
+        self.process(from, u, vec, 1, .repeater);
+        vec = u + z_vec;
+        self.process(from, u, vec, 1, .repeater);
+        vec = u - x_vec;
+        self.process(from, u, vec, 1, .repeater);
+        vec = u - z_vec;
+        self.process(from, u, vec, 1, .repeater);
+
+        self.explored.put(u, void{}) catch @panic("oom");
     }
 
     var vec = to;
     while (!coordEq(vec, from)) {
-        std.log.info("{any}\n", .{vec});
-        vec = self.parents.get(vec).?;
+        const p = self.parents.get(vec).?;
+        vec = p.prev;
+        std.log.info("{any}\n", .{p});
     }
+    // construct block array
+    var blocks: std.ArrayList(ms.Block) = .empty;
+    vec = to;
+    while (!coordEq(vec, from)) {
+        const p = self.parents.get(vec).?;
+        vec = p.prev;
 
-    return route;
+        // let start block be 0,0,0
+
+        const zero_point = from + WorldCoord{ 0, -1, 0 }; // substrate
+        const loc: ms.SchemCoord = @intCast(vec - zero_point);
+        blocks.append(a, .{
+            .block = switch (p.conn_type) {
+                .dust => .dust,
+                .repeater => .repeater,
+                .via_up, .via_down => .block, // placeholder until we add explicit via blocks
+            },
+            .loc = loc, // translate to start at 0,0,0
+            .rot = .north, // TODO: determine actual rotation based on parent and child positions
+        }) catch @panic("oom");
+        // also append blocks under
+        blocks.append(a, .{
+            .block = .block,
+            .loc = @intCast(loc + WorldCoord{ 0, -1, 0 }),
+            .rot = .center,
+        }) catch @panic("oom");
+    }
+    nbt.block_arr_to_schem(a, blocks.items);
+    blocks.deinit(a);
 }
