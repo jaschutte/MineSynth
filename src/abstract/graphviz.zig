@@ -43,11 +43,11 @@ pub fn print_gate(gpa: std.mem.Allocator, graph: *const glib.Graph(nl.GatePtr)) 
     // try string.writer.writeAll("    layout = fdp;\n");
     try string.writer.writeAll("    node [style=filled];\n");
 
-    for (graph.edges.items) |*edge| {
+    for (graph.edges.values()) |*edge| {
         try print_edge(graph, &string, edge);
     }
 
-    for (graph.nodes.items) |*node| {
+    for (graph.nodes.values()) |*node| {
         try print_node(graph, &string, node);
     }
 
@@ -68,7 +68,7 @@ pub fn print_gate_dfs(gpa: std.mem.Allocator, graph: *const glib.GateGraph) !voi
 
     var node_queue = std.ArrayList(glib.NodeId).empty;
     defer _ = node_queue.deinit(gpa);
-    for (graph.nodes.items) |*node| {
+    for (graph.nodes.values()) |*node| {
         if (graph.source.get_gate(node.body).kind == .input) {
             try node_queue.append(gpa, node.id);
         }

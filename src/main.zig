@@ -30,6 +30,6 @@ pub fn main() !void {
 
     try glibopt.PreProcessor(glib.GateBody).preprocess(graph);
     try graphviz.GraphVisualizer(glib.GateBody).print(gpa, graph);
-    try graphviz.GraphVisualizer(glib.GateBody).print_dfs(gpa, graph);
+
     graph.deinit();
 }

@@ -160,99 +160,91 @@ pub fn Graph(comptime NodeBody: type) type {
 
         gpa: std.mem.Allocator,
 
-        nodes: std.ArrayList(Node),
-        edges: std.ArrayList(Edge),
-
-        node2edges: std.AutoHashMap(NodeId, std.ArrayList(EdgeId)),
-        id2node_idx: std.AutoHashMap(NodeId, usize),
-        id2edge_idx: std.AutoHashMap(EdgeId, usize),
+        nodes: std.AutoArrayHashMap(NodeId, Node),
+        edges: std.AutoArrayHashMap(EdgeId, Edge),
+        node2edges: std.AutoArrayHashMap(NodeId, std.ArrayList(EdgeId)),
 
         source: Source,
 
-        pub fn get_edge(self: *Self, edge: EdgeId) ?*Edge {
-            const index = self.id2edge_idx.get(edge) orelse return undefined;
-            return &self.edges.items[index];
+        pub fn get_edge(self: *Self, edge_id: EdgeId) ?*Edge {
+            return self.edges.getPtr(edge_id);
         }
 
-        pub fn get_node(self: *Self, node: NodeId) ?*Node {
-            const index = self.id2node_idx.get(node) orelse return undefined;
-            return &self.nodes.items[index];
+        pub fn get_const_edge(self: *const Self, edge_id: EdgeId) ?*const Edge {
+            return self.edges.getPtr(edge_id);
+        }
+
+        pub fn get_node(self: *Self, node_id: NodeId) ?*Node {
+            return self.nodes.getPtr(node_id);
+        }
+
+        pub fn get_const_node(self: *const Self, node_id: NodeId) ?*const Node {
+            return self.nodes.getPtr(node_id);
         }
 
         pub fn add_node(self: *Self, node: Node) !void {
-            try self.nodes.append(self.gpa, node);
-            try self.id2node_idx.put(node.id, self.nodes.items.len - 1);
+            try self.nodes.putNoClobber(node.id, node);
             try self.node2edges.putNoClobber(node.id, .empty);
 
-            self.nodes.items[self.nodes.items.len - 1].owner = self;
+            self.nodes.getPtr(node.id).?.owner = self;
         }
 
         // NOTE: when adding edges, **ALWAYS** make sure to have ALL NODES OF THE EDGE registered
         pub fn add_edge(self: *Self, edge: Edge) !void {
-            try self.edges.append(self.gpa, edge);
-            try self.id2edge_idx.put(edge.id, self.edges.items.len - 1);
+            try self.edges.putNoClobber(edge.id, edge);
             try self.node2edges.getPtr(edge.a).?.append(self.gpa, edge.id);
             try self.node2edges.getPtr(edge.b).?.append(self.gpa, edge.id);
 
-            self.edges.items[self.edges.items.len - 1].owner = self;
+            self.edges.getPtr(edge.id).?.owner = self;
         }
 
         pub fn remove_edge(self: *Self, edge_id: EdgeId) !void {
-            const index = self.id2edge_idx.get(edge_id).?;
-            // const edge = self.get_edge(edge_id).?;
-            _ = self.edges.swapRemove(index);
-            if (index != self.edges.items.len) {
-                try self.id2edge_idx.put(self.edges.items[index].id, index);
-            }
+            _ = self.edges.swapRemove(edge_id);
 
-            var n2e_iter = self.node2edges.valueIterator();
-            while (n2e_iter.next()) |node_edges| {
+            for (self.node2edges.values()) |*node_edges| {
                 var to_remove_indices = std.ArrayList(usize).empty;
                 defer _ = to_remove_indices.deinit(self.gpa);
 
-                for (0.., node_edges.items) |node_index, ne_id| {
+                for (0.., node_edges.items) |edge_index, ne_id| {
                     if (edge_id == ne_id) {
-                        try to_remove_indices.append(self.gpa, node_index);
+                        try to_remove_indices.append(self.gpa, edge_index);
                     }
                 }
                 node_edges.orderedRemoveMany(to_remove_indices.items);
             }
         }
 
-        pub fn remove_node(self: *Self, node: NodeId) !void {
-            const index = self.id2node_idx.get(node).?;
-            // In the case that someone is for some reason pointing to us rather than using IDs
-            // Set the owner to null
-            self.nodes.items[index].owner = null;
-            self.nodes.swapRemove(index);
-            try self.id2node_idx.put(self.nodes.items[index].id, index);
+        pub fn remove_node(self: *Self, node_id: NodeId) !void {
+            // The clone is required as `remove_edge` modifies the array whilst we iterate it
+            // So we need a stable, non-moving array to iterate over
+            var cloned = try self.node2edges.getPtr(node_id).?.clone(self.gpa);
+            defer _ = cloned.deinit(self.gpa);
+            for (cloned.items) |edge_id| {
+                try self.remove_edge(edge_id);
+            }
 
-            // Also remove all edges related to this node
-            self.node2edges.remove(node);
+            _ = self.nodes.swapRemove(node_id);
+            self.node2edges.getPtr(node_id).?.deinit(self.gpa);
+            _ = self.node2edges.swapRemove(node_id);
         }
 
         pub fn deinit(self: *Self) void {
-            var val_iter = self.node2edges.valueIterator();
-            while (val_iter.next()) |arr| {
-                arr.deinit(self.gpa);
+            for (self.node2edges.values()) |*node_edges| {
+                node_edges.deinit(self.gpa);
             }
 
-            self.nodes.deinit(self.gpa);
-            self.edges.deinit(self.gpa);
+            self.nodes.deinit();
+            self.edges.deinit();
             self.node2edges.deinit();
-            self.id2edge_idx.deinit();
-            self.id2node_idx.deinit();
             self.gpa.destroy(self);
         }
 
         pub fn empty(gpa: std.mem.Allocator, source: Source) !*Self {
             var graph = try gpa.create(Self);
             graph.gpa = gpa;
-            graph.nodes = .empty;
-            graph.edges = .empty;
+            graph.nodes = .init(gpa);
+            graph.edges = .init(gpa);
             graph.node2edges = .init(gpa);
-            graph.id2node_idx = .init(gpa);
-            graph.id2edge_idx = .init(gpa);
             graph.source = source;
             return graph;
         }
