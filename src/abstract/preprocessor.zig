@@ -2,14 +2,6 @@ const std = @import("std");
 const nl = @import("../netlist.zig");
 const glib = @import("graph.zig");
 
-// const edge = graph.get_edge(edge_id).?;
-// const net_id = graph.get_edge(edge_id).?.body.net_id;
-// const net = graph.source.netlist.get_net(net_id);
-// var string = std.io.Writer.Allocating.init(graph.gpa);
-// defer _ = string.deinit();
-// try net.literal.write_symbol(&string.writer);
-// std.debug.print("Removing {s} for nodes ({}, {}) (node: {})\n", .{ string.written(), edge.a, edge.b, node.id });
-
 // Enforce that all INPUTS have are registered as OUTPUT on the other end and vice versa
 pub fn remove_loose_connections(graph: *glib.GateGraph) !void {
     var faulty_edges = std.ArrayList(glib.EdgeId).empty;

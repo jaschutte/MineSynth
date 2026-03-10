@@ -5,120 +5,13 @@ const id = @import("id.zig");
 
 pub const GateBody = nl.GatePtr;
 pub const GateGraph = Graph(GateBody);
-pub const GateNode = Node(GateBody);
-pub const GateEdge = Edge(GateBody);
 
 pub const NodeId = id.Id;
 pub const EdgeId = id.Id;
 
-pub fn Node(comptime NodeBody: type) type {
-    return struct {
-        const Self = @This();
-
-        pub const MetadataKind = enum {
-            none,
-            partitioning,
-        };
-
-        pub const Metadata = union(MetadataKind) {
-            none: void,
-            partitioning: struct {
-                fixed: bool,
-            },
-        };
-
-        body: NodeBody,
-        id: NodeId,
-        metadata: MetadataKind,
-        // Only null when the node is detached from any graph
-        owner: ?*Graph(NodeBody),
-
-        pub const edge_relation = switch (NodeBody) {
-            GateBody => struct {
-                pub const EdgeRelation = enum {
-                    none,
-                    input,
-                    output,
-                    inout,
-                };
-
-                fn relation(self: *const Self, edge_id: EdgeId) EdgeRelation {
-                    const edge = self.owner.?.get_edge(edge_id).?;
-                    const gate = self.get_gate();
-                    const in: u2 = @intFromBool(std.mem.containsAtLeastScalar(usize, gate.inputs.items, 1, edge.body.net_id));
-                    const out: u2 = @intFromBool(std.mem.containsAtLeastScalar(usize, gate.outputs.items, 1, edge.body.net_id));
-                    return switch ((in << 1) | out) {
-                        0b11 => .inout,
-                        0b10 => .input,
-                        0b01 => .output,
-                        0b00 => .none,
-                    };
-                }
-            }.relation,
-            else => @compileError("NodeBody does not support retrieving the gate"),
-        };
-
-        pub const get_gate = switch (NodeBody) {
-            GateBody => struct {
-                fn gate(self: *const Self) *nl.Gate {
-                    return self.owner.?.source.netlist.get_gate(self.body);
-                }
-            }.gate,
-            else => @compileError("NodeBody does not support retrieving the gate"),
-        };
-
-        pub const get_size = switch (NodeBody) {
-            GateBody => struct {
-                fn size(self: *const Self) physical.Size {
-                    return self.owner.?.source.netlist.get_gate_size(self.body);
-                }
-            }.size,
-            else => @compileError("NodeBody does not support retrieving its size"),
-        };
-
-        pub const get_delay = switch (NodeBody) {
-            GateBody => struct {
-                fn delay(self: *const Self) physical.Delay {
-                    return self.owner.?.source.netlist.get_gate_delay(self.body);
-                }
-            }.size,
-            else => @compileError("NodeBody does not support retrieving its delay"),
-        };
-
-        pub const get_area = switch (NodeBody) {
-            GateBody => struct {
-                fn area(self: *const Self) physical.Area {
-                    return self.size().area();
-                }
-            }.area,
-            else => @compileError("NodeBody does not support retrieving its area"),
-        };
-    };
-}
-
-pub fn Edge(comptime NodeBody: type) type {
-    return struct {
-        const Self = @This();
-
-        pub const Body = switch (NodeBody) {
-            GateBody => struct {
-                net_id: nl.NetPtr,
-            },
-            else => @compileError("Invalid node body"),
-        };
-
-        a: NodeId,
-        b: NodeId,
-        id: EdgeId,
-        body: Body,
-    };
-}
-
 pub const GraphConstructors = struct {
     pub fn from_netlist(gpa: std.mem.Allocator, netlist: *const nl.Netlist) !*GateGraph {
-        var graph = try GateGraph.empty(gpa, .{
-            .netlist = netlist,
-        });
+        var graph = try GateGraph.empty(gpa, netlist);
 
         var added_nodes = std.AutoHashMap(nl.GatePtr, NodeId).init(gpa);
         defer _ = added_nodes.deinit();
@@ -133,11 +26,12 @@ pub const GraphConstructors = struct {
 
                 const node_id = id.get_id();
                 try added_nodes.put(gate_ptr, node_id);
-                try graph.add_node(GateNode{
+                try graph.add_node(GateGraph.Node{
                     .id = node_id,
                     .body = gate_ptr,
                     .metadata = .none,
-                    .owner = graph,
+                    // Gets filled in automatically
+                    .owner = null,
                 });
             }
 
@@ -149,11 +43,13 @@ pub const GraphConstructors = struct {
                     try added_edges.put(.{ to_ptr, from_ptr }, undefined);
 
                     const edge_id = id.get_id();
-                    try graph.add_edge(GateEdge{
-                        .body = .{ .net_id = net_ptr },
+                    try graph.add_edge(GateGraph.Edge{
+                        .body = net_ptr,
                         .id = edge_id,
                         .a = added_nodes.get(from_ptr).?,
                         .b = added_nodes.get(to_ptr).?,
+                        // Gets filled in automatically
+                        .owner = null,
                     });
                 }
             }
@@ -167,17 +63,105 @@ pub fn Graph(comptime NodeBody: type) type {
     return struct {
         const Self = @This();
         pub const Source = switch (NodeBody) {
-            nl.GatePtr => struct {
-                netlist: *const nl.Netlist,
-            },
-            else => @compileError("Invalid node body"),
+            nl.GatePtr => *const nl.Netlist,
+            else => void,
         };
         pub const Body = NodeBody;
 
+        pub const Node = struct {
+            const Self = @This();
+
+            pub const MetadataKind = enum {
+                none,
+                partitioning,
+            };
+
+            pub const Metadata = union(MetadataKind) {
+                none: void,
+                partitioning: struct {
+                    fixed: bool,
+                },
+            };
+
+            body: NodeBody,
+            id: NodeId,
+            metadata: MetadataKind,
+            // Only null when the node is detached from any graph
+            owner: ?*Graph(NodeBody),
+
+            pub const edge_relation = switch (NodeBody) {
+                GateBody => struct {
+                    pub const EdgeRelation = enum {
+                        none,
+                        input,
+                        output,
+                        inout,
+                    };
+
+                    fn relation(self: *const Node, edge_id: EdgeId) EdgeRelation {
+                        const edge = self.owner.?.get_edge(edge_id).?;
+                        const gate = self.get_gate();
+                        const in: u2 = @intFromBool(std.mem.containsAtLeastScalar(usize, gate.inputs.items, 1, edge.body));
+                        const out: u2 = @intFromBool(std.mem.containsAtLeastScalar(usize, gate.outputs.items, 1, edge.body));
+                        return switch ((in << 1) | out) {
+                            0b11 => .inout,
+                            0b10 => .input,
+                            0b01 => .output,
+                            0b00 => .none,
+                        };
+                    }
+                }.relation,
+                else => @compileError("NodeBody does not support retrieving the gate"),
+            };
+
+            pub const get_gate = switch (NodeBody) {
+                GateBody => struct {
+                    fn gate(self: *const Node) *nl.Gate {
+                        return self.owner.?.source.get_gate(self.body);
+                    }
+                }.gate,
+                else => @compileError("NodeBody does not support retrieving the gate"),
+            };
+
+            pub const get_size = switch (NodeBody) {
+                GateBody => struct {
+                    fn size(self: *const Node) physical.Size {
+                        return self.owner.?.source.netlist.get_gate_size(self.body);
+                    }
+                }.size,
+                else => @compileError("NodeBody does not support retrieving its size"),
+            };
+
+            pub const get_area = switch (NodeBody) {
+                GateBody => struct {
+                    fn area(self: *const Node) physical.Area {
+                        return self.size().area();
+                    }
+                }.area,
+                else => @compileError("NodeBody does not support retrieving its area"),
+            };
+        };
+
+        pub const Edge = struct {
+            const Self = @This();
+
+            pub const Body = switch (NodeBody) {
+                GateBody => nl.NetPtr,
+                else => void,
+            };
+
+            body: Edge.Body,
+            id: EdgeId,
+            a: NodeId,
+            b: NodeId,
+            // Only null when the node is detached from any graph
+            owner: ?*Graph(NodeBody),
+        };
+
         gpa: std.mem.Allocator,
 
-        nodes: std.ArrayList(Node(NodeBody)),
-        edges: std.ArrayList(Edge(NodeBody)),
+        nodes: std.ArrayList(Node),
+        edges: std.ArrayList(Edge),
 
         node2edges: std.AutoHashMap(NodeId, std.ArrayList(EdgeId)),
         id2node_idx: std.AutoHashMap(NodeId, usize),
@@ -185,17 +169,17 @@ pub fn Graph(comptime NodeBody: type) type {
 
         source: Source,
 
-        pub fn get_edge(self: *Self, edge: EdgeId) ?*Edge(NodeBody) {
+        pub fn get_edge(self: *Self, edge: EdgeId) ?*Edge {
             const index = self.id2edge_idx.get(edge) orelse return undefined;
             return &self.edges.items[index];
         }
 
-        pub fn get_node(self: *Self, node: NodeId) ?*Node(NodeBody) {
+        pub fn get_node(self: *Self, node: NodeId) ?*Node {
             const index = self.id2node_idx.get(node) orelse return undefined;
             return &self.nodes.items[index];
         }
 
-        pub fn add_node(self: *Self, node: Node(NodeBody)) !void {
+        pub fn add_node(self: *Self, node: Node) !void {
             try self.nodes.append(self.gpa, node);
             try self.id2node_idx.put(node.id, self.nodes.items.len - 1);
             try self.node2edges.putNoClobber(node.id, .empty);
@@ -204,11 +188,13 @@ pub fn Graph(comptime NodeBody: type) type {
         }
 
         // NOTE: when adding edges, **ALWAYS** make sure to have ALL NODES OF THE EDGE registered
-        pub fn add_edge(self: *Self, edge: Edge(NodeBody)) !void {
+        pub fn add_edge(self: *Self, edge: Edge) !void {
             try self.edges.append(self.gpa, edge);
             try self.id2edge_idx.put(edge.id, self.edges.items.len - 1);
             try self.node2edges.getPtr(edge.a).?.append(self.gpa, edge.id);
             try self.node2edges.getPtr(edge.b).?.append(self.gpa, edge.id);
+
+            self.edges.items[self.edges.items.len - 1].owner = self;
         }
 
         pub fn remove_edge(self: *Self, edge_id: EdgeId) !void {
@@ -218,15 +204,6 @@ pub fn Graph(comptime NodeBody: type) type {
             if (index != self.edges.items.len) {
                 try self.id2edge_idx.put(self.edges.items[index].id, index);
             }
-
-            // const edges_a = self.node2edges.getPtr(edge.a).?;
-            // if (std.mem.indexOfScalar(EdgeId, edges_a.items, edge.id)) |node_a_pos| {
-            //     _ = edges_a.swapRemove(node_a_pos);
-            // }
-            // const edges_b = self.node2edges.getPtr(edge.b).?;
-            // if (std.mem.indexOfScalar(EdgeId, edges_b.items, edge.id)) |node_b_pos| {
-            //     _ = edges_b.swapRemove(node_b_pos);
-            // }
 
             var n2e_iter = self.node2edges.valueIterator();
             while (n2e_iter.next()) |node_edges| {
@@ -277,44 +254,6 @@ pub fn Graph(comptime NodeBody: type) type {
             graph.id2node_idx = .init(gpa);
             graph.id2edge_idx = .init(gpa);
             graph.source = source;
-            return graph;
-        }
-
-        /// Edges should NOT contain duplicates! This means if you have edge <A, B>, you may NOT have edge <B, A>!!!
-        pub fn new(gpa: std.mem.Allocator, nodes: std.ArrayList(Node(NodeBody)), edges: std.ArrayList(Edge(NodeBody)), source: Source) !*Self {
-            var graph = try gpa.create(Self);
-            graph.gpa = gpa;
-            graph.nodes = nodes;
-            graph.edges = edges;
-            graph.node2edges = .init(gpa);
-            graph.id2node_idx = .init(gpa);
-            graph.id2edge_idx = .init(gpa);
-            graph.source = source;
-
-            for (graph.nodes.items) |*node| {
-                node.owner = graph;
-            }
-
-            for (0.., graph.nodes.items) |index, *node| {
-                try graph.id2node_idx.put(node.id, index);
-            }
-            for (0.., graph.edges.items) |index, *edge| {
-                try graph.id2edge_idx.put(edge.id, index);
-            }
-
-            for (graph.edges.items) |*edge| {
-                if (graph.node2edges.getPtr(edge.a)) |edges_a| {
-                    try edges_a.append(gpa, edge.id);
-                } else {
-                    try graph.node2edges.put(edge.a, .empty);
-                }
-                if (graph.node2edges.getPtr(edge.b)) |edges_b| {
-                    try edges_b.append(gpa, edge.id);
-                } else {
-                    try graph.node2edges.put(edge.b, .empty);
-                }
-            }
-
             return graph;
         }
     };

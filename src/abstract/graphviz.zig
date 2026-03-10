@@ -4,8 +4,8 @@ const glib = @import("graph.zig");
 
 // https://magjac.com/graphviz-visual-editor/
 
-pub fn print_node(graph: *const glib.GateGraph, string: *std.io.Writer.Allocating, node: *glib.GateNode) !void {
-    const gate = graph.source.netlist.get_gate(node.body);
+pub fn print_node(graph: *const glib.GateGraph, string: *std.io.Writer.Allocating, node: *glib.GateGraph.Node) !void {
+    const gate = graph.source.get_gate(node.body);
     const symbol = gate.symbol;
     const color = switch (gate.kind) {
         .and_gate => "\"#e0a143\"",
@@ -17,8 +17,8 @@ pub fn print_node(graph: *const glib.GateGraph, string: *std.io.Writer.Allocatin
     try string.writer.print("    {} [label=\"{s}\", fillcolor={s}, tooltip=\"{}\"];\n", .{ node.id, symbol, color, node.id });
 }
 
-pub fn print_edge(graph: *const glib.GateGraph, string: *std.io.Writer.Allocating, edge: *glib.GateEdge) !void {
-    const net = graph.source.netlist.get_net(edge.body.net_id);
+pub fn print_edge(graph: *const glib.GateGraph, string: *std.io.Writer.Allocating, edge: *glib.GateGraph.Edge) !void {
+    const net = graph.source.get_net(edge.body);
     const color = switch (net.literal.is_negated()) {
         true => "\"#601400\"",
         false => "\"#006004\"",
@@ -69,7 +69,7 @@ pub fn print_gate_dfs(gpa: std.mem.Allocator, graph: *const glib.GateGraph) !voi
     var node_queue = std.ArrayList(glib.NodeId).empty;
     defer _ = node_queue.deinit(gpa);
     for (graph.nodes.items) |*node| {
-        if (graph.source.netlist.get_gate(node.body).kind == .input) {
+        if (graph.source.get_gate(node.body).kind == .input) {
             try node_queue.append(gpa, node.id);
         }
     }
