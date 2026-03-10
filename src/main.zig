@@ -26,38 +26,10 @@ pub fn main() !void {
     var netlist = try nl.Netlist.from_aiger(gpa, aig);
     defer _ = netlist.deinit();
 
-    // try netlist.print_nets();
-    // try netlist.print_gates();
-
     var graph = try glib.GraphConstructors.from_netlist(gpa, &netlist);
 
     try glibopt.PreProcessor(glib.GateBody).preprocess(graph);
     try graphviz.GraphVisualizer(glib.GateBody).print(gpa, graph);
+    try graphviz.GraphVisualizer(glib.GateBody).print_dfs(gpa, graph);
     graph.deinit();
-
-    const set = route.OrderedSet(route.WorldCoord).init(gpa);
-    try route.routeTo(gpa, .{ 0, 0, 0 }, .{ 25, 0, 15 }, set);
-
-    nbt.nbt_test();
-
-    // nbt.block_arr_to_schem(gpa);
-
-    // // nl.print_nets();
-    // // netlist.print_gates();
-    //
-    // var module = try partitioning.Module.from_netlist(allocator, &netlist);
-    // defer _ = module.deinit();
-    //
-    // var partition = try module.initial_partition();
-    // defer _ = partition.deinit(allocator);
-    // // partition.pretty_print();
-    //
-    // try graphviz.node_visualizer(allocator, &module, &partition);
-    // try partition.fm_algorithm(allocator);
-    // // partition.pretty_print();
-    // try graphviz.node_visualizer(allocator, &module, &partition);
-    //
-    // // try pretty.print(allocator, nl, .{});
-    // // try pretty.print(allocator, aig, .{});
-    //
 }

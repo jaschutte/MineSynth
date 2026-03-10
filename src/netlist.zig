@@ -39,6 +39,7 @@ pub const Net = struct {
 pub const GateType = enum {
     inverter,
     and_gate,
+    or_gate,
     input,
     output,
 
@@ -59,6 +60,10 @@ pub const GateType = enum {
             .and_gate => physical.Size{
                 .w = 6,
                 .h = 3,
+            },
+            .or_gate => physical.Size{
+                .w = 3,
+                .h = 1,
             },
         };
     }

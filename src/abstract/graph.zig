@@ -116,46 +116,50 @@ pub fn Edge(comptime NodeBody: type) type {
 
 pub const GraphConstructors = struct {
     pub fn from_netlist(gpa: std.mem.Allocator, netlist: *const nl.Netlist) !*GateGraph {
-        var index2id = std.AutoArrayHashMap(usize, NodeId).init(gpa);
-        defer _ = index2id.deinit();
-        var nodes = std.ArrayList(GateNode).empty;
-        for (0..netlist.gates.items.len) |gate_ptr| {
-            const node_id = id.get_id();
-            try index2id.put(gate_ptr, node_id);
-            try nodes.append(gpa, GateNode{
-                .metadata = .none,
-                .id = node_id,
-                .body = gate_ptr,
-                .owner = undefined,
-            });
-        }
+        var graph = try GateGraph.empty(gpa, .{
+            .netlist = netlist,
+        });
 
-        var edges = std.ArrayList(GateEdge).empty;
-        var edge_exists = std.AutoArrayHashMap(struct { a: NodeId, b: NodeId }, void).init(gpa);
-        defer _ = edge_exists.deinit();
+        var added_nodes = std.AutoHashMap(nl.GatePtr, NodeId).init(gpa);
+        defer _ = added_nodes.deinit();
+        var added_edges = std.AutoHashMap([2]nl.NetPtr, EdgeId).init(gpa);
+        defer _ = added_edges.deinit();
+
         for (0..netlist.nets.items.len) |net_ptr| {
             const net = netlist.get_net(net_ptr);
-            for (net.binds.items) |a| {
-                for (net.binds.items) |b| {
-                    const a_id = index2id.get(a).?;
-                    const b_id = index2id.get(b).?;
-                    if (a_id == b_id) continue;
-                    if (edge_exists.contains(.{ .a = a, .b = b })) continue;
-                    if (edge_exists.contains(.{ .a = b, .b = a })) continue;
-                    try edge_exists.put(.{ .a = a, .b = b }, undefined);
-                    try edges.append(gpa, GateEdge{
-                        .a = a_id,
-                        .b = b_id,
-                        .id = id.get_id(),
+
+            for (net.binds.items) |gate_ptr| {
+                if (added_nodes.contains(gate_ptr)) continue;
+
+                const node_id = id.get_id();
+                try added_nodes.put(gate_ptr, node_id);
+                try graph.add_node(GateNode{
+                    .id = node_id,
+                    .body = gate_ptr,
+                    .metadata = .none,
+                    .owner = graph,
+                });
+            }
+
+            for (net.binds.items) |from_ptr| {
+                for (net.binds.items) |to_ptr| {
+                    if (from_ptr == to_ptr) continue;
+                    if (added_edges.contains([2]nl.NetPtr{ from_ptr, to_ptr })) continue;
+                    if (added_edges.contains([2]nl.NetPtr{ to_ptr, from_ptr })) continue;
+                    try added_edges.put(.{ to_ptr, from_ptr }, undefined);
+
+                    const edge_id = id.get_id();
+                    try graph.add_edge(GateEdge{
                         .body = .{ .net_id = net_ptr },
+                        .id = edge_id,
+                        .a = added_nodes.get(from_ptr).?,
+                        .b = added_nodes.get(to_ptr).?,
                     });
                 }
             }
         }
 
-        return GateGraph.new(gpa, nodes, edges, .{
-            .netlist = netlist,
-        });
+        return graph;
     }
 };
 
@@ -192,11 +196,11 @@ pub fn Graph(comptime NodeBody: type) type {
         }
 
         pub fn add_node(self: *Self, node: Node(NodeBody)) !void {
-            node.owner = self;
-
             try self.nodes.append(self.gpa, node);
             try self.id2node_idx.put(node.id, self.nodes.items.len - 1);
             try self.node2edges.putNoClobber(node.id, .empty);
+
+            self.nodes.items[self.nodes.items.len - 1].owner = self;
         }
 
         // NOTE: when adding edges, **ALWAYS** make sure to have ALL NODES OF THE EDGE registered
@@ -209,19 +213,32 @@ pub fn Graph(comptime NodeBody: type) type {
 
         pub fn remove_edge(self: *Self, edge_id: EdgeId) !void {
             const index = self.id2edge_idx.get(edge_id).?;
-            const edge = self.get_edge(edge_id).?;
+            // const edge = self.get_edge(edge_id).?;
             _ = self.edges.swapRemove(index);
             if (index != self.edges.items.len) {
                 try self.id2edge_idx.put(self.edges.items[index].id, index);
             }
 
-            const edges_a = self.node2edges.getPtr(edge.a).?;
-            if (std.mem.indexOfScalar(EdgeId, edges_a.items, edge.id)) |node_a_pos| {
-                _ = edges_a.swapRemove(node_a_pos);
-            }
-            const edges_b = self.node2edges.getPtr(edge.b).?;
-            if (std.mem.indexOfScalar(EdgeId, edges_b.items, edge.id)) |node_b_pos| {
-                _ = edges_b.swapRemove(node_b_pos);
+            // const edges_a = self.node2edges.getPtr(edge.a).?;
+            // if (std.mem.indexOfScalar(EdgeId, edges_a.items, edge.id)) |node_a_pos| {
+            //     _ = edges_a.swapRemove(node_a_pos);
+            // }
+            // const edges_b = self.node2edges.getPtr(edge.b).?;
+            // if (std.mem.indexOfScalar(EdgeId, edges_b.items, edge.id)) |node_b_pos| {
+            //     _ = edges_b.swapRemove(node_b_pos);
+            // }
+
+            var n2e_iter = self.node2edges.valueIterator();
+            while (n2e_iter.next()) |node_edges| {
+                var to_remove_indices = std.ArrayList(usize).empty;
+                defer _ = to_remove_indices.deinit(self.gpa);
+
+                for (0.., node_edges.items) |node_index, ne_id| {
+                    if (edge_id == ne_id) {
+                        try to_remove_indices.append(self.gpa, node_index);
+                    }
+                }
+                node_edges.orderedRemoveMany(to_remove_indices.items);
             }
         }
 
@@ -251,6 +268,18 @@ pub fn Graph(comptime NodeBody: type) type {
             self.gpa.destroy(self);
         }
 
+        pub fn empty(gpa: std.mem.Allocator, source: Source) !*Self {
+            var graph = try gpa.create(Self);
+            graph.gpa = gpa;
+            graph.nodes = .empty;
+            graph.edges = .empty;
+            graph.node2edges = .init(gpa);
+            graph.id2node_idx = .init(gpa);
+            graph.id2edge_idx = .init(gpa);
+            graph.source = source;
+            return graph;
+        }
+
         /// Edges should NOT contain duplicates! This means if you have edge <A, B>, you may NOT have edge <B, A>!!!
         pub fn new(gpa: std.mem.Allocator, nodes: std.ArrayList(Node(NodeBody)), edges: std.ArrayList(Edge(NodeBody)), source: Source) !*Self {
             var graph = try gpa.create(Self);
@@ -274,10 +303,16 @@ pub fn Graph(comptime NodeBody: type) type {
             }
 
             for (graph.edges.items) |*edge| {
-                const entry_a = try graph.node2edges.getOrPutValue(edge.a, .empty);
-                try entry_a.value_ptr.append(gpa, edge.id);
-                const entry_b = try graph.node2edges.getOrPutValue(edge.b, .empty);
-                try entry_b.value_ptr.append(gpa, edge.id);
+                if (graph.node2edges.getPtr(edge.a)) |edges_a| {
+                    try edges_a.append(gpa, edge.id);
+                } else {
+                    try graph.node2edges.put(edge.a, .empty);
+                }
+                if (graph.node2edges.getPtr(edge.b)) |edges_b| {
+                    try edges_b.append(gpa, edge.id);
+                } else {
+                    try graph.node2edges.put(edge.b, .empty);
+                }
             }
 
             return graph;
