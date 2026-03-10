@@ -33,7 +33,7 @@ pub fn main() !void {
     graph.deinit();
 
     const set = route.OrderedSet(route.WorldCoord).init(gpa);
-    _ = try route.routeTo(gpa, .{ 0, 0, 0 }, .{ 5, 5, 0 }, set);
+    _ = try route.routeTo(gpa, .{ 0, 0, 0 }, .{ 5, 0, 0 }, set);
 
     nbt.nbt_test();
 

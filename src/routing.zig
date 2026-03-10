@@ -7,6 +7,7 @@ const glib = @import("abstract/graph.zig");
 const graphviz = @import("abstract/graphviz.zig");
 const phys = @import("physical.zig");
 const nbt = @import("nbt.zig");
+const ms = @import("abstract/structures.zig");
 
 pub const WorldCoord = @Vector(3, i32);
 
@@ -50,18 +51,10 @@ pub fn OrderedSet(T: type) type {
     };
 }
 
-const Route = OrderedSet(nbt.Block);
+const Route = OrderedSet(ms.Block);
 
 // any formless volume
 const Volume = OrderedSet(WorldCoord);
-
-fn BFSNode(T: type) type {
-    return struct {
-        const Node = std.DoublyLinkedList.Node;
-        data: T,
-        node: Node,
-    };
-}
 
 fn coordEq(a: WorldCoord, b: WorldCoord) bool {
     return a[0] == b[0] and a[1] == b[1] and a[2] == b[2];
@@ -111,19 +104,19 @@ pub fn routeTo(a: std.mem.Allocator, from: WorldCoord, to: WorldCoord, forbidden
         }
         // for all edges
         const x_vec = WorldCoord{ 1, 0, 0 };
-        const y_vec = WorldCoord{ 0, 1, 0 };
+        // const y_vec = WorldCoord{ 0, 1, 0 };
         const z_vec = WorldCoord{ 0, 0, 1 };
 
         var vec = v + x_vec;
         self.process(v, vec);
-        vec = v + y_vec;
-        self.process(v, vec);
+        // vec = v + y_vec;
+        // self.process(v, vec);
         vec = v + z_vec;
         self.process(v, vec);
         vec = v - x_vec;
         self.process(v, vec);
-        vec = v - y_vec;
-        self.process(v, vec);
+        // vec = v - y_vec;
+        // self.process(v, vec);
         vec = v - z_vec;
         self.process(v, vec);
     }
