@@ -149,8 +149,6 @@ pub fn routeTo(a: std.mem.Allocator, from: WorldCoord, to: WorldCoord, forbidden
         const best_dist = self.distances.get(u) orelse continue;
         if (item.dist > best_dist.distance) continue;
 
-        std.log.info("Exploring {any} with dist {d}\n", .{ u, item.dist });
-
         if (coordEq(u, to)) break;
 
         var x_vec = WorldCoord{ 1, 0, 0 };
@@ -183,11 +181,11 @@ pub fn routeTo(a: std.mem.Allocator, from: WorldCoord, to: WorldCoord, forbidden
     }
 
     var vec = to;
-    while (!coordEq(vec, from)) {
-        const p = self.parents.get(vec).?;
-        vec = p.prev;
-        std.log.info("{any}\n", .{p});
-    }
+    // while (!coordEq(vec, from)) {
+    //     const p = self.parents.get(vec).?;
+    //     vec = p.prev;
+    //     std.log.info("{any}\n", .{p});
+    // }
     // construct block array
     var blocks: std.ArrayList(ms.Block) = .empty;
     vec = to;
