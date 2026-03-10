@@ -6,30 +6,9 @@ const nl = @import("netlist.zig");
 const glib = @import("abstract/graph.zig");
 const graphviz = @import("abstract/graphviz.zig");
 const phys = @import("physical.zig");
+const nbt = @import("nbt.zig");
 
-pub const Coordinate = @Vector(3, i32);
-const Coord = Coordinate;
-
-const BlockCat = enum {
-    dust,
-    repeater,
-    torch,
-    block,
-};
-
-const Orientation = enum {
-    north,
-    east,
-    south,
-    west,
-    center,
-};
-
-const Block = struct {
-    block: BlockCat,
-    rot: Orientation,
-    loc: Coord,
-};
+pub const WorldCoord = @Vector(3, i32);
 
 pub fn OrderedSet(T: type) type {
     return struct {
@@ -71,10 +50,10 @@ pub fn OrderedSet(T: type) type {
     };
 }
 
-const Route = OrderedSet(Block);
+const Route = OrderedSet(nbt.Block);
 
 // any formless volume
-const Volume = OrderedSet(Coord);
+const Volume = OrderedSet(WorldCoord);
 
 fn BFSNode(T: type) type {
     return struct {
@@ -84,29 +63,29 @@ fn BFSNode(T: type) type {
     };
 }
 
-fn coordEq(a: Coord, b: Coord) bool {
+fn coordEq(a: WorldCoord, b: WorldCoord) bool {
     return a[0] == b[0] and a[1] == b[1] and a[2] == b[2];
 }
 
-explored: std.AutoHashMap(Coord, void),
-queue: OrderedSet(Coord),
+explored: std.AutoHashMap(WorldCoord, void),
+queue: OrderedSet(WorldCoord),
 forbidden_zones: Volume,
-parents: std.AutoHashMap(Coord, Coord),
-pub fn process(self: *@This(), prev: Coord, coord: Coord) void {
+parents: std.AutoHashMap(WorldCoord, WorldCoord),
+pub fn process(self: *@This(), prev: WorldCoord, coord: WorldCoord) void {
     if (!self.forbidden_zones.contains(coord) and !self.explored.contains(coord)) {
         self.explored.put(coord, void{}) catch @panic("oom");
         self.queue.add(coord) catch @panic("oom");
         self.parents.put(coord, prev) catch @panic("oom");
     }
 }
-pub fn routeTo(a: std.mem.Allocator, from: Coord, to: Coord, forbidden_zones: Volume) !Route {
+pub fn routeTo(a: std.mem.Allocator, from: WorldCoord, to: WorldCoord, forbidden_zones: Volume) !Route {
     const route = Route.init(a);
 
     var self = @This(){
-        .explored = std.AutoHashMap(Coord, void).init(a),
-        .queue = OrderedSet(Coord).init(a),
+        .explored = std.AutoHashMap(WorldCoord, void).init(a),
+        .queue = OrderedSet(WorldCoord).init(a),
         .forbidden_zones = forbidden_zones,
-        .parents = std.AutoHashMap(Coord, Coord).init(a),
+        .parents = std.AutoHashMap(WorldCoord, WorldCoord).init(a),
     };
     defer self.explored.deinit();
     defer self.queue.deinit();
@@ -131,9 +110,9 @@ pub fn routeTo(a: std.mem.Allocator, from: Coord, to: Coord, forbidden_zones: Vo
             break;
         }
         // for all edges
-        const x_vec = Coord{ 1, 0, 0 };
-        const y_vec = Coord{ 0, 1, 0 };
-        const z_vec = Coord{ 0, 0, 1 };
+        const x_vec = WorldCoord{ 1, 0, 0 };
+        const y_vec = WorldCoord{ 0, 1, 0 };
+        const z_vec = WorldCoord{ 0, 0, 1 };
 
         var vec = v + x_vec;
         self.process(v, vec);

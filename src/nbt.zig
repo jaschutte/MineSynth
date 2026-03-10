@@ -3,16 +3,16 @@ pub const c = @cImport({
     @cInclude("nbt.h");
 });
 
-const Coord = @Vector(3, u15);
+pub const Coord = @Vector(3, u15);
 
-const BlockCat = enum {
+pub const BlockCat = enum {
     dust,
     repeater,
     torch,
     block,
 };
 
-fn blockcat_to_id(cat: BlockCat) i8 {
+pub fn blockcat_to_id(cat: BlockCat) i8 {
     return switch (cat) {
         .dust => 55,
         .repeater => 94,
@@ -21,7 +21,7 @@ fn blockcat_to_id(cat: BlockCat) i8 {
     };
 }
 
-fn torch_orientation_to_data(ori: Orientation) i8 {
+pub fn torch_orientation_to_data(ori: Orientation) i8 {
     return switch (ori) {
         .north => 4,
         .east => 1,
@@ -31,7 +31,7 @@ fn torch_orientation_to_data(ori: Orientation) i8 {
     };
 }
 
-fn repeater_orientation_to_data(ori: Orientation) i8 {
+pub fn repeater_orientation_to_data(ori: Orientation) i8 {
     const delay = 1;
     var orientation_value: i8 = 0;
     switch (ori) {
@@ -44,7 +44,7 @@ fn repeater_orientation_to_data(ori: Orientation) i8 {
     return (delay - 1) * 4 + orientation_value;
 }
 
-const Orientation = enum {
+pub const Orientation = enum {
     north,
     east,
     south,
@@ -52,7 +52,7 @@ const Orientation = enum {
     center,
 };
 
-const Block = struct {
+pub const Block = struct {
     block: BlockCat,
     rot: Orientation,
     loc: Coord,

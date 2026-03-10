@@ -32,7 +32,7 @@ pub fn main() !void {
     try graphviz.GraphVisualizer(nl.GatePtr).print(gpa, graph);
     graph.deinit();
 
-    const set = route.OrderedSet(route.Coordinate).init(gpa);
+    const set = route.OrderedSet(route.WorldCoord).init(gpa);
     _ = try route.routeTo(gpa, .{ 0, 0, 0 }, .{ 5, 5, 0 }, set);
 
     nbt.nbt_test();
