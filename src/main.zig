@@ -6,6 +6,8 @@ const nl = @import("netlist.zig");
 const glib = @import("abstract/graph.zig");
 const graphviz = @import("abstract/graphviz.zig");
 
+const nbt = @import("nbt.zig");
+
 pub fn main() !void {
     var real_gpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = real_gpa.deinit();
@@ -28,6 +30,8 @@ pub fn main() !void {
     var graph = try glib.GraphConstructors.from_netlist(gpa, &netlist);
     try graphviz.GraphVisualizer(nl.GatePtr).print(gpa, graph);
     graph.deinit();
+
+    nbt.nbt_test();
 
     // // nl.print_nets();
     // // netlist.print_gates();
