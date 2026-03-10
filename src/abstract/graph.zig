@@ -77,6 +77,15 @@ pub fn Node(comptime NodeBody: type) type {
             else => @compileError("NodeBody does not support retrieving its size"),
         };
 
+        pub const get_delay = switch (NodeBody) {
+            GateBody => struct {
+                fn delay(self: *const Self) physical.Delay {
+                    return self.owner.?.source.netlist.get_gate_delay(self.body);
+                }
+            }.size,
+            else => @compileError("NodeBody does not support retrieving its delay"),
+        };
+
         pub const get_area = switch (NodeBody) {
             GateBody => struct {
                 fn area(self: *const Self) physical.Area {

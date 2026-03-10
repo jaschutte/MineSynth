@@ -63,12 +63,12 @@ pub const GateType = enum {
         };
     }
 
-    pub inline fn delay(self: GateType) physical.Delay {
+    pub inline fn delay(self: GateType) u8 {
         return switch (self) {
-            .input => physical.Delay = 0,
-            .output => physical.Delay = 0,
-            .inverter => physical.Delay = 2,
-            .and_gate => physical.Delay = 3,
+            .input => 0,
+            .output => 0,
+            .inverter => 2,
+            .and_gate => 3,
         };
     }
 };
@@ -135,6 +135,10 @@ pub const Netlist = struct {
 
     pub inline fn get_gate_size(self: *const Self, ptr: GatePtr) physical.Size {
         return self.gates.items[ptr].kind.size();
+    }
+
+    pub inline fn get_gate_delay(self: *const Self, ptr: GatePtr) u8 {
+        return self.gates.items[ptr].kind.delay();
     }
 
     // Creates a net if it does not exist yet, if the net does exist, simply return the pointer to it
@@ -256,6 +260,7 @@ pub const Netlist = struct {
             for (net.binds.items) |gate_ptr| {
                 const gate = self.get_gate(gate_ptr);
                 std.debug.print(" -> {s}: {any}\n", .{ gate.symbol, gate.kind });
+                std.debug.print("Delay: {any}\n", .{self.get_gate_delay(gate_ptr)});
             }
         }
     }
