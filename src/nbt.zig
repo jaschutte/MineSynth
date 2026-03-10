@@ -36,7 +36,7 @@ pub fn repeater_orientation_to_data(ori: ms.Orientation) i8 {
     return (delay - 1) * 4 + orientation_value;
 }
 
-const unordered_blocks = [_]ms.Block{
+const and_gate = [_]ms.Block{
     .{
         .block = .dust,
         .loc = .{ 0, 0, 0 },
@@ -99,7 +99,7 @@ const unordered_blocks = [_]ms.Block{
     },
 };
 
-pub fn block_arr_to_schem(a: std.mem.Allocator) void {
+pub fn block_arr_to_schem(a: std.mem.Allocator, blocks: []ms.Block) void {
     const out = c.nbt_new_tag_compound();
     c.nbt_set_tag_name(out, "Schematic", c.strlen("Schematic"));
 
@@ -107,7 +107,7 @@ pub fn block_arr_to_schem(a: std.mem.Allocator) void {
     var length: u15 = 1;
     var width: u15 = 1;
     var height: u15 = 1;
-    for (unordered_blocks) |block| {
+    for (blocks) |block| {
         if (block.loc[0] + 1 > width) width = block.loc[0] + 1;
         if (block.loc[1] + 1 > height) height = block.loc[1] + 1;
         if (block.loc[2] + 1 > length) length = block.loc[2] + 1;
@@ -147,7 +147,7 @@ pub fn block_arr_to_schem(a: std.mem.Allocator) void {
     var data_byte_arr = a.alloc(i8, volume) catch @panic("oom");
     @memset(data_byte_arr, 0);
     defer a.free(data_byte_arr);
-    for (unordered_blocks) |block| {
+    for (blocks) |block| {
         const idx = (block.loc[1] * length + block.loc[2]) * width + block.loc[0];
         blocks_byte_arr[idx] = blockcat_to_id(block.block);
         data_byte_arr[idx] = switch (block.block) {
