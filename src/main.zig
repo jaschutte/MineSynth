@@ -20,14 +20,15 @@ pub fn main() !void {
     const content = try std.fs.cwd().readFileAlloc(gpa, "aiger-examples/serial-adder.aag", std.math.maxInt(usize));
     defer _ = gpa.free(content);
 
-    const aig = try aiger.Aiger.parse_aag(gpa, content);
+    const aig = try aiger.Aiger.parseAag(gpa, content);
     defer _ = aig.deinit();
 
-    var netlist = try nl.Netlist.from_aiger(gpa, aig);
+    var netlist = try nl.Netlist.fromAiger(gpa, aig);
     defer _ = netlist.deinit();
 
-    var graph = try glib.GraphConstructors.from_netlist(gpa, &netlist);
+    var graph = try glib.GraphConstructors.fromNetlist(gpa, &netlist);
 
+    try graphviz.GraphVisualizer(glib.GateBody).printDFS(gpa, graph);
     try glibopt.PreProcessor(glib.GateBody).preprocess(graph);
     try graphviz.GraphVisualizer(glib.GateBody).print(gpa, graph);
 

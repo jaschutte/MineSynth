@@ -87,7 +87,7 @@ pub const SymbolTarget = enum {
 
 pub const Symbol = []const u8;
 
-fn parse_symbol_line(line: []const u8) !struct { target: SymbolTarget, index: usize, symbol: Symbol } {
+fn parseSymbolLine(line: []const u8) !struct { target: SymbolTarget, index: usize, symbol: Symbol } {
     if (line.len < 2) {
         return Error.SymbolTooShort;
     }
@@ -121,7 +121,7 @@ pub const Literal = union(LiteralType) {
     // Even numbers
     unnegated: struct { symbol: ?Symbol, value: u64 },
 
-    pub fn is_negated(self: *const Self) bool {
+    pub fn isNegated(self: *const Self) bool {
         return switch (self.*) {
             .false => false,
             .true => true,
@@ -130,7 +130,7 @@ pub const Literal = union(LiteralType) {
         };
     }
 
-    pub fn get_inverted(self: *const Self) ?Self {
+    pub fn getInverted(self: *const Self) ?Self {
         return switch (self.*) {
             .false => null,
             .true => null,
@@ -139,7 +139,7 @@ pub const Literal = union(LiteralType) {
         };
     }
 
-    pub fn write_symbol(self: *const Self, writer: *std.io.Writer) !void {
+    pub fn writeSymbol(self: *const Self, writer: *std.io.Writer) !void {
         if (self.* == .true) {
             try writer.print("=TRUE", .{});
             return;
@@ -164,7 +164,7 @@ pub const Literal = union(LiteralType) {
         }
     }
 
-    fn set_symbol(self: *Self, new: Symbol) void {
+    fn setSymbol(self: *Self, new: Symbol) void {
         if (self.* == .negated) {
             self.negated.symbol = new;
         }
@@ -233,7 +233,7 @@ pub const Expression = union(ExpressionType) {
 // Small preprocessing to properly parse a line
 // This mainly strips anything after an '#', as those are marked as comments
 // It also removes extra spaces, tabs and carriage returns at the end of a line
-fn prepare_line(line: []const u8) []const u8 {
+fn prepareLine(line: []const u8) []const u8 {
     var trimmed = line;
     if (std.mem.indexOf(u8, line, "#")) |index| {
         trimmed = line[0..index];
@@ -257,9 +257,9 @@ pub const Aiger = struct {
         self.allocator.free(self.and_gates);
     }
 
-    pub fn parse_aag(allocator: std.mem.Allocator, content: []const u8) !Aiger {
+    pub fn parseAag(allocator: std.mem.Allocator, content: []const u8) !Aiger {
         var lines = std.mem.splitScalar(u8, content, '\n');
-        const header_line = prepare_line(lines.next() orelse return Error.MissingHeader);
+        const header_line = prepareLine(lines.next() orelse return Error.MissingHeader);
         const header = try Header.new(header_line);
 
         var phase = ExpressionType.input;
@@ -275,7 +275,7 @@ pub const Aiger = struct {
         defer _ = and_gates.deinit(allocator);
         var netlist_parsed = false;
         while (lines.next()) |unstripped_line| {
-            const line = prepare_line(unstripped_line);
+            const line = prepareLine(unstripped_line);
             if (line.len == 0) {
                 continue;
             }
@@ -291,25 +291,25 @@ pub const Aiger = struct {
                 if (line[0] == 'c') {
                     break;
                 }
-                const sym_definition = try parse_symbol_line(line);
+                const sym_definition = try parseSymbolLine(line);
                 switch (sym_definition.target) {
                     .input => {
                         if (sym_definition.index >= inputs.items.len) {
                             return Error.SymbolInvalidIndex;
                         }
-                        inputs.items[sym_definition.index].input.set_symbol(sym_definition.symbol);
+                        inputs.items[sym_definition.index].input.setSymbol(sym_definition.symbol);
                     },
                     .output => {
                         if (sym_definition.index >= outputs.items.len) {
                             return Error.SymbolInvalidIndex;
                         }
-                        outputs.items[sym_definition.index].output.set_symbol(sym_definition.symbol);
+                        outputs.items[sym_definition.index].output.setSymbol(sym_definition.symbol);
                     },
                     .latch => {
                         if (sym_definition.index >= latches.items.len) {
                             return Error.SymbolInvalidIndex;
                         }
-                        latches.items[sym_definition.index].latch.set_symbol(sym_definition.symbol);
+                        latches.items[sym_definition.index].latch.setSymbol(sym_definition.symbol);
                     },
                 }
             }
