@@ -174,7 +174,7 @@ pub fn block_arr_to_schem(a: std.mem.Allocator) void {
 }
 
 fn writer_write(userdata: ?*anyopaque, data: [*c]const u8, size: usize) callconv(.c) usize {
-    return c.fwrite(data, 1, size, @ptrCast(userdata));
+    return c.fwrite(data, 1, size, @ptrCast(@alignCast(userdata)));
 }
 
 pub fn write_nbt_file(filename: [*:0]const u8, tag: *c.nbt_tag_t, flags: c_int) void {

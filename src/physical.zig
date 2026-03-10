@@ -2,6 +2,7 @@ const std = @import("std");
 
 pub const Area = u64;
 pub const Coordinate = @Vector(3, u32);
+pub const Delay = u4;
 
 pub const Size = struct {
     const Self = @This();
