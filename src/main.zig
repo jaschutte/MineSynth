@@ -37,6 +37,8 @@ pub fn main() !void {
 
     nbt.nbt_test();
 
+    nbt.block_arr_to_schem(gpa);
+
     // // nl.print_nets();
     // // netlist.print_gates();
     //

@@ -3,6 +3,215 @@ pub const c = @cImport({
     @cInclude("nbt.h");
 });
 
+const Coord = @Vector(3, u15);
+
+const BlockCat = enum {
+    dust,
+    repeater,
+    torch,
+    block,
+};
+
+fn blockcat_to_id(cat: BlockCat) i8 {
+    return switch (cat) {
+        .dust => 55,
+        .repeater => 94,
+        .torch => 76,
+        .block => 35,
+    };
+}
+
+fn torch_orientation_to_data(ori: Orientation) i8 {
+    return switch (ori) {
+        .north => 4,
+        .east => 1,
+        .south => 3,
+        .west => 2,
+        .center => 5,
+    };
+}
+
+fn repeater_orientation_to_data(ori: Orientation) i8 {
+    const delay = 1;
+    var orientation_value: i8 = 0;
+    switch (ori) {
+        .north => orientation_value = 0,
+        .east => orientation_value = 1,
+        .south => orientation_value = 2,
+        .west => orientation_value = 3,
+        .center => @panic("Center orientation specified for repeater, invalid"),
+    }
+    return (delay - 1) * 4 + orientation_value;
+}
+
+const Orientation = enum {
+    north,
+    east,
+    south,
+    west,
+    center,
+};
+
+const Block = struct {
+    block: BlockCat,
+    rot: Orientation,
+    loc: Coord,
+};
+
+const unordered_blocks = [_]Block{
+    .{
+        .block = .dust,
+        .loc = .{ 0, 0, 0 },
+        .rot = .center,
+    },
+    .{
+        .block = .dust,
+        .loc = .{ 2, 0, 0 },
+        .rot = .center,
+    },
+    .{
+        .block = .repeater,
+        .loc = .{ 0, 0, 1 },
+        .rot = .south,
+    },
+    .{
+        .block = .repeater,
+        .loc = .{ 2, 0, 1 },
+        .rot = .south,
+    },
+    .{
+        .block = .block,
+        .loc = .{ 0, 0, 2 },
+        .rot = .center,
+    },
+    .{
+        .block = .block,
+        .loc = .{ 1, 0, 2 },
+        .rot = .center,
+    },
+    .{
+        .block = .block,
+        .loc = .{ 2, 0, 2 },
+        .rot = .center,
+    },
+    .{
+        .block = .torch,
+        .loc = .{ 1, 0, 3 },
+        .rot = .south,
+    },
+    .{
+        .block = .dust,
+        .loc = .{ 1, 0, 4 },
+        .rot = .center,
+    },
+    .{
+        .block = .dust,
+        .loc = .{ 1, 1, 2 },
+        .rot = .center,
+    },
+    .{
+        .block = .torch,
+        .loc = .{ 0, 1, 2 },
+        .rot = .center,
+    },
+    .{
+        .block = .torch,
+        .loc = .{ 2, 1, 2 },
+        .rot = .center,
+    },
+};
+
+pub fn block_arr_to_schem(a: std.mem.Allocator) void {
+    const out = c.nbt_new_tag_compound();
+    c.nbt_set_tag_name(out, "Schematic", c.strlen("Schematic"));
+
+    // get length and width
+    var length: u15 = 1;
+    var width: u15 = 1;
+    var height: u15 = 1;
+    for (unordered_blocks) |block| {
+        if (block.loc[0] + 1 > width) width = block.loc[0] + 1;
+        if (block.loc[1] + 1 > height) height = block.loc[1] + 1;
+        if (block.loc[2] + 1 > length) length = block.loc[2] + 1;
+    }
+    const tag_length = c.nbt_new_tag_short(length);
+    c.nbt_set_tag_name(tag_length, "Length", c.strlen("Length"));
+    const tag_height = c.nbt_new_tag_short(height);
+    c.nbt_set_tag_name(tag_height, "Height", c.strlen("Height"));
+    const tag_width = c.nbt_new_tag_short(width);
+    c.nbt_set_tag_name(tag_width, "Width", c.strlen("Width"));
+    c.nbt_tag_compound_append(out, tag_length);
+    c.nbt_tag_compound_append(out, tag_width);
+    c.nbt_tag_compound_append(out, tag_height);
+
+    // necessary but useless things
+    const tag_materials = c.nbt_new_tag_string("Alpha", c.strlen("Alpha"));
+    c.nbt_set_tag_name(tag_materials, "Materials", c.strlen("Materials"));
+    c.nbt_tag_compound_append(out, tag_materials);
+
+    const tag_entities = c.nbt_new_tag_list(c.NBT_TYPE_COMPOUND);
+    c.nbt_set_tag_name(tag_entities, "Entities", c.strlen("Entities"));
+    c.nbt_tag_compound_append(out, tag_entities);
+    const tag_tile_entities = c.nbt_new_tag_list(c.NBT_TYPE_COMPOUND);
+    c.nbt_set_tag_name(tag_tile_entities, "TileEntities", c.strlen("TileEntities"));
+    c.nbt_tag_compound_append(out, tag_tile_entities);
+
+    // optional: WorldEdit offset and origin. not needed for now
+    //
+    //
+
+    // blocks and block data
+
+    const volume = length * height * width;
+    var blocks_byte_arr = a.alloc(i8, volume) catch @panic("oom");
+    @memset(blocks_byte_arr, 0);
+    defer a.free(blocks_byte_arr);
+    var data_byte_arr = a.alloc(i8, volume) catch @panic("oom");
+    @memset(data_byte_arr, 0);
+    defer a.free(data_byte_arr);
+    for (unordered_blocks) |block| {
+        const idx = (block.loc[1] * length + block.loc[2]) * width + block.loc[0];
+        blocks_byte_arr[idx] = blockcat_to_id(block.block);
+        data_byte_arr[idx] = switch (block.block) {
+            .dust => 0,
+            .repeater => repeater_orientation_to_data(block.rot),
+            .torch => torch_orientation_to_data(block.rot),
+            .block => 0,
+        };
+
+        // _ = block;
+        // blocks.items
+    }
+
+    const tag_blocks = c.nbt_new_tag_byte_array(blocks_byte_arr.ptr, volume);
+    c.nbt_set_tag_name(tag_blocks, "Blocks", c.strlen("Blocks"));
+    const tag_data = c.nbt_new_tag_byte_array(data_byte_arr.ptr, volume);
+    c.nbt_set_tag_name(tag_data, "Data", c.strlen("Data"));
+
+    c.nbt_tag_compound_append(out, tag_blocks);
+    c.nbt_tag_compound_append(out, tag_data);
+    print_nbt_tree(out, 0);
+    write_nbt_file("out.schematic", out, c.NBT_WRITE_FLAG_USE_GZIP);
+    // write_nbt_file("out.schematic", out, c.NBT_WRITE_FLAG_USE_RAW);
+}
+
+fn writer_write(userdata: ?*anyopaque, data: [*c]const u8, size: usize) callconv(.c) usize {
+    return c.fwrite(data, 1, size, @ptrCast(userdata));
+}
+
+pub fn write_nbt_file(filename: [*:0]const u8, tag: *c.nbt_tag_t, flags: c_int) void {
+    const file = c.fopen(filename, "wb");
+    if (file == null) {
+        std.debug.print("Failed to open file: {s}\n", .{filename});
+        return;
+    }
+    const writer: c.nbt_writer_t = .{
+        .write = writer_write,
+        .userdata = file,
+    };
+    c.nbt_write(writer, tag, flags);
+}
+
 pub fn print_nbt_tree(tag: *c.nbt_tag_t, indentation: usize) void {
     for (0..indentation) |_| {
         std.debug.print(" ", .{});
