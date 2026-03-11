@@ -37,7 +37,7 @@ pub const GraphConstructors = struct {
                     if (added_edges.contains([2]nl.NetPtr{ to_ptr, from_ptr })) continue;
                     try added_edges.put(.{ to_ptr, from_ptr }, undefined);
 
-                    _ = graph.addEdge(added_nodes.get(from_ptr).?, added_nodes.get(to_ptr).?, net_ptr);
+                    _ = graph.addEdge(added_nodes.get(from_ptr).?, added_nodes.get(to_ptr).?, net_ptr, 0);
                 }
             }
         }
@@ -61,6 +61,7 @@ pub fn Graph(comptime NodeBody: type) type {
             pub const MetadataKind = enum {
                 none,
                 partitioning,
+                timing,
             };
 
             pub const Metadata = union(MetadataKind) {
@@ -68,6 +69,7 @@ pub fn Graph(comptime NodeBody: type) type {
                 partitioning: struct {
                     fixed: bool,
                 },
+                timing: struct { actual_arrival: f32, required_arrival: f32, slack: f32 },
             };
 
             pub const EdgeRelation = enum {
@@ -79,7 +81,7 @@ pub fn Graph(comptime NodeBody: type) type {
 
             body: NodeBody,
             id: NodeId,
-            metadata: MetadataKind,
+            metadata: Metadata,
             // Only null when the node is detached from any graph
             owner: ?*Graph(NodeBody),
 
@@ -137,6 +139,7 @@ pub fn Graph(comptime NodeBody: type) type {
                 else => void,
             };
 
+            weight: f32,
             body: Edge.Body,
             id: EdgeId,
             a: NodeId,
@@ -205,11 +208,12 @@ pub fn Graph(comptime NodeBody: type) type {
         }
 
         // NOTE: when adding edges, **ALWAYS** make sure to have ALL NODES OF THE EDGE registered
-        pub fn addEdge(self: *Self, a: NodeId, b: NodeId, body: Edge.Body) EdgeId {
+        pub fn addEdge(self: *Self, a: NodeId, b: NodeId, body: Edge.Body, weight: ?f32) EdgeId {
             errdefer @panic("Ran out of memory when adding edge");
 
             const edge_id = id.getId();
             try self.edges.putNoClobber(edge_id, Edge{
+                .weight = weight orelse 0,
                 .body = body,
                 .id = edge_id,
                 .a = a,
