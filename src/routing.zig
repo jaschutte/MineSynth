@@ -43,6 +43,40 @@ const DistanceMetric = struct {
     signal_strength: u4,
 };
 
+const Move = struct {
+    dir: WorldCoord,
+    weight: u32,
+    conn_type: RouteComponent,
+};
+
+fn isMoveValid(u: WorldCoord, move: Move, forbidden_zones: Volume) bool {
+    const coord = u + move.dir;
+    if (forbidden_zones.contains(coord)) return false;
+
+    switch (move.conn_type) {
+        .dust, .via_down => return true,
+        .repeater => {
+            const mid = (u + coord) / @as(WorldCoord, @splat(2));
+            return !forbidden_zones.contains(mid);
+        },
+        .via_up => {
+            const via_blocks = [_]WorldCoord{
+                u + WorldCoord{ 0, 0, 0 },
+                u + WorldCoord{ 1, 0, 0 },
+                u + WorldCoord{ 1, -1, 0 },
+                u + WorldCoord{ 2, 0, 0 },
+                u + WorldCoord{ 3, 1, 0 },
+                u + WorldCoord{ 2, 1, 0 },
+                u + WorldCoord{ 3, 0, 0 },
+            };
+            for (via_blocks) |block| {
+                if (forbidden_zones.contains(block)) return false;
+            }
+            return true;
+        },
+    }
+}
+
 pub fn routeTo(a: std.mem.Allocator, from: WorldCoord, to: WorldCoord, forbidden_zones: Volume) !void {
     var explored = std.AutoHashMap(WorldCoord, void).init(a);
     defer explored.deinit();
@@ -58,12 +92,6 @@ pub fn routeTo(a: std.mem.Allocator, from: WorldCoord, to: WorldCoord, forbidden
 
     try distances.put(from, .{ .distance = 0, .signal_strength = 15 });
     try queue.add(.{ .coord = from, .dist = 0, .euclid = 0 });
-
-    const Move = struct {
-        dir: WorldCoord,
-        weight: u32,
-        conn_type: RouteComponent,
-    };
 
     const moves = [_]Move{
         // consider regular redstone
@@ -97,14 +125,7 @@ pub fn routeTo(a: std.mem.Allocator, from: WorldCoord, to: WorldCoord, forbidden
         for (moves) |move| {
             const coord = u + move.dir;
 
-            if (forbidden_zones.contains(coord)) continue;
-
-            if (move.conn_type == .repeater) {
-                const mid = (u + coord) / @as(WorldCoord, @splat(2));
-                if (forbidden_zones.contains(mid)) continue;
-            } else if (move.conn_type == .via_up) {
-                // TODO: check all blocks
-            }
+            if (!isMoveValid(u, move, forbidden_zones)) continue;
 
             const prev_metric = distances.get(u).?;
             var signal_strength = prev_metric.signal_strength;
@@ -137,118 +158,104 @@ pub fn routeTo(a: std.mem.Allocator, from: WorldCoord, to: WorldCoord, forbidden
         explored.put(u, void{}) catch @panic("oom");
     }
 
-    var vec = to;
-    // while (!coordEq(vec, from)) {
-    //     const p = parents.get(vec).?;
-    //     vec = p.prev;
-    //     std.log.info("{any}\n", .{p});
-    // }
     // construct block array
+    var blocks = try buildRouteBlocks(a, from, to, parents);
+    defer blocks.deinit(a);
+    nbt.block_arr_to_schem(a, blocks.items);
+}
+
+fn buildRouteBlocks(a: std.mem.Allocator, from: WorldCoord, to: WorldCoord, parents: std.AutoHashMap(WorldCoord, Parent)) !std.ArrayList(ms.Block) {
     var blocks: std.ArrayList(ms.Block) = .empty;
-    vec = to;
+    errdefer blocks.deinit(a);
+
+    var vec = to;
     var prev_vec = to;
     const zero_point = from + WorldCoord{ 0, -1, 0 }; // substrate
 
     while (!coordEq(vec, from)) {
-        const p = parents.get(vec).?;
+        const p = parents.get(vec) orelse return error.MissingParent;
         vec = p.prev;
 
-        // let start block be 0,0,0
-
         const loc: ms.SchemCoord = @intCast(vec - zero_point);
-        if (p.conn_type == .dust) {
-            blocks.append(a, .{
-                .block = .dust,
-                .loc = loc, // translate to start at 0,0,0
-                .rot = .center,
-            }) catch @panic("oom");
+
+        switch (p.conn_type) {
+            .dust => {
+                try blocks.append(a, .{ .block = .dust, .loc = loc, .rot = .center });
+            },
+            .repeater => {
+                const rot: ms.Orientation = if (vec[0] > prev_vec[0]) .west else if (vec[0] < prev_vec[0]) .east else if (vec[2] > prev_vec[2]) .north else .south;
+
+                try blocks.append(a, .{ .block = .repeater, .loc = loc, .rot = rot });
+
+                const mid = (prev_vec + vec) / @as(WorldCoord, @splat(2));
+                try blocks.append(a, .{ .block = .dust, .loc = @intCast(mid - zero_point), .rot = .center });
+                try blocks.append(a, .{ .block = .block, .loc = @intCast(mid - zero_point + WorldCoord{ 0, -1, 0 }), .rot = .center });
+            },
+            .via_up => {
+                const offsets = [_]struct { WorldCoord, ms.BlockCat, ms.Orientation }{
+                    .{ .{ 0, 0, 0 }, .dust, .center },
+                    .{ .{ 1, 0, 0 }, .dust, .center },
+                    .{ .{ 1, -1, 0 }, .block, .center },
+                    .{ .{ 2, 0, 0 }, .block, .center },
+                    .{ .{ 3, 1, 0 }, .block, .center },
+                    .{ .{ 2, 1, 0 }, .torch, .west },
+                    .{ .{ 3, 0, 0 }, .torch, .east },
+                };
+                for (offsets) |off| {
+                    try blocks.append(a, .{
+                        .block = off[1],
+                        .loc = @intCast(loc + off[0]),
+                        .rot = off[2],
+                    });
+                }
+            },
+            .via_down => {},
         }
 
-        if (p.conn_type == .repeater) {
-            var rot = ms.Orientation.center;
-            if (vec[0] > prev_vec[0]) {
-                rot = .west;
-            } else if (vec[0] < prev_vec[0]) {
-                rot = .east;
-            } else if (vec[2] > prev_vec[2]) {
-                rot = .north;
-            } else if (vec[2] < prev_vec[2]) {
-                rot = .south;
-            }
-
-            blocks.append(a, .{
-                .block = .repeater,
-                .loc = loc,
-                .rot = rot,
-            }) catch @panic("oom");
-
-            // add dust after repeater
-            // midpoint
-            const mid = (prev_vec + vec) / @as(WorldCoord, @splat(2));
-            blocks.append(a, .{
-                .block = .dust,
-                .loc = @intCast(mid - zero_point),
-                .rot = .center,
-            }) catch @panic("oom");
-
-            // and block
-            blocks.append(a, .{
-                .block = .block,
-                .loc = @intCast(mid - zero_point + WorldCoord{ 0, -1, 0 }),
-                .rot = .center,
-            }) catch @panic("oom");
-        }
-
-        if (p.conn_type == .via_up) {
-            blocks.append(a, .{
-                .block = .dust,
-                .loc = @intCast(loc + WorldCoord{ 0, 0, 0 }),
-                .rot = .center,
-            }) catch @panic("oom");
-            blocks.append(a, .{
-                .block = .dust,
-                .loc = @intCast(loc + WorldCoord{ 1, 0, 0 }),
-                .rot = .center,
-            }) catch @panic("oom");
-            blocks.append(a, .{
-                .block = .block,
-                .loc = @intCast(loc + WorldCoord{ 1, -1, 0 }),
-                .rot = .center,
-            }) catch @panic("oom");
-            blocks.append(a, .{
-                .block = .block,
-                .loc = @intCast(loc + WorldCoord{ 2, 0, 0 }),
-                .rot = .center,
-            }) catch @panic("oom");
-            blocks.append(a, .{
-                .block = .block,
-                .loc = @intCast(loc + WorldCoord{ 3, 1, 0 }),
-                .rot = .center,
-            }) catch @panic("oom");
-            blocks.append(a, .{
-                .block = .torch,
-                .loc = @intCast(loc + WorldCoord{ 2, 1, 0 }),
-                .rot = .west,
-            }) catch @panic("oom");
-            blocks.append(a, .{
-                .block = .torch,
-                .loc = @intCast(loc + WorldCoord{ 3, 0, 0 }),
-                .rot = .east,
-            }) catch @panic("oom");
-        }
-
-        // also append blocks under
-        blocks.append(a, .{
-            .block = .block,
-            .loc = @intCast(loc + WorldCoord{ 0, -1, 0 }),
-            .rot = .center,
-        }) catch @panic("oom");
+        // Substrate block
+        try blocks.append(a, .{ .block = .block, .loc = @intCast(loc + WorldCoord{ 0, -1, 0 }), .rot = .center });
 
         prev_vec = vec;
     }
 
-    nbt.block_arr_to_schem(a, blocks.items);
-    blocks.deinit(a);
+    return blocks;
 }
 
-const viaup_blocks = [_]ms.Block{};
+fn rotateCoord(coord: WorldCoord, dir: WorldCoord) WorldCoord {
+    if (dir[0] > 0) return coord; // +X (East, base)
+    if (dir[0] < 0) return .{ -coord[0], coord[1], -coord[2] }; // -X (West)
+    if (dir[2] > 0) return .{ -coord[2], coord[1], coord[0] }; // +Z (South)
+    return .{ coord[2], coord[1], -coord[0] }; // -Z (North)
+}
+
+fn rotateOrientation(rot: ms.Orientation, dir: WorldCoord) ms.Orientation {
+    if (rot == .center) return .center;
+    if (dir[0] > 0) return rot;
+
+    if (dir[0] < 0) {
+        return switch (rot) {
+            .east => .west,
+            .west => .east,
+            .north => .south,
+            .south => .north,
+            else => rot,
+        };
+    }
+    if (dir[2] > 0) {
+        return switch (rot) {
+            .east => .south,
+            .west => .north,
+            .north => .east,
+            .south => .west,
+            else => rot,
+        };
+    }
+
+    return switch (rot) {
+        .east => .north,
+        .west => .south,
+        .north => .west,
+        .south => .east,
+        else => rot,
+    };
+}
