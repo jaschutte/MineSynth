@@ -10,8 +10,10 @@ pub const NodeId = id.Id;
 pub const EdgeId = id.Id;
 
 pub const GraphConstructors = struct {
-    pub fn fromNetlist(gpa: std.mem.Allocator, netlist: *const nl.Netlist) !*GateGraph {
-        var graph = try GateGraph.empty(gpa, netlist);
+    pub fn fromNetlist(gpa: std.mem.Allocator, netlist: *const nl.Netlist) *GateGraph {
+        errdefer @panic("Ran out of memory lmao");
+
+        var graph = GateGraph.empty(gpa, netlist);
 
         var added_nodes = std.AutoHashMap(nl.GatePtr, NodeId).init(gpa);
         defer _ = added_nodes.deinit();
@@ -24,7 +26,7 @@ pub const GraphConstructors = struct {
             for (net.binds.items) |gate_ptr| {
                 if (added_nodes.contains(gate_ptr)) continue;
 
-                const node_id = try graph.addNode(gate_ptr, .none);
+                const node_id = graph.addNode(gate_ptr, .none);
                 try added_nodes.put(gate_ptr, node_id);
             }
 
@@ -35,7 +37,7 @@ pub const GraphConstructors = struct {
                     if (added_edges.contains([2]nl.NetPtr{ to_ptr, from_ptr })) continue;
                     try added_edges.put(.{ to_ptr, from_ptr }, undefined);
 
-                    _ = try graph.addEdge(added_nodes.get(from_ptr).?, added_nodes.get(to_ptr).?, net_ptr);
+                    _ = graph.addEdge(added_nodes.get(from_ptr).?, added_nodes.get(to_ptr).?, net_ptr);
                 }
             }
         }
@@ -167,7 +169,9 @@ pub fn Graph(comptime NodeBody: type) type {
             return self.nodes.getPtr(node_id);
         }
 
-        pub fn addNode(self: *Self, body: Body, meta: Node.Metadata) !NodeId {
+        pub fn addNode(self: *Self, body: Body, meta: Node.Metadata) NodeId {
+            errdefer @panic("Ran out of memory when adding node");
+
             const node_id = id.getId();
             try self.nodes.putNoClobber(node_id, Node{
                 .id = node_id,
@@ -180,7 +184,9 @@ pub fn Graph(comptime NodeBody: type) type {
         }
 
         // NOTE: when adding edges, **ALWAYS** make sure to have ALL NODES OF THE EDGE registered
-        pub fn addEdge(self: *Self, a: NodeId, b: NodeId, body: Edge.Body) !EdgeId {
+        pub fn addEdge(self: *Self, a: NodeId, b: NodeId, body: Edge.Body) EdgeId {
+            errdefer @panic("Ran out of memory when adding edge");
+
             const edge_id = id.getId();
             try self.edges.putNoClobber(edge_id, Edge{
                 .body = body,
@@ -194,7 +200,9 @@ pub fn Graph(comptime NodeBody: type) type {
             return edge_id;
         }
 
-        pub fn removeEdge(self: *Self, edge_id: EdgeId) !void {
+        pub fn removeEdge(self: *Self, edge_id: EdgeId) void {
+            errdefer @panic("Ran out of memory when removing edge");
+
             _ = self.edges.swapRemove(edge_id);
 
             for (self.node2edges.values()) |*node_edges| {
@@ -210,7 +218,9 @@ pub fn Graph(comptime NodeBody: type) type {
             }
         }
 
-        pub fn removeNode(self: *Self, node_id: NodeId) !void {
+        pub fn removeNode(self: *Self, node_id: NodeId) void {
+            errdefer @panic("Ran out of memory when removing node");
+
             // The clone is required as `remove_edge` modifies the array whilst we iterate it
             // So we need a stable, non-moving array to iterate over
             var cloned = try self.node2edges.getPtr(node_id).?.clone(self.gpa);
@@ -235,7 +245,9 @@ pub fn Graph(comptime NodeBody: type) type {
             self.gpa.destroy(self);
         }
 
-        pub fn empty(gpa: std.mem.Allocator, source: Source) !*Self {
+        pub fn empty(gpa: std.mem.Allocator, source: Source) *Self {
+            errdefer @panic("Ran out of memory when creating empty graph");
+
             var graph = try gpa.create(Self);
             graph.gpa = gpa;
             graph.nodes = .init(gpa);

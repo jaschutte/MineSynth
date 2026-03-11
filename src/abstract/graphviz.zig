@@ -4,7 +4,9 @@ const glib = @import("graph.zig");
 
 // https://magjac.com/graphviz-visual-editor/
 
-pub fn printNode(graph: *const glib.GateGraph, string: *std.io.Writer.Allocating, node: *glib.GateGraph.Node) !void {
+pub fn printNode(graph: *const glib.GateGraph, string: *std.io.Writer.Allocating, node: *glib.GateGraph.Node) void {
+    errdefer @panic("Skill issue");
+
     const gate = graph.source.getGate(node.body);
     const symbol = gate.symbol;
     const color = switch (gate.kind) {
@@ -17,7 +19,9 @@ pub fn printNode(graph: *const glib.GateGraph, string: *std.io.Writer.Allocating
     try string.writer.print("    {} [label=\"{s}\", fillcolor={s}, tooltip=\"{}\"];\n", .{ node.id, symbol, color, node.id });
 }
 
-pub fn printEdge(graph: *const glib.GateGraph, string: *std.io.Writer.Allocating, edge: *glib.GateGraph.Edge) !void {
+pub fn printEdge(graph: *const glib.GateGraph, string: *std.io.Writer.Allocating, edge: *glib.GateGraph.Edge) void {
+    errdefer @panic("Skill issue");
+
     const net = graph.source.getNet(edge.body);
     const color = switch (net.literal.isNegated()) {
         true => "\"#601400\"",
@@ -37,18 +41,20 @@ pub fn printEdge(graph: *const glib.GateGraph, string: *std.io.Writer.Allocating
     try string.writer.print("\", color={s}, tooltip=\"{}\"]\n", .{ color, edge.id });
 }
 
-pub fn printGate(gpa: std.mem.Allocator, graph: *const glib.Graph(nl.GatePtr)) !void {
+pub fn printGate(gpa: std.mem.Allocator, graph: *const glib.Graph(nl.GatePtr)) void {
+    errdefer @panic("Skill issue");
+
     var string = std.io.Writer.Allocating.init(gpa);
     try string.writer.writeAll("digraph {\n");
     // try string.writer.writeAll("    layout = fdp;\n");
     try string.writer.writeAll("    node [style=filled];\n");
 
     for (graph.edges.values()) |*edge| {
-        try printEdge(graph, &string, edge);
+        printEdge(graph, &string, edge);
     }
 
     for (graph.nodes.values()) |*node| {
-        try printNode(graph, &string, node);
+        printNode(graph, &string, node);
     }
 
     try string.writer.writeAll("}\n");
@@ -57,7 +63,9 @@ pub fn printGate(gpa: std.mem.Allocator, graph: *const glib.Graph(nl.GatePtr)) !
     string.deinit();
 }
 
-pub fn printGateDFS(gpa: std.mem.Allocator, graph: *const glib.GateGraph) !void {
+pub fn printGateDFS(gpa: std.mem.Allocator, graph: *const glib.GateGraph) void {
+    errdefer @panic("Skill issue");
+
     var non_const_graph: *glib.GateGraph = @constCast(graph);
 
     var string = std.io.Writer.Allocating.init(gpa);
@@ -101,11 +109,11 @@ pub fn printGateDFS(gpa: std.mem.Allocator, graph: *const glib.GateGraph) !void 
 
     for (edges_visited.keys()) |edge_id| {
         const edge = non_const_graph.getEdge(edge_id).?;
-        try printEdge(graph, &string, edge);
+        printEdge(graph, &string, edge);
     }
     for (visited.keys()) |node_id| {
         const node = non_const_graph.getNode(node_id).?;
-        try printNode(graph, &string, node);
+        printNode(graph, &string, node);
     }
 
     try string.writer.writeAll("}\n");

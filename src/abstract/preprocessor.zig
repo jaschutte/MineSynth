@@ -3,7 +3,9 @@ const nl = @import("../netlist.zig");
 const glib = @import("graph.zig");
 
 // Enforce that all INPUTS have are registered as OUTPUT on the other end and vice versa
-pub fn removeLooseConnections(graph: *glib.GateGraph) !void {
+pub fn removeLooseConnections(graph: *glib.GateGraph) void {
+    errdefer @panic("Ran out of memory when optimising loose connections away");
+
     var faulty_edges = std.ArrayList(glib.EdgeId).empty;
     defer _ = faulty_edges.deinit(graph.gpa);
 
@@ -17,16 +19,16 @@ pub fn removeLooseConnections(graph: *glib.GateGraph) !void {
     }
 
     for (faulty_edges.items) |faulty_id| {
-        try graph.removeEdge(faulty_id);
+        graph.removeEdge(faulty_id);
     }
 }
 
 pub fn PreProcessor(comptime NodeBody: type) type {
     return struct {
-        pub fn preprocess(graph: *glib.Graph(NodeBody)) !void {
+        pub fn preprocess(graph: *glib.Graph(NodeBody)) void {
             switch (NodeBody) {
                 glib.GateBody => {
-                    try removeLooseConnections(graph);
+                    removeLooseConnections(graph);
                 },
                 else => {},
             }
