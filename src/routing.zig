@@ -96,7 +96,7 @@ fn isMoveValid(u: WorldCoord, move: Move, forbidden_zones: Volume) bool {
     }
 }
 
-pub fn routeTo(a: std.mem.Allocator, from: WorldCoord, to: WorldCoord, forbidden_zones: Volume) !void {
+pub fn routeTo(a: std.mem.Allocator, from: WorldCoord, to: WorldCoord, forbidden_zones: Volume) !std.ArrayList(ms.AbsBlock) {
     var explored = std.AutoHashMap(WorldCoord, void).init(a);
     defer explored.deinit();
 
@@ -188,26 +188,12 @@ pub fn routeTo(a: std.mem.Allocator, from: WorldCoord, to: WorldCoord, forbidden
     }
 
     // construct block array
-    var blocks = try buildRouteBlocks(a, from, to, parents);
-    defer blocks.deinit(a);
-    var min_coord = @as(WorldCoord, @splat(std.math.maxInt(i32)));
-    for (blocks.items) |b| {
-        min_coord[0] = @min(min_coord[0], b.loc[0]);
-        min_coord[1] = @min(min_coord[1], b.loc[1]);
-        min_coord[2] = @min(min_coord[2], b.loc[2]);
-    }
-    nbt.block_arr_to_schem(a, blocks.items);
+    const blocks = try buildRouteBlocks(a, from, to, parents);
+    return blocks;
 }
 
-fn buildRouteBlocks(a: std.mem.Allocator, from: WorldCoord, to: WorldCoord, parents: std.AutoHashMap(WorldCoord, Parent)) !std.ArrayList(ms.Block) {
-    const AbsBlock = struct {
-        block: ms.BlockCat,
-        loc: WorldCoord,
-        rot: ms.Orientation,
-    };
-
-    var abs_blocks: std.ArrayList(AbsBlock) = .empty;
-    defer abs_blocks.deinit(a);
+fn buildRouteBlocks(a: std.mem.Allocator, from: WorldCoord, to: WorldCoord, parents: std.AutoHashMap(WorldCoord, Parent)) !std.ArrayList(ms.AbsBlock) {
+    var abs_blocks: std.ArrayList(ms.AbsBlock) = .empty;
 
     var vec = to;
     var prev_vec = to;
@@ -296,19 +282,7 @@ fn buildRouteBlocks(a: std.mem.Allocator, from: WorldCoord, to: WorldCoord, pare
         min_coord[2] = @min(min_coord[2], b.loc[2]);
     }
 
-    var blocks: std.ArrayList(ms.Block) = .empty;
-    errdefer blocks.deinit(a);
-    try blocks.ensureTotalCapacity(a, abs_blocks.items.len);
-
-    for (abs_blocks.items) |b| {
-        blocks.appendAssumeCapacity(.{
-            .block = b.block,
-            .loc = @intCast(b.loc - min_coord),
-            .rot = b.rot,
-        });
-    }
-
-    return blocks;
+    return abs_blocks;
 }
 
 fn rotateCoord(coord: WorldCoord, dir: WorldCoord) WorldCoord {
