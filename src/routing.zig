@@ -49,15 +49,15 @@ const Move = struct {
     conn_type: RouteComponent,
 };
 
-fn isMoveValid(u: WorldCoord, move: Move, forbidden_zones: Volume) bool {
+fn isMoveValid(u: WorldCoord, move: Move, forbidden_zone: ms.ForbiddenZone) bool {
     const coord = u + move.dir;
-    if (forbidden_zones.contains(coord)) return false;
+    if (forbidden_zone.contains(coord)) return false;
 
     switch (move.conn_type) {
         .dust => return true,
         .repeater => {
             const mid = (u + coord) / @as(WorldCoord, @splat(2));
-            return !forbidden_zones.contains(mid);
+            return !forbidden_zone.contains(mid);
         },
         .via_up => {
             const base_blocks = [_]WorldCoord{
@@ -71,7 +71,7 @@ fn isMoveValid(u: WorldCoord, move: Move, forbidden_zones: Volume) bool {
             };
             for (base_blocks) |base| {
                 const rotated = rotateCoord(base, move.dir);
-                if (forbidden_zones.contains(u + rotated)) return false;
+                if (forbidden_zone.contains(u + rotated)) return false;
             }
             return true;
         },
@@ -89,14 +89,38 @@ fn isMoveValid(u: WorldCoord, move: Move, forbidden_zones: Volume) bool {
             };
             for (base_blocks) |base| {
                 const rotated = rotateCoord(base, move.dir);
-                if (forbidden_zones.contains(u + rotated)) return false;
+                if (forbidden_zone.contains(u + rotated)) return false;
             }
             return true;
         },
     }
 }
 
-pub fn routeTo(a: std.mem.Allocator, from: WorldCoord, to: WorldCoord, forbidden_zones: Volume) !std.ArrayList(ms.AbsBlock) {
+pub fn routeToUpdateForbiddenZone(a: std.mem.Allocator, from: WorldCoord, to: WorldCoord, forbidden_zone: *ms.ForbiddenZone) !std.ArrayList(ms.AbsBlock) {
+    const blocks = try routeTo(a, from, to, forbidden_zone.*);
+
+    const offsets = [_]WorldCoord{
+        .{ 0, 0, 0 }, // Target block
+        .{ 1, 0, 0 }, // +X
+        .{ -1, 0, 0 }, // -X
+        .{ 0, 1, 0 }, // +Y
+        .{ 0, -1, 0 }, // -Y
+        .{ 0, 0, 1 }, // +Z
+        .{ 0, 0, -1 }, // -Z
+    };
+
+    for (blocks.items) |b| {
+        for (offsets) |offset| {
+            // WorldCoord acts as a vector here, permitting direct addition
+            const coord = b.loc + offset;
+            try forbidden_zone.put(coord, void{});
+        }
+    }
+
+    return blocks;
+}
+
+pub fn routeTo(a: std.mem.Allocator, from: WorldCoord, to: WorldCoord, forbidden_zone: ms.ForbiddenZone) !std.ArrayList(ms.AbsBlock) {
     var explored = std.AutoHashMap(WorldCoord, void).init(a);
     defer explored.deinit();
 
@@ -152,7 +176,7 @@ pub fn routeTo(a: std.mem.Allocator, from: WorldCoord, to: WorldCoord, forbidden
         for (moves) |move| {
             const coord = u + move.dir;
 
-            if (!isMoveValid(u, move, forbidden_zones)) continue;
+            if (!isMoveValid(u, move, forbidden_zone)) continue;
 
             const prev_metric = distances.get(u).?;
             var signal_strength = prev_metric.signal_strength;
