@@ -36,7 +36,7 @@ pub fn repeater_orientation_to_data(ori: ms.Orientation) i8 {
     return (delay - 1) * 4 + orientation_value;
 }
 
-const and_gate = [_]ms.Block{
+const and_gate = [_]ms.SchemBlock{
     .{
         .block = .dust,
         .loc = .{ 0, 0, 0 },
@@ -99,7 +99,28 @@ const and_gate = [_]ms.Block{
     },
 };
 
-pub fn block_arr_to_schem(a: std.mem.Allocator, blocks: []ms.Block) void {
+pub fn abs_block_arr_to_schem(a: std.mem.Allocator, blocks: []ms.AbsBlock) void {
+    var min_coord = @as(ms.WorldCoord, @splat(std.math.maxInt(i32)));
+    for (blocks) |b| {
+        min_coord[0] = @min(min_coord[0], b.loc[0]);
+        min_coord[1] = @min(min_coord[1], b.loc[1]);
+        min_coord[2] = @min(min_coord[2], b.loc[2]);
+    }
+    var schem_blocks = a.alloc(ms.SchemBlock, blocks.len) catch @panic("oom");
+    errdefer a.free(schem_blocks);
+    defer a.free(schem_blocks);
+
+    for (blocks, 0..) |b, i| {
+        schem_blocks[i] = .{
+            .block = b.block,
+            .loc = @intCast(b.loc - min_coord),
+            .rot = b.rot,
+        };
+    }
+    block_arr_to_schem(a, schem_blocks);
+}
+
+pub fn block_arr_to_schem(a: std.mem.Allocator, blocks: []ms.SchemBlock) void {
     const out = c.nbt_new_tag_compound();
     c.nbt_set_tag_name(out, "Schematic", c.strlen("Schematic"));
 

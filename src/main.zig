@@ -6,7 +6,7 @@ const nl = @import("netlist.zig");
 const glib = @import("abstract/graph.zig");
 const glibopt = @import("abstract/preprocessor.zig");
 const graphviz = @import("abstract/graphviz.zig");
-const route = @import("routing.zig");
+const rt = @import("routing.zig");
 
 const nbt = @import("nbt.zig");
 const ms = @import("abstract/structures.zig");
@@ -35,7 +35,9 @@ pub fn main() !void {
     graphviz.GraphVisualizer(glib.GateBody).print(gpa, graph);
 
     const set = ms.OrderedSet(ms.WorldCoord).init(gpa);
-    try route.routeTo(gpa, .{ 0, 0, 0 }, .{ 15, 0, 0 }, set);
+    var route = try rt.routeTo(gpa, .{ 0, 0, 0 }, .{ 15, 0, 0 }, set);
+    nbt.abs_block_arr_to_schem(gpa, route.items);
+    route.deinit(gpa);
 
     graph.deinit();
 }

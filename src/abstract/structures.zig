@@ -19,10 +19,16 @@ pub const Orientation = enum {
     center,
 };
 
-pub const Block = struct {
+pub const SchemBlock = struct {
     block: BlockCat,
     rot: Orientation,
     loc: SchemCoord,
+};
+
+pub const AbsBlock = struct {
+    block: BlockCat,
+    rot: Orientation,
+    loc: WorldCoord,
 };
 
 pub fn OrderedSet(T: type) type {
