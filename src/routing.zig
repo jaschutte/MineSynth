@@ -2,7 +2,7 @@ const std = @import("std");
 const ms = @import("abstract/structures.zig");
 const nbt = @import("nbt.zig");
 
-pub const WorldCoord = @Vector(3, i32);
+const WorldCoord = ms.WorldCoord;
 
 const RouteComponent = enum {
     dust,
@@ -54,23 +54,42 @@ fn isMoveValid(u: WorldCoord, move: Move, forbidden_zones: Volume) bool {
     if (forbidden_zones.contains(coord)) return false;
 
     switch (move.conn_type) {
-        .dust, .via_down => return true,
+        .dust => return true,
         .repeater => {
             const mid = (u + coord) / @as(WorldCoord, @splat(2));
             return !forbidden_zones.contains(mid);
         },
         .via_up => {
-            const via_blocks = [_]WorldCoord{
-                u + WorldCoord{ 0, 0, 0 },
-                u + WorldCoord{ 1, 0, 0 },
-                u + WorldCoord{ 1, -1, 0 },
-                u + WorldCoord{ 2, 0, 0 },
-                u + WorldCoord{ 3, 1, 0 },
-                u + WorldCoord{ 2, 1, 0 },
-                u + WorldCoord{ 3, 0, 0 },
+            const base_blocks = [_]WorldCoord{
+                .{ 0, 0, 0 },
+                .{ 1, 0, 0 },
+                .{ 1, -1, 0 },
+                .{ 2, 0, 0 },
+                .{ 3, 1, 0 },
+                .{ 2, 1, 0 },
+                .{ 3, 0, 0 },
             };
-            for (via_blocks) |block| {
-                if (forbidden_zones.contains(block)) return false;
+            for (base_blocks) |base| {
+                const rotated = rotateCoord(base, move.dir);
+                if (forbidden_zones.contains(u + rotated)) return false;
+            }
+            return true;
+        },
+        .via_down => {
+            const base_blocks = [_]WorldCoord{
+                .{ 0, 0, 0 },
+                .{ 0, -1, 0 },
+                .{ 2, -2, 0 },
+                .{ 2, -1, 0 },
+                .{ 2, 0, 0 },
+                .{ 1, 0, 0 },
+                .{ 1, -2, 0 },
+                .{ 1, -3, 0 },
+                .{ 1, -4, 0 },
+            };
+            for (base_blocks) |base| {
+                const rotated = rotateCoord(base, move.dir);
+                if (forbidden_zones.contains(u + rotated)) return false;
             }
             return true;
         },
@@ -106,6 +125,14 @@ pub fn routeTo(a: std.mem.Allocator, from: WorldCoord, to: WorldCoord, forbidden
         .{ .dir = .{ 0, 0, -2 }, .weight = 1, .conn_type = .repeater },
         // via up
         .{ .dir = .{ 2, 3, 0 }, .weight = 2, .conn_type = .via_up },
+        .{ .dir = .{ -2, 3, 0 }, .weight = 2, .conn_type = .via_up },
+        .{ .dir = .{ 0, 3, 2 }, .weight = 2, .conn_type = .via_up },
+        .{ .dir = .{ 0, 3, -2 }, .weight = 2, .conn_type = .via_up },
+        // via down
+        .{ .dir = .{ 2, -3, 0 }, .weight = 2, .conn_type = .via_down },
+        .{ .dir = .{ -2, -3, 0 }, .weight = 2, .conn_type = .via_down },
+        .{ .dir = .{ 0, -3, 2 }, .weight = 2, .conn_type = .via_down },
+        .{ .dir = .{ 0, -3, -2 }, .weight = 2, .conn_type = .via_down },
     };
 
     while (queue.count() > 0) {
@@ -132,10 +159,12 @@ pub fn routeTo(a: std.mem.Allocator, from: WorldCoord, to: WorldCoord, forbidden
 
             if (move.conn_type == .dust) {
                 if (signal_strength == 0) continue;
+                // need at least signal strength 1 at output
+                if (signal_strength == 1 and coordEq(coord, to)) continue;
                 signal_strength -= 1;
             } else if (move.conn_type == .repeater) {
                 signal_strength = 14;
-            } else if (move.conn_type == .via_up) {
+            } else if (move.conn_type == .via_up or move.conn_type == .via_down) {
                 if (signal_strength < 2) continue;
                 signal_strength = 14;
             }
@@ -161,39 +190,53 @@ pub fn routeTo(a: std.mem.Allocator, from: WorldCoord, to: WorldCoord, forbidden
     // construct block array
     var blocks = try buildRouteBlocks(a, from, to, parents);
     defer blocks.deinit(a);
+    var min_coord = @as(WorldCoord, @splat(std.math.maxInt(i32)));
+    for (blocks.items) |b| {
+        min_coord[0] = @min(min_coord[0], b.loc[0]);
+        min_coord[1] = @min(min_coord[1], b.loc[1]);
+        min_coord[2] = @min(min_coord[2], b.loc[2]);
+    }
     nbt.block_arr_to_schem(a, blocks.items);
 }
 
 fn buildRouteBlocks(a: std.mem.Allocator, from: WorldCoord, to: WorldCoord, parents: std.AutoHashMap(WorldCoord, Parent)) !std.ArrayList(ms.Block) {
-    var blocks: std.ArrayList(ms.Block) = .empty;
-    errdefer blocks.deinit(a);
+    const AbsBlock = struct {
+        block: ms.BlockCat,
+        loc: WorldCoord,
+        rot: ms.Orientation,
+    };
+
+    var abs_blocks: std.ArrayList(AbsBlock) = .empty;
+    defer abs_blocks.deinit(a);
 
     var vec = to;
     var prev_vec = to;
-    const zero_point = from + WorldCoord{ 0, -1, 0 }; // substrate
 
     while (!coordEq(vec, from)) {
         const p = parents.get(vec) orelse return error.MissingParent;
         vec = p.prev;
 
-        const loc: ms.SchemCoord = @intCast(vec - zero_point);
+        const move_dir = prev_vec - vec;
 
         switch (p.conn_type) {
             .dust => {
-                try blocks.append(a, .{ .block = .dust, .loc = loc, .rot = .center });
+                try abs_blocks.append(a, .{ .block = .dust, .loc = vec, .rot = .center });
+                try abs_blocks.append(a, .{ .block = .block, .loc = vec + WorldCoord{ 0, -1, 0 }, .rot = .center });
             },
             .repeater => {
                 const rot: ms.Orientation = if (vec[0] > prev_vec[0]) .west else if (vec[0] < prev_vec[0]) .east else if (vec[2] > prev_vec[2]) .north else .south;
 
-                try blocks.append(a, .{ .block = .repeater, .loc = loc, .rot = rot });
+                try abs_blocks.append(a, .{ .block = .repeater, .loc = vec, .rot = rot });
 
                 const mid = (prev_vec + vec) / @as(WorldCoord, @splat(2));
-                try blocks.append(a, .{ .block = .dust, .loc = @intCast(mid - zero_point), .rot = .center });
-                try blocks.append(a, .{ .block = .block, .loc = @intCast(mid - zero_point + WorldCoord{ 0, -1, 0 }), .rot = .center });
+                try abs_blocks.append(a, .{ .block = .dust, .loc = mid, .rot = .center });
+                try abs_blocks.append(a, .{ .block = .block, .loc = mid + WorldCoord{ 0, -1, 0 }, .rot = .center });
+                try abs_blocks.append(a, .{ .block = .block, .loc = vec + WorldCoord{ 0, -1, 0 }, .rot = .center });
             },
             .via_up => {
                 const offsets = [_]struct { WorldCoord, ms.BlockCat, ms.Orientation }{
                     .{ .{ 0, 0, 0 }, .dust, .center },
+                    .{ .{ 0, -1, 0 }, .block, .center },
                     .{ .{ 1, 0, 0 }, .dust, .center },
                     .{ .{ 1, -1, 0 }, .block, .center },
                     .{ .{ 2, 0, 0 }, .block, .center },
@@ -202,20 +245,67 @@ fn buildRouteBlocks(a: std.mem.Allocator, from: WorldCoord, to: WorldCoord, pare
                     .{ .{ 3, 0, 0 }, .torch, .east },
                 };
                 for (offsets) |off| {
-                    try blocks.append(a, .{
+                    const rotated_coord = rotateCoord(off[0], move_dir);
+                    const rotated_rot = rotateOrientation(off[2], move_dir);
+                    try abs_blocks.append(a, .{
                         .block = off[1],
-                        .loc = @intCast(loc + off[0]),
-                        .rot = off[2],
+                        .loc = vec + rotated_coord,
+                        .rot = rotated_rot,
+                    });
+                }
+                // try abs_blocks.append(a, .{ .block = .block, .loc = vec + WorldCoord{ 0, -1, 0 }, .rot = .center });
+            },
+
+            .via_down => {
+                const offsets = [_]struct { WorldCoord, ms.BlockCat, ms.Orientation }{
+                    .{ .{ 0, 0, 0 }, .dust, .center },
+                    .{ .{ 0, -1, 0 }, .block, .center },
+                    .{ .{ 2, -2, 0 }, .block, .center },
+                    .{ .{ 2, -1, 0 }, .dust, .center },
+                    .{ .{ 2, 0, 0 }, .torch, .east },
+                    .{ .{ 1, 0, 0 }, .block, .center },
+                    .{ .{ 1, -2, 0 }, .torch, .west },
+                    .{ .{ 1, -3, 0 }, .dust, .west },
+                    .{ .{ 1, -4, 0 }, .block, .center },
+                };
+                for (offsets) |off| {
+                    const rotated_coord = rotateCoord(off[0], move_dir);
+                    const rotated_rot = rotateOrientation(off[2], move_dir);
+                    try abs_blocks.append(a, .{
+                        .block = off[1],
+                        .loc = vec + rotated_coord,
+                        .rot = rotated_rot,
                     });
                 }
             },
-            .via_down => {},
         }
 
         // Substrate block
-        try blocks.append(a, .{ .block = .block, .loc = @intCast(loc + WorldCoord{ 0, -1, 0 }), .rot = .center });
+        // try abs_blocks.append(a, .{ .block = .block, .loc = vec + WorldCoord{ 0, -1, 0 }, .rot = .center });
 
         prev_vec = vec;
+    }
+    // append output
+    try abs_blocks.append(a, .{ .block = .dust, .loc = to, .rot = .center });
+    try abs_blocks.append(a, .{ .block = .block, .loc = to + WorldCoord{ 0, -1, 0 }, .rot = .center });
+
+    var min_coord = @as(WorldCoord, @splat(std.math.maxInt(i32)));
+    for (abs_blocks.items) |b| {
+        min_coord[0] = @min(min_coord[0], b.loc[0]);
+        min_coord[1] = @min(min_coord[1], b.loc[1]);
+        min_coord[2] = @min(min_coord[2], b.loc[2]);
+    }
+
+    var blocks: std.ArrayList(ms.Block) = .empty;
+    errdefer blocks.deinit(a);
+    try blocks.ensureTotalCapacity(a, abs_blocks.items.len);
+
+    for (abs_blocks.items) |b| {
+        blocks.appendAssumeCapacity(.{
+            .block = b.block,
+            .loc = @intCast(b.loc - min_coord),
+            .rot = b.rot,
+        });
     }
 
     return blocks;

@@ -33,8 +33,8 @@ pub fn main() !void {
     glibopt.PreProcessor(glib.GateBody).preprocess(graph);
     graphviz.GraphVisualizer(glib.GateBody).print(gpa, graph);
 
-    const set = ms.OrderedSet(route.WorldCoord).init(gpa);
-    try route.routeTo(gpa, .{ 0, 0, 0 }, .{ 25, 6, 15 }, set);
+    const set = ms.OrderedSet(ms.WorldCoord).init(gpa);
+    try route.routeTo(gpa, .{ 0, 0, 0 }, .{ 15, 0, 0 }, set);
 
     graph.deinit();
 }
