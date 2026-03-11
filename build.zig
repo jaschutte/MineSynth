@@ -16,8 +16,10 @@ pub fn build(b: *std.Build) void {
             .imports = &.{},
             .link_libc = true,
         }),
+        .use_llvm = true,
     });
     b.installArtifact(exe);
+
     exe.root_module.addIncludePath(b.path("src/extern"));
     exe.root_module.addCSourceFile(.{ .file = b.path("src/extern/nbt.c"), .flags = &.{} });
     exe.root_module.addCSourceFile(.{ .file = b.path("src/extern/miniz.c"), .flags = &.{"-fno-sanitize=alignment"} });
