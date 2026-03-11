@@ -70,6 +70,13 @@ pub fn Graph(comptime NodeBody: type) type {
                 },
             };
 
+            pub const EdgeRelation = enum {
+                none,
+                input,
+                output,
+                inout,
+            };
+
             body: NodeBody,
             id: NodeId,
             metadata: MetadataKind,
@@ -78,13 +85,6 @@ pub fn Graph(comptime NodeBody: type) type {
 
             pub const edgeRelation = switch (NodeBody) {
                 GateBody => struct {
-                    pub const EdgeRelation = enum {
-                        none,
-                        input,
-                        output,
-                        inout,
-                    };
-
                     fn relation(self: *const Node, edge_id: EdgeId) EdgeRelation {
                         const edge = self.owner.?.getEdge(edge_id).?;
                         const gate = self.getGate();
@@ -167,6 +167,27 @@ pub fn Graph(comptime NodeBody: type) type {
 
         pub fn getConstNode(self: *const Self, node_id: NodeId) ?*const Node {
             return self.nodes.getPtr(node_id);
+        }
+
+        pub fn getNodeEdges(self: *const Self, node_id: NodeId, filter: ?Node.EdgeRelation) []EdgeId {
+            errdefer @panic("Ran out of memory when retrieving node edges");
+
+            const node = self.getConstNode(node_id) orelse @panic("Invalid node provided");
+
+            var results = std.ArrayList(EdgeId).empty;
+            if (self.node2edges.getPtr(node_id)) |edges| {
+                if (filter) |f| {
+                    for (edges.items) |edge_id| {
+                        if (node.edgeRelation(edge_id) == f) {
+                            results.append(self.gpa, edge_id);
+                        }
+                    }
+                } else {
+                    results.appendSlice(self.gpa, edges.items);
+                }
+            }
+
+            return results.toOwnedSlice(self.gpa);
         }
 
         pub fn addNode(self: *Self, body: Body, meta: Node.Metadata) NodeId {
