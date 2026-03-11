@@ -125,9 +125,9 @@ pub fn block_arr_to_schem(a: std.mem.Allocator, blocks: []ms.SchemBlock) void {
     c.nbt_set_tag_name(out, "Schematic", c.strlen("Schematic"));
 
     // get length and width
-    var length: u15 = 1;
-    var width: u15 = 1;
-    var height: u15 = 1;
+    var length: ms.SchemCoordNum = 1;
+    var width: ms.SchemCoordNum = 1;
+    var height: ms.SchemCoordNum = 1;
     for (blocks) |block| {
         if (block.loc[0] + 1 > width) width = block.loc[0] + 1;
         if (block.loc[1] + 1 > height) height = block.loc[1] + 1;
@@ -170,7 +170,8 @@ pub fn block_arr_to_schem(a: std.mem.Allocator, blocks: []ms.SchemBlock) void {
 
     // blocks and block data
 
-    const volume = length * height * width;
+    const volume: u64 = length * height * width;
+    std.log.debug("nbt conversion dims: {d}x{d}x{d}, volume: {d}", .{ length, width, height, volume });
     var blocks_byte_arr = a.alloc(i8, volume) catch @panic("oom");
     @memset(blocks_byte_arr, 0);
     defer a.free(blocks_byte_arr);

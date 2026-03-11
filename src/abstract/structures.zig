@@ -4,7 +4,8 @@ pub const Graph = @import("graph.zig");
 const builtin = @import("builtin");
 const dbg = builtin.mode == std.builtin.OptimizeMode.Debug;
 
-pub const SchemCoord = @Vector(3, u15);
+pub const SchemCoordNum = u16;
+pub const SchemCoord = @Vector(3, SchemCoordNum);
 pub const WorldCoord = @Vector(3, i32);
 
 pub const BlockCat = enum {
