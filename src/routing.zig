@@ -76,6 +76,8 @@ pub fn routeTo(a: std.mem.Allocator, from: WorldCoord, to: WorldCoord, forbidden
         .{ .dir = .{ 0, 0, 2 }, .weight = 1, .conn_type = .repeater },
         .{ .dir = .{ -2, 0, 0 }, .weight = 1, .conn_type = .repeater },
         .{ .dir = .{ 0, 0, -2 }, .weight = 1, .conn_type = .repeater },
+        // via up
+        .{ .dir = .{ 2, 3, 0 }, .weight = 2, .conn_type = .via_up },
     };
 
     while (queue.count() > 0) {
@@ -100,6 +102,8 @@ pub fn routeTo(a: std.mem.Allocator, from: WorldCoord, to: WorldCoord, forbidden
             if (move.conn_type == .repeater) {
                 const mid = (u + coord) / @as(WorldCoord, @splat(2));
                 if (forbidden_zones.contains(mid)) continue;
+            } else if (move.conn_type == .via_up) {
+                // TODO: check all blocks
             }
 
             const prev_metric = distances.get(u).?;
@@ -109,6 +113,9 @@ pub fn routeTo(a: std.mem.Allocator, from: WorldCoord, to: WorldCoord, forbidden
                 if (signal_strength == 0) continue;
                 signal_strength -= 1;
             } else if (move.conn_type == .repeater) {
+                signal_strength = 14;
+            } else if (move.conn_type == .via_up) {
+                if (signal_strength < 2) continue;
                 signal_strength = 14;
             }
 
@@ -192,6 +199,44 @@ pub fn routeTo(a: std.mem.Allocator, from: WorldCoord, to: WorldCoord, forbidden
             }) catch @panic("oom");
         }
 
+        if (p.conn_type == .via_up) {
+            blocks.append(a, .{
+                .block = .dust,
+                .loc = @intCast(loc + WorldCoord{ 0, 0, 0 }),
+                .rot = .center,
+            }) catch @panic("oom");
+            blocks.append(a, .{
+                .block = .dust,
+                .loc = @intCast(loc + WorldCoord{ 1, 0, 0 }),
+                .rot = .center,
+            }) catch @panic("oom");
+            blocks.append(a, .{
+                .block = .block,
+                .loc = @intCast(loc + WorldCoord{ 1, -1, 0 }),
+                .rot = .center,
+            }) catch @panic("oom");
+            blocks.append(a, .{
+                .block = .block,
+                .loc = @intCast(loc + WorldCoord{ 2, 0, 0 }),
+                .rot = .center,
+            }) catch @panic("oom");
+            blocks.append(a, .{
+                .block = .block,
+                .loc = @intCast(loc + WorldCoord{ 3, 1, 0 }),
+                .rot = .center,
+            }) catch @panic("oom");
+            blocks.append(a, .{
+                .block = .torch,
+                .loc = @intCast(loc + WorldCoord{ 2, 1, 0 }),
+                .rot = .west,
+            }) catch @panic("oom");
+            blocks.append(a, .{
+                .block = .torch,
+                .loc = @intCast(loc + WorldCoord{ 3, 0, 0 }),
+                .rot = .east,
+            }) catch @panic("oom");
+        }
+
         // also append blocks under
         blocks.append(a, .{
             .block = .block,
@@ -205,3 +250,5 @@ pub fn routeTo(a: std.mem.Allocator, from: WorldCoord, to: WorldCoord, forbidden
     nbt.block_arr_to_schem(a, blocks.items);
     blocks.deinit(a);
 }
+
+const viaup_blocks = [_]ms.Block{};
