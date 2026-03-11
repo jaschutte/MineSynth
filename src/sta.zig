@@ -57,7 +57,10 @@ pub fn AAT(the_graph: *glib.GateGraph) void {
         defer the_graph.gpa.free(current_edges);
         for (current_edges) |edge_id| {
             const edge = the_graph.getConstEdge(edge_id).?;
-            const next_node = the_graph.getNode(edge.b).?;
+            var next_node = the_graph.getNode(edge.b).?;
+            if (edge.b == node_id) {
+                next_node = the_graph.getNode(edge.a).?;
+            }
             const new_arrival = @as(f32, @floatFromInt(next_node.getGate().kind.delay())) + edge.weight + this_aa;
             if (next_node.metadata == .timing) {
                 if (new_arrival > next_node.metadata.timing.actual_arrival) {
@@ -129,13 +132,13 @@ fn visit(the_graph: *const glib.GateGraph, nodeId: glib.NodeId, toMark: *std.Arr
     const current_edges = the_graph.getNodeEdges(nodeId, .output);
     defer the_graph.gpa.free(current_edges);
     for (current_edges) |edgeID| {
-        const adjacent_node = the_graph.getConstEdge(edgeID).?.b;
-        if (adjacent_node != nodeId) {
-            if (!visit(the_graph, adjacent_node, toMark, sorted, marks)) return false;
+        var adjacent_node = the_graph.getConstEdge(edgeID).?.b;
+        if (adjacent_node == nodeId) {
+            adjacent_node = the_graph.getConstEdge(edgeID).?.a;
         }
+        if (!visit(the_graph, adjacent_node, toMark, sorted, marks)) return false;
     }
     // add this node to sorted list, and permanently mark.
-
     try marks.put(nodeId, MarkState.PermMark);
     try sorted.append(the_graph.gpa, nodeId);
     return true;
