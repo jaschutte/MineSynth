@@ -2,6 +2,7 @@ const std = @import("std");
 pub const Graph = @import("graph.zig");
 
 pub const SchemCoord = @Vector(3, u15);
+pub const WorldCoord = @Vector(3, i32);
 
 pub const BlockCat = enum {
     dust,

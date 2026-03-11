@@ -137,6 +137,15 @@ pub fn block_arr_to_schem(a: std.mem.Allocator, blocks: []ms.Block) void {
     // optional: WorldEdit offset and origin. not needed for now
     //
     //
+    // const tag_WEOffsetX = c.nbt_new_tag_int(offset[0]);
+    // const tag_WEOffsetY = c.nbt_new_tag_int(offset[1] - 10);
+    // const tag_WEOffsetZ = c.nbt_new_tag_int(offset[2]);
+    // c.nbt_set_tag_name(tag_WEOffsetX, "WEOriginX", c.strlen("WEOffsetX"));
+    // c.nbt_set_tag_name(tag_WEOffsetY, "WEOriginY", c.strlen("WEOffsetY"));
+    // c.nbt_set_tag_name(tag_WEOffsetZ, "WEOriginZ", c.strlen("WEOffsetZ"));
+    // c.nbt_tag_compound_append(out, tag_WEOffsetX);
+    // c.nbt_tag_compound_append(out, tag_WEOffsetY);
+    // c.nbt_tag_compound_append(out, tag_WEOffsetZ);
 
     // blocks and block data
 
