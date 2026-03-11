@@ -4,50 +4,6 @@ const nbt = @import("nbt.zig");
 
 pub const WorldCoord = @Vector(3, i32);
 
-pub fn OrderedSet(T: type) type {
-    return struct {
-        const This = @This();
-
-        const AllocErr = std.mem.Allocator.Error;
-
-        set: std.AutoArrayHashMap(T, void),
-
-        pub fn init(a: std.mem.Allocator) This {
-            return This{
-                .set = std.AutoArrayHashMap(T, void).init(a),
-            };
-        }
-
-        pub fn add(self: *This, item: T) AllocErr!void {
-            try self.set.put(item, void{});
-        }
-
-        pub fn contains(self: This, item: T) bool {
-            return self.set.get(item) != null;
-        }
-
-        pub fn remove(self: *This, item: T) void {
-            self.set.orderedRemove(item);
-        }
-
-        pub fn popFirst(self: *This) T {
-            const item = self.set.unmanaged.entries.get(0).key;
-
-            self.set.orderedRemoveAt(0);
-
-            return item;
-        }
-
-        pub fn getPtr(self: This, item: T) ?*T {
-            return self.set.getKeyPtr(item);
-        }
-
-        pub fn deinit(self: *This) void {
-            self.set.deinit();
-        }
-    };
-}
-
 const RouteComponent = enum {
     dust,
     repeater,
@@ -61,7 +17,7 @@ const Parent = struct {
 };
 
 // any formless volume
-const Volume = OrderedSet(WorldCoord);
+const Volume = ms.OrderedSet(WorldCoord);
 
 fn coordEq(a: WorldCoord, b: WorldCoord) bool {
     return a[0] == b[0] and a[1] == b[1] and a[2] == b[2];
@@ -82,107 +38,101 @@ fn queueOrder(context: void, a: QueueItem, b: QueueItem) std.math.Order {
     return dist_order;
 }
 
-const Self = @This();
-
 const DistanceMetric = struct {
     distance: u32,
     signal_strength: u4,
 };
 
-explored: std.AutoHashMap(WorldCoord, void),
-distances: std.AutoHashMap(WorldCoord, DistanceMetric),
-queue: std.PriorityQueue(QueueItem, void, queueOrder),
-forbidden_zones: Volume,
-parents: std.AutoHashMap(WorldCoord, Parent),
-
-pub fn process(self: *Self, start: WorldCoord, prev: WorldCoord, coord: WorldCoord, weight: u32, conn_type: RouteComponent) void {
-    if (self.forbidden_zones.contains(coord)) return;
-
-    if (conn_type == .repeater) {
-        const mid = (prev + coord) / @as(WorldCoord, @splat(2));
-        if (self.forbidden_zones.contains(mid)) return;
-    }
-    var signal_strength = self.distances.get(prev).?.signal_strength;
-    if (conn_type == .dust) {
-        if (signal_strength == 0) return;
-        signal_strength -= 1;
-    } else if (conn_type == .repeater) {
-        signal_strength = 14;
-    }
-
-    const dist = self.distances.get(prev).?.distance + weight;
-    const distv = self.distances.get(coord);
-
-    // If we found a strictly better path to `coord`
-    if (distv == null or dist < distv.?.distance) {
-        self.distances.put(coord, .{ .signal_strength = signal_strength, .distance = dist }) catch @panic("oom");
-        self.parents.put(coord, .{ .conn_type = conn_type, .prev = prev }) catch @panic("oom");
-
-        const euclid = @abs(coord[0] - start[0]) + @abs(coord[2] - start[2]);
-
-        // Push duplicate entry. The heap sorts by this static item.dist.
-        self.queue.add(.{ .coord = coord, .dist = dist, .euclid = @as(u32, @intCast(euclid)) }) catch @panic("oom");
-    }
-}
-
 pub fn routeTo(a: std.mem.Allocator, from: WorldCoord, to: WorldCoord, forbidden_zones: Volume) !void {
-    var self = Self{
-        .explored = std.AutoHashMap(WorldCoord, void).init(a),
-        .distances = std.AutoHashMap(WorldCoord, DistanceMetric).init(a),
-        .queue = std.PriorityQueue(QueueItem, void, queueOrder).init(a, {}),
-        .forbidden_zones = forbidden_zones,
-        .parents = std.AutoHashMap(WorldCoord, Parent).init(a),
+    var explored = std.AutoHashMap(WorldCoord, void).init(a);
+    defer explored.deinit();
+
+    var distances = std.AutoHashMap(WorldCoord, DistanceMetric).init(a);
+    defer distances.deinit();
+
+    var queue = std.PriorityQueue(QueueItem, void, queueOrder).init(a, {});
+    defer queue.deinit();
+
+    var parents = std.AutoHashMap(WorldCoord, Parent).init(a);
+    defer parents.deinit();
+
+    try distances.put(from, .{ .distance = 0, .signal_strength = 15 });
+    try queue.add(.{ .coord = from, .dist = 0, .euclid = 0 });
+
+    const Move = struct {
+        dir: WorldCoord,
+        weight: u32,
+        conn_type: RouteComponent,
     };
-    defer self.explored.deinit();
-    defer self.distances.deinit();
-    defer self.queue.deinit();
-    defer self.parents.deinit();
 
-    try self.distances.put(from, .{ .distance = 0, .signal_strength = 15 });
-    try self.queue.add(.{ .coord = from, .dist = 0, .euclid = 0 });
+    const moves = [_]Move{
+        // consider regular redstone
+        .{ .dir = .{ 1, 0, 0 }, .weight = 0, .conn_type = .dust },
+        .{ .dir = .{ 0, 0, 1 }, .weight = 0, .conn_type = .dust },
+        .{ .dir = .{ -1, 0, 0 }, .weight = 0, .conn_type = .dust },
+        .{ .dir = .{ 0, 0, -1 }, .weight = 0, .conn_type = .dust },
+        // consider repeaters
+        .{ .dir = .{ 2, 0, 0 }, .weight = 1, .conn_type = .repeater },
+        .{ .dir = .{ 0, 0, 2 }, .weight = 1, .conn_type = .repeater },
+        .{ .dir = .{ -2, 0, 0 }, .weight = 1, .conn_type = .repeater },
+        .{ .dir = .{ 0, 0, -2 }, .weight = 1, .conn_type = .repeater },
+    };
 
-    while (self.queue.count() > 0) {
-        const item = self.queue.remove();
+    while (queue.count() > 0) {
+        const item = queue.remove();
         const u = item.coord;
 
         // Lazy Dijkstra: discard popped items that are stale
-        const best_dist = self.distances.get(u) orelse continue;
+        const best_dist = distances.get(u) orelse continue;
         if (item.dist > best_dist.distance) continue;
 
+        // done once arrived at the destination for the first time
+        // could consider more options but this is still a good heuristic
+        // or maybe optimal considering our specific case...
+        // could add a search depth option and search limit
         if (coordEq(u, to)) break;
 
-        var x_vec = WorldCoord{ 1, 0, 0 };
-        var z_vec = WorldCoord{ 0, 0, 1 };
+        for (moves) |move| {
+            const coord = u + move.dir;
 
-        // consider regular redstone
-        var vec = u + x_vec;
-        self.process(from, u, vec, 0, .dust);
-        vec = u + z_vec;
-        self.process(from, u, vec, 0, .dust);
-        vec = u - x_vec;
-        self.process(from, u, vec, 0, .dust);
-        vec = u - z_vec;
-        self.process(from, u, vec, 0, .dust);
+            if (forbidden_zones.contains(coord)) continue;
 
-        // consider repeaters
-        x_vec = WorldCoord{ 2, 0, 0 };
-        z_vec = WorldCoord{ 0, 0, 2 };
+            if (move.conn_type == .repeater) {
+                const mid = (u + coord) / @as(WorldCoord, @splat(2));
+                if (forbidden_zones.contains(mid)) continue;
+            }
 
-        vec = u + x_vec;
-        self.process(from, u, vec, 1, .repeater);
-        vec = u + z_vec;
-        self.process(from, u, vec, 1, .repeater);
-        vec = u - x_vec;
-        self.process(from, u, vec, 1, .repeater);
-        vec = u - z_vec;
-        self.process(from, u, vec, 1, .repeater);
+            const prev_metric = distances.get(u).?;
+            var signal_strength = prev_metric.signal_strength;
 
-        self.explored.put(u, void{}) catch @panic("oom");
+            if (move.conn_type == .dust) {
+                if (signal_strength == 0) continue;
+                signal_strength -= 1;
+            } else if (move.conn_type == .repeater) {
+                signal_strength = 14;
+            }
+
+            const dist = prev_metric.distance + move.weight;
+            const distv = distances.get(coord);
+
+            // If we found a strictly better path to `coord`
+            if (distv == null or dist < distv.?.distance) {
+                distances.put(coord, .{ .signal_strength = signal_strength, .distance = dist }) catch @panic("oom");
+                parents.put(coord, .{ .conn_type = move.conn_type, .prev = u }) catch @panic("oom");
+
+                const euclid = @abs(coord[0] - from[0]) + @abs(coord[2] - from[2]);
+
+                // Push duplicate entry. The heap sorts by this static item.dist.
+                queue.add(.{ .coord = coord, .dist = dist, .euclid = @as(u32, @intCast(euclid)) }) catch @panic("oom");
+            }
+        }
+
+        explored.put(u, void{}) catch @panic("oom");
     }
 
     var vec = to;
     // while (!coordEq(vec, from)) {
-    //     const p = self.parents.get(vec).?;
+    //     const p = parents.get(vec).?;
     //     vec = p.prev;
     //     std.log.info("{any}\n", .{p});
     // }
@@ -190,13 +140,14 @@ pub fn routeTo(a: std.mem.Allocator, from: WorldCoord, to: WorldCoord, forbidden
     var blocks: std.ArrayList(ms.Block) = .empty;
     vec = to;
     var prev_vec = to;
+    const zero_point = from + WorldCoord{ 0, -1, 0 }; // substrate
+
     while (!coordEq(vec, from)) {
-        const p = self.parents.get(vec).?;
+        const p = parents.get(vec).?;
         vec = p.prev;
 
         // let start block be 0,0,0
 
-        const zero_point = from + WorldCoord{ 0, -1, 0 }; // substrate
         const loc: ms.SchemCoord = @intCast(vec - zero_point);
         if (p.conn_type == .dust) {
             blocks.append(a, .{
@@ -205,6 +156,7 @@ pub fn routeTo(a: std.mem.Allocator, from: WorldCoord, to: WorldCoord, forbidden
                 .rot = .center,
             }) catch @panic("oom");
         }
+
         if (p.conn_type == .repeater) {
             var rot = ms.Orientation.center;
             if (vec[0] > prev_vec[0]) {
@@ -216,11 +168,13 @@ pub fn routeTo(a: std.mem.Allocator, from: WorldCoord, to: WorldCoord, forbidden
             } else if (vec[2] < prev_vec[2]) {
                 rot = .south;
             }
+
             blocks.append(a, .{
                 .block = .repeater,
                 .loc = loc,
                 .rot = rot,
             }) catch @panic("oom");
+
             // add dust after repeater
             // midpoint
             const mid = (prev_vec + vec) / @as(WorldCoord, @splat(2));
@@ -229,6 +183,7 @@ pub fn routeTo(a: std.mem.Allocator, from: WorldCoord, to: WorldCoord, forbidden
                 .loc = @intCast(mid - zero_point),
                 .rot = .center,
             }) catch @panic("oom");
+
             // and block
             blocks.append(a, .{
                 .block = .block,
@@ -236,14 +191,17 @@ pub fn routeTo(a: std.mem.Allocator, from: WorldCoord, to: WorldCoord, forbidden
                 .rot = .center,
             }) catch @panic("oom");
         }
+
         // also append blocks under
         blocks.append(a, .{
             .block = .block,
             .loc = @intCast(loc + WorldCoord{ 0, -1, 0 }),
             .rot = .center,
         }) catch @panic("oom");
+
         prev_vec = vec;
     }
+
     nbt.block_arr_to_schem(a, blocks.items);
     blocks.deinit(a);
 }
