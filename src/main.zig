@@ -33,11 +33,15 @@ pub fn main() !void {
     graphviz.GraphVisualizer(glib.GateBody).printDFS(gpa, graph);
     glibopt.PreProcessor(glib.GateBody).preprocess(graph);
     graphviz.GraphVisualizer(glib.GateBody).print(gpa, graph);
+    graph.deinit();
 
-    const set = ms.OrderedSet(ms.WorldCoord).init(gpa);
-    var route = try rt.routeTo(gpa, .{ 0, 0, 0 }, .{ 15, 0, 0 }, set);
+    // each layer is a height of 3, so any target y coordinate must be a multiple of 3
+    var forbidden_zone = ms.ForbiddenZone.init(gpa);
+    var route = try rt.routeToUpdateForbiddenZone(gpa, .{ -20, 0, 0 }, .{ 40, 0, 0 }, &forbidden_zone);
+    var route2 = try rt.routeToUpdateForbiddenZone(gpa, .{ 10, 0, -20 }, .{ 10, 0, 20 }, &forbidden_zone);
+    try route.appendSlice(gpa, route2.items);
     nbt.abs_block_arr_to_schem(gpa, route.items);
     route.deinit(gpa);
-
-    graph.deinit();
+    route2.deinit(gpa);
+    forbidden_zone.deinit();
 }
