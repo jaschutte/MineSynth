@@ -15,7 +15,11 @@ pub fn printNode(string: *std.io.Writer.Allocating, node: *glib.GateGraph.Node) 
         .input => "\"#33f747\"",
         .output => "\"#33f7f0\"",
     };
-    try string.writer.print("    {} [label=\"{s}--{d}\", fillcolor={s}, tooltip=\"{}\"];\n", .{ node.id, symbol, node.metadata.timing.actual_arrival, color, node.id });
+    var timing: f32 = 0;
+    if (node.metadata == .timing) {
+        timing = node.metadata.timing.actual_arrival;
+    }
+    try string.writer.print("    {} [label=\"{s}--{d}\", fillcolor={s}, tooltip=\"{}\"];\n", .{ node.id, symbol, timing, color, node.id });
 }
 
 pub fn printEdge(graph: *const glib.GateGraph, string: *std.io.Writer.Allocating, edge: *glib.GateGraph.Edge) void {
