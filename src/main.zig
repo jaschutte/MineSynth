@@ -26,11 +26,11 @@ pub fn main() !void {
     var netlist = try nl.Netlist.fromAiger(gpa, aig);
     defer _ = netlist.deinit();
 
-    var graph = try glib.GraphConstructors.fromNetlist(gpa, &netlist);
+    var graph = glib.GraphConstructors.fromNetlist(gpa, &netlist);
 
-    try graphviz.GraphVisualizer(glib.GateBody).printDFS(gpa, graph);
-    try glibopt.PreProcessor(glib.GateBody).preprocess(graph);
-    try graphviz.GraphVisualizer(glib.GateBody).print(gpa, graph);
+    graphviz.GraphVisualizer(glib.GateBody).printDFS(gpa, graph);
+    glibopt.PreProcessor(glib.GateBody).preprocess(graph);
+    graphviz.GraphVisualizer(glib.GateBody).print(gpa, graph);
 
     graph.deinit();
 }
