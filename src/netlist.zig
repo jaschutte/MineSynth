@@ -74,6 +74,7 @@ pub const GateType = enum {
             .output => 0,
             .inverter => 2,
             .and_gate => 3,
+            .or_gate => 1,
         };
     }
 };

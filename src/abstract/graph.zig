@@ -85,6 +85,7 @@ pub fn Graph(comptime NodeBody: type) type {
             pub const MetadataKind = enum {
                 none,
                 partitioning,
+                timing,
             };
 
             pub const Metadata = union(MetadataKind) {
@@ -92,11 +93,12 @@ pub fn Graph(comptime NodeBody: type) type {
                 partitioning: struct {
                     fixed: bool,
                 },
+                timing: struct { actual_arrival: f32, required_arrival: f32, slack: f32 },
             };
 
             body: NodeBody,
             id: NodeId,
-            metadata: MetadataKind,
+            metadata: Metadata,
             // Only null when the node is detached from any graph
             owner: ?*Graph(NodeBody),
 
@@ -232,6 +234,7 @@ pub fn Graph(comptime NodeBody: type) type {
 
             const edge_id = id.getId();
             try self.edges.putNoClobber(edge_id, Edge{
+                .weight = weight orelse 0,
                 .body = body,
                 .id = edge_id,
                 .a = a,

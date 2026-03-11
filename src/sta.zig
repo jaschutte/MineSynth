@@ -3,24 +3,128 @@ const Graph = @import("abstract/graph.zig").Graph;
 const physical = @import("physical.zig");
 const glib = @import("abstract/graph.zig");
 
-// Compute AAT from netlist: Actual Arrival Time.
-// The time at which the signal gets to the final gate
-pub fn AAT(the_graph: *glib.GateGraph, start_node: glib.NodeId) u32 {
-    errdefer @panic("Skill issue");
-    var tovisit = std.ArrayList(glib.NodeId).empty;
-    try tovisit.append(the_graph.gpa, start_node);
-    while (tovisit.items.len > 0) {
-        const current_edges = the_graph.getNodeEdges(tovisit.items[0], .output);
-        for (current_edges) |edgeID| {
-            const edge = the_graph.getConstEdge(edgeID).?;
-            const weight_current = edge.b; //.metadata.actual_arrival;
-            const weight_new = edge.a; //.metadata.actual_arrival + edge.metadata.weight;
-            if (weight_new > weight_current) {
-                //edge.b.metadata.actual_arrival = weight_new;
-            }
-            //tovisit.append(the_graph.gpa, edge.b);
+// set metadata to timing
+pub fn InitializeTimingMetadata(the_graph: *glib.GateGraph) void {
+    for (the_graph.nodes.values()) |*node| {
+        node.metadata = .{ .timing = .{ .actual_arrival = 0, .required_arrival = 0, .slack = 0 } };
+    }
+}
+
+// reset all computed timings to 0
+pub fn ResetTiming(the_graph: *glib.GateGraph) void {
+    for (the_graph.nodes.values()) |*node| {
+        if (node.metadata == .timing) {
+            node.metadata.timing.actual_arrival = 0;
+            node.metadata.timing.required_arrival = 0;
+            node.metadata.timing.slack = 0;
         }
     }
+}
 
-    return 0; // the_graph.sum();
+// Compute AAT from graph: Actual Arrival Time.
+// results are written in graph.node.metadata.timing.actual_arrival for each node
+pub fn AAT(the_graph: *glib.GateGraph) void {
+    errdefer @panic("Skill issue");
+
+    InitializeTimingMetadata(the_graph);
+
+    const to_visit = DepthFirstSearch(the_graph);
+    defer the_graph.gpa.free(to_visit);
+
+    for (to_visit) |node_id| {
+        const this_node = the_graph.getNode(node_id).?;
+        var this_aa: f32 = 0;
+        if (this_node.metadata == .timing) {
+            // if this node has not yet been set to a higher value, this is an input node.
+            // so, we set its actual_arrival to the gate's delay.
+            if (this_node.metadata.timing.actual_arrival == 0) {
+                this_node.metadata.timing.actual_arrival = @floatFromInt(this_node.getGate().kind.delay());
+            }
+            this_aa = this_node.metadata.timing.actual_arrival;
+        } else {
+            std.debug.print("hey, this isnt the timing metadata :(", .{});
+            return;
+        }
+
+        const current_edges = the_graph.getNodeEdges(node_id, .output);
+        defer the_graph.gpa.free(current_edges);
+        for (current_edges) |edge_id| {
+            const edge = the_graph.getConstEdge(edge_id).?;
+            const next_node = the_graph.getNode(edge.b).?;
+            const new_arrival = @as(f32, @floatFromInt(next_node.getGate().kind.delay())) + edge.weight + this_aa;
+            if (next_node.metadata == .timing) {
+                if (new_arrival > next_node.metadata.timing.actual_arrival) {
+                    next_node.metadata.timing.actual_arrival = new_arrival;
+                }
+            } else {
+                std.debug.print("hey, this isnt the timing metadata :(", .{});
+                return;
+            }
+        }
+    }
+}
+
+const MarkState = enum {
+    Unmarked,
+    TempMark,
+    PermMark,
+};
+
+// returns allocated array of node id's on topological order.
+pub fn DepthFirstSearch(the_graph: *glib.GateGraph) []glib.NodeId {
+    errdefer @panic("Ran out of memory when allocating");
+    var sorted = std.ArrayList(glib.NodeId).empty;
+
+    var marks = std.AutoHashMap(glib.NodeId, MarkState).init(the_graph.gpa);
+    defer marks.deinit();
+    var unMarked = std.ArrayList(glib.NodeId).empty;
+    defer unMarked.deinit(the_graph.gpa);
+
+    // add all to unmarked
+    for (the_graph.nodes.values()) |*node| {
+        try marks.put(node.id, MarkState.Unmarked);
+        try unMarked.append(the_graph.gpa, node.id);
+    }
+
+    // permanently mark all nodes
+    while (unMarked.items.len > 0) {
+        if (!visit(the_graph, unMarked.items[0], &unMarked, &sorted, &marks)) return try sorted.toOwnedSlice(the_graph.gpa);
+    }
+
+    // return sorted id's
+    // pass ownership of allocated memory to function caller.
+    return try sorted.toOwnedSlice(the_graph.gpa);
+}
+
+// returns whether to continue search
+// returns false when a cycle is found
+fn visit(the_graph: *glib.GateGraph, nodeId: glib.NodeId, toMark: *std.ArrayList(glib.NodeId), sorted: *std.ArrayList(glib.NodeId), marks: *std.AutoHashMap(glib.NodeId, MarkState)) bool {
+    errdefer @panic("Ran out of memory when allocating");
+    // lookup an ID
+    const marktype = marks.get(nodeId);
+    if (marktype) |value| {
+        // if contains permanent mark, skip
+        if (value == MarkState.PermMark)
+            return true;
+        // temp mark indicates there is a cycle: stop
+        if (value == MarkState.TempMark)
+            return false;
+    } else {
+        std.debug.print("ID not found\n", .{});
+        return false;
+    }
+    // assign temp mark
+    try marks.put(nodeId, MarkState.TempMark);
+    // visit adjacent nodes
+    const current_edges = the_graph.getNodeEdges(nodeId, .output);
+    defer the_graph.gpa.free(current_edges);
+    for (current_edges) |edgeID| {
+        const adjacent_node = the_graph.getConstEdge(edgeID).?.b;
+        if (!visit(the_graph, adjacent_node, toMark, sorted, marks)) return false;
+    }
+    // add this node to sorted list, and permanently mark.
+    _ = toMark.orderedRemove(0);
+    try marks.put(nodeId, MarkState.PermMark);
+    try sorted.append(the_graph.gpa, nodeId);
+    return true;
 }

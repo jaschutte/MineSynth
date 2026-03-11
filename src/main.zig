@@ -34,7 +34,9 @@ pub fn main() !void {
     glibopt.PreProcessor(glib.GateBody).preprocess(graph);
     graphviz.GraphVisualizer(glib.GateBody).print(gpa, graph);
 
-    _ = sta.AAT(graph, 0);
+    sta.AAT(graph);
+
+    graphviz.GraphVisualizer(glib.GateBody).print(gpa, graph);
 
     graph.deinit();
 }
