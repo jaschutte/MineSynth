@@ -4,14 +4,14 @@ const physical = @import("physical.zig");
 const glib = @import("abstract/graph.zig");
 
 // set metadata to timing
-pub fn InitializeTimingMetadata(the_graph: *glib.GateGraph) void {
+pub fn InitializeTimingMetadata(the_graph: *const glib.GateGraph) void {
     for (the_graph.nodes.values()) |*node| {
         node.metadata = .{ .timing = .{ .actual_arrival = 0, .required_arrival = 0, .slack = 0 } };
     }
 }
 
 // reset all computed timings to 0
-pub fn ResetTiming(the_graph: *glib.GateGraph) void {
+pub fn ResetTiming(the_graph: *const glib.GateGraph) void {
     for (the_graph.nodes.values()) |*node| {
         if (node.metadata == .timing) {
             node.metadata.timing.actual_arrival = 0;
@@ -31,7 +31,14 @@ pub fn AAT(the_graph: *glib.GateGraph) void {
     const to_visit = DepthFirstSearch(the_graph);
     defer the_graph.gpa.free(to_visit);
 
-    for (to_visit) |node_id| {
+    std.debug.print("len{d}\n", .{to_visit.len});
+    // for (to_visit) |node_id| {
+    // reverse for
+    var i: usize = to_visit.len;
+    while (i > 0) {
+        i -= 1;
+        const node_id = to_visit[i];
+        std.debug.print("node:{d}\n", .{node_id});
         const this_node = the_graph.getNode(node_id).?;
         var this_aa: f32 = 0;
         if (this_node.metadata == .timing) {
@@ -71,7 +78,7 @@ const MarkState = enum {
 };
 
 // returns allocated array of node id's on topological order.
-pub fn DepthFirstSearch(the_graph: *glib.GateGraph) []glib.NodeId {
+pub fn DepthFirstSearch(the_graph: *const glib.GateGraph) []glib.NodeId {
     errdefer @panic("Ran out of memory when allocating");
     var sorted = std.ArrayList(glib.NodeId).empty;
 
@@ -89,6 +96,7 @@ pub fn DepthFirstSearch(the_graph: *glib.GateGraph) []glib.NodeId {
     // permanently mark all nodes
     while (unMarked.items.len > 0) {
         if (!visit(the_graph, unMarked.items[0], &unMarked, &sorted, &marks)) return try sorted.toOwnedSlice(the_graph.gpa);
+        _ = unMarked.orderedRemove(0);
     }
 
     // return sorted id's
@@ -98,21 +106,23 @@ pub fn DepthFirstSearch(the_graph: *glib.GateGraph) []glib.NodeId {
 
 // returns whether to continue search
 // returns false when a cycle is found
-fn visit(the_graph: *glib.GateGraph, nodeId: glib.NodeId, toMark: *std.ArrayList(glib.NodeId), sorted: *std.ArrayList(glib.NodeId), marks: *std.AutoHashMap(glib.NodeId, MarkState)) bool {
+fn visit(the_graph: *const glib.GateGraph, nodeId: glib.NodeId, toMark: *std.ArrayList(glib.NodeId), sorted: *std.ArrayList(glib.NodeId), marks: *std.AutoHashMap(glib.NodeId, MarkState)) bool {
     errdefer @panic("Ran out of memory when allocating");
     // lookup an ID
-    const marktype = marks.get(nodeId);
-    if (marktype) |value| {
-        // if contains permanent mark, skip
-        if (value == MarkState.PermMark)
-            return true;
-        // temp mark indicates there is a cycle: stop
-        if (value == MarkState.TempMark)
-            return false;
-    } else {
+    const m = marks.get(nodeId) orelse {
         std.debug.print("ID not found\n", .{});
         return false;
+    };
+
+    switch (m) {
+        .PermMark => return true,
+        .TempMark => {
+            std.debug.print("cycle detected\n", .{});
+            return false;
+        },
+        .Unmarked => {},
     }
+
     // assign temp mark
     try marks.put(nodeId, MarkState.TempMark);
     // visit adjacent nodes
@@ -120,10 +130,12 @@ fn visit(the_graph: *glib.GateGraph, nodeId: glib.NodeId, toMark: *std.ArrayList
     defer the_graph.gpa.free(current_edges);
     for (current_edges) |edgeID| {
         const adjacent_node = the_graph.getConstEdge(edgeID).?.b;
-        if (!visit(the_graph, adjacent_node, toMark, sorted, marks)) return false;
+        if (adjacent_node != nodeId) {
+            if (!visit(the_graph, adjacent_node, toMark, sorted, marks)) return false;
+        }
     }
     // add this node to sorted list, and permanently mark.
-    _ = toMark.orderedRemove(0);
+
     try marks.put(nodeId, MarkState.PermMark);
     try sorted.append(the_graph.gpa, nodeId);
     return true;
