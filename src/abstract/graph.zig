@@ -201,15 +201,15 @@ pub fn Graph(comptime NodeBody: type) type {
                 if (filter) |f| {
                     for (edges.items) |edge_id| {
                         if (node.edgeRelation(edge_id) == f) {
-                            results.append(self.gpa, edge_id);
+                            try results.append(self.gpa, edge_id);
                         }
                     }
                 } else {
-                    results.appendSlice(self.gpa, edges.items);
+                    try results.appendSlice(self.gpa, edges.items);
                 }
             }
 
-            return results.toOwnedSlice(self.gpa);
+            return try results.toOwnedSlice(self.gpa);
         }
 
         pub fn addNode(self: *Self, body: Body, meta: Node.Metadata) NodeId {

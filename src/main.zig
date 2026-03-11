@@ -7,6 +7,7 @@ const glib = @import("abstract/graph.zig");
 const glibopt = @import("abstract/preprocessor.zig");
 const graphviz = @import("abstract/graphviz.zig");
 const route = @import("routing.zig");
+const sta = @import("sta.zig");
 
 const nbt = @import("nbt.zig");
 
@@ -33,4 +34,7 @@ pub fn main() !void {
     glibopt.PreProcessor(glib.GateBody).preprocess(graph);
     graphviz.GraphVisualizer(glib.GateBody).print(gpa, graph);
 
+    _ = sta.AAT(graph, 0);
+
+    graph.deinit();
 }
