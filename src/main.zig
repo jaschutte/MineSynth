@@ -9,6 +9,7 @@ const graphviz = @import("abstract/graphviz.zig");
 const route = @import("routing.zig");
 
 const nbt = @import("nbt.zig");
+const ms = @import("abstract/structures.zig");
 
 pub fn main() !void {
     var real_gpa: std.heap.DebugAllocator(.{}) = .init;
@@ -32,7 +33,7 @@ pub fn main() !void {
     glibopt.PreProcessor(glib.GateBody).preprocess(graph);
     graphviz.GraphVisualizer(glib.GateBody).print(gpa, graph);
 
-    const set = route.OrderedSet(route.WorldCoord).init(gpa);
+    const set = ms.OrderedSet(route.WorldCoord).init(gpa);
     try route.routeTo(gpa, .{ 0, 0, 0 }, .{ 25, 0, 15 }, set);
 
     graph.deinit();
