@@ -13,9 +13,8 @@ const ms = @import("abstract/structures.zig");
 
 pub fn main() !void {
     var real_gpa: std.heap.DebugAllocator(.{}) = .init;
-    defer _ = real_gpa.deinit();
-
     const gpa = real_gpa.allocator();
+    defer _ = real_gpa.deinit();
 
     // const content = try std.fs.cwd().readFileAlloc(gpa, "aiger-examples/half-adder.aag", std.math.maxInt(usize));
     const content = try std.fs.cwd().readFileAlloc(gpa, "aiger-examples/serial-adder.aag", std.math.maxInt(usize));
@@ -36,12 +35,22 @@ pub fn main() !void {
     graph.deinit();
 
     // each layer is a height of 3, so any target y coordinate must be a multiple of 3
+    // forbidden zone should contain all mc blocks inside an AND/NOT block
+    // + input/outputs + blocks adjacent to inputs/outputs
     var forbidden_zone = ms.ForbiddenZone.init(gpa);
+    defer forbidden_zone.deinit();
     var route = try rt.routeToUpdateForbiddenZone(gpa, .{ -20, 0, 0 }, .{ 40, 0, 0 }, &forbidden_zone);
+    std.log.info(
+        "path of length {d} and delay {d} found between {any} and {any}\n",
+        .{ route.length, route.delay, .{ -20, 0, 0 }, .{ 40, 0, 0 } },
+    );
+    defer route.deinit(gpa);
     var route2 = try rt.routeToUpdateForbiddenZone(gpa, .{ 10, 0, -20 }, .{ 10, 0, 20 }, &forbidden_zone);
-    try route.appendSlice(gpa, route2.items);
-    nbt.abs_block_arr_to_schem(gpa, route.items);
-    route.deinit(gpa);
-    route2.deinit(gpa);
-    forbidden_zone.deinit();
+    std.log.info(
+        "path of length {d} and delay {d} found between {any} and {any}\n",
+        .{ route2.length, route2.delay, .{ 10, 0, -20 }, .{ 10, 0, 20 } },
+    );
+    defer route2.deinit(gpa);
+    try route.route.appendSlice(gpa, route2.route.items);
+    nbt.abs_block_arr_to_schem(gpa, route.route.items);
 }

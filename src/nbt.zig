@@ -198,7 +198,7 @@ pub fn block_arr_to_schem(a: std.mem.Allocator, blocks: []ms.SchemBlock) void {
 
     c.nbt_tag_compound_append(out, tag_blocks);
     c.nbt_tag_compound_append(out, tag_data);
-    print_nbt_tree(out, 0);
+    // print_nbt_tree(out, 0);
     write_nbt_file("out.schematic", out, c.NBT_WRITE_FLAG_USE_GZIP);
 
     c.nbt_free_tag(out);

@@ -1,6 +1,22 @@
 const std = @import("std");
 const ms = @import("abstract/structures.zig");
+const phys = @import("physical.zig");
 const nbt = @import("nbt.zig");
+
+// return value
+route: std.ArrayList(ms.AbsBlock) = .empty,
+delay: u32 = 0,
+length: u32 = 0,
+
+pub fn deinit(self: *Route, allocator: std.mem.Allocator) void {
+    self.route.deinit(allocator);
+}
+
+const Route = @This();
+
+// the vias are designed to be 3 blocks tall so
+// please dont make me change this >:(
+pub const LAYER_HEIGHT: u2 = 3;
 
 const WorldCoord = ms.WorldCoord;
 
@@ -26,14 +42,14 @@ fn coordEq(a: WorldCoord, b: WorldCoord) bool {
 const QueueItem = struct {
     coord: WorldCoord,
     dist: u32,
-    euclid: u32,
+    manhattan: u32,
 };
 
 fn queueOrder(context: void, a: QueueItem, b: QueueItem) std.math.Order {
     _ = context;
     const dist_order = std.math.order(a.dist, b.dist);
     if (dist_order == .eq) {
-        return std.math.order(a.euclid, b.euclid);
+        return std.math.order(a.manhattan, b.manhattan);
     }
     return dist_order;
 }
@@ -51,6 +67,9 @@ const Move = struct {
 
 fn isMoveValid(u: WorldCoord, move: Move, forbidden_zone: ms.ForbiddenZone) bool {
     const coord = u + move.dir;
+    // check bounds
+    if (coord[1] > phys.MAX_Y_LEVEL or coord[1] < phys.MIN_Y_LEVEL) return false;
+
     if (forbidden_zone.contains(coord)) return false;
 
     switch (move.conn_type) {
@@ -96,8 +115,8 @@ fn isMoveValid(u: WorldCoord, move: Move, forbidden_zone: ms.ForbiddenZone) bool
     }
 }
 
-pub fn routeToUpdateForbiddenZone(a: std.mem.Allocator, from: WorldCoord, to: WorldCoord, forbidden_zone: *ms.ForbiddenZone) !std.ArrayList(ms.AbsBlock) {
-    const blocks = try routeTo(a, from, to, forbidden_zone.*);
+pub fn routeToUpdateForbiddenZone(a: std.mem.Allocator, from: WorldCoord, to: WorldCoord, forbidden_zone: *ms.ForbiddenZone) !Route {
+    const route = try routeTo(a, from, to, forbidden_zone.*);
 
     const offsets = [_]WorldCoord{
         .{ 0, 0, 0 }, // Target block
@@ -109,7 +128,7 @@ pub fn routeToUpdateForbiddenZone(a: std.mem.Allocator, from: WorldCoord, to: Wo
         .{ 0, 0, -1 }, // -Z
     };
 
-    for (blocks.items) |b| {
+    for (route.route.items) |b| {
         for (offsets) |offset| {
             // WorldCoord acts as a vector here, permitting direct addition
             const coord = b.loc + offset;
@@ -117,15 +136,31 @@ pub fn routeToUpdateForbiddenZone(a: std.mem.Allocator, from: WorldCoord, to: Wo
         }
     }
 
-    return blocks;
+    return route;
 }
 
-pub fn routeTo(a: std.mem.Allocator, from: WorldCoord, to: WorldCoord, forbidden_zone: ms.ForbiddenZone) !std.ArrayList(ms.AbsBlock) {
-    var explored = std.AutoHashMap(WorldCoord, void).init(a);
-    defer explored.deinit();
+pub fn routeTo(a: std.mem.Allocator, from: WorldCoord, to: WorldCoord, forbidden_zone: ms.ForbiddenZone) !Route {
+    if (from[1] < phys.MIN_Y_LEVEL or from[1] > phys.MAX_Y_LEVEL or
+        to[1] < phys.MIN_Y_LEVEL or to[1] > phys.MAX_Y_LEVEL)
+    {
+        return error.OutOfBounds;
+    }
 
-    var distances = std.AutoHashMap(WorldCoord, DistanceMetric).init(a);
-    defer distances.deinit();
+    if (@as(u32, @intCast(from[1])) % LAYER_HEIGHT != 0 or @as(u32, @intCast(to[1])) % LAYER_HEIGHT != 0) {
+        return error.InvalidToOrFromYLevel;
+    }
+
+    // extra debug checks
+    if (forbidden_zone.contains(from)) {
+        std.log.err("From coordinate .{any} is in the forbidden zone", .{from});
+        return error.InvalidToOrFromInForbiddenZone;
+    }
+    if (forbidden_zone.contains(to)) {
+        std.log.err("To coordinate .{any} is in the forbidden zone", .{to});
+        return error.InvalidToOrFromInForbiddenZone;
+    }
+
+    const SEARCH_RADIUS = 100; // in Manhattan distance
 
     var queue = std.PriorityQueue(QueueItem, void, queueOrder).init(a, {});
     defer queue.deinit();
@@ -133,8 +168,14 @@ pub fn routeTo(a: std.mem.Allocator, from: WorldCoord, to: WorldCoord, forbidden
     var parents = std.AutoHashMap(WorldCoord, Parent).init(a);
     defer parents.deinit();
 
+    var explored = std.AutoHashMap(WorldCoord, void).init(a);
+    defer explored.deinit();
+
+    var distances = std.AutoHashMap(WorldCoord, DistanceMetric).init(a);
+    defer distances.deinit();
+
     try distances.put(from, .{ .distance = 0, .signal_strength = 15 });
-    try queue.add(.{ .coord = from, .dist = 0, .euclid = 0 });
+    try queue.add(.{ .coord = from, .dist = 0, .manhattan = 0 });
 
     const moves = [_]Move{
         // consider regular redstone
@@ -160,7 +201,7 @@ pub fn routeTo(a: std.mem.Allocator, from: WorldCoord, to: WorldCoord, forbidden
     };
 
     while (queue.count() > 0) {
-        const item = queue.remove();
+        const item = queue.removeOrNull().?;
         const u = item.coord;
 
         // Lazy Dijkstra: discard popped items that are stale
@@ -177,6 +218,9 @@ pub fn routeTo(a: std.mem.Allocator, from: WorldCoord, to: WorldCoord, forbidden
             const coord = u + move.dir;
 
             if (!isMoveValid(u, move, forbidden_zone)) continue;
+            // check if within search radius
+            const manhattan = @abs(coord[0] - from[0]) + @abs(coord[2] - from[2]);
+            if (manhattan > SEARCH_RADIUS) continue;
 
             const prev_metric = distances.get(u).?;
             var signal_strength = prev_metric.signal_strength;
@@ -201,26 +245,32 @@ pub fn routeTo(a: std.mem.Allocator, from: WorldCoord, to: WorldCoord, forbidden
                 distances.put(coord, .{ .signal_strength = signal_strength, .distance = dist }) catch @panic("oom");
                 parents.put(coord, .{ .conn_type = move.conn_type, .prev = u }) catch @panic("oom");
 
-                const euclid = @abs(coord[0] - from[0]) + @abs(coord[2] - from[2]);
-
                 // Push duplicate entry. The heap sorts by this static item.dist.
-                queue.add(.{ .coord = coord, .dist = dist, .euclid = @as(u32, @intCast(euclid)) }) catch @panic("oom");
+                queue.add(.{ .coord = coord, .dist = dist, .manhattan = @as(u32, @intCast(manhattan)) }) catch @panic("oom");
             }
         }
 
         explored.put(u, void{}) catch @panic("oom");
     }
 
+    // check if exhausted search space without finding destination
+    if (parents.get(to) == null) {
+        std.log.err("Could not find a path to .{any}", .{to});
+        return error.PathNotFound;
+    }
+
     // construct block array
-    const blocks = try buildRouteBlocks(a, from, to, parents);
-    return blocks;
+    return try buildRouteBlocks(a, from, to, parents);
 }
 
-fn buildRouteBlocks(a: std.mem.Allocator, from: WorldCoord, to: WorldCoord, parents: std.AutoHashMap(WorldCoord, Parent)) !std.ArrayList(ms.AbsBlock) {
+fn buildRouteBlocks(a: std.mem.Allocator, from: WorldCoord, to: WorldCoord, parents: std.AutoHashMap(WorldCoord, Parent)) !Route {
     var abs_blocks: std.ArrayList(ms.AbsBlock) = .empty;
 
     var vec = to;
     var prev_vec = to;
+
+    var length: u32 = 0;
+    var delay: u32 = 0;
 
     while (!coordEq(vec, from)) {
         const p = parents.get(vec) orelse return error.MissingParent;
@@ -232,6 +282,7 @@ fn buildRouteBlocks(a: std.mem.Allocator, from: WorldCoord, to: WorldCoord, pare
             .dust => {
                 try abs_blocks.append(a, .{ .block = .dust, .loc = vec, .rot = .center });
                 try abs_blocks.append(a, .{ .block = .block, .loc = vec + WorldCoord{ 0, -1, 0 }, .rot = .center });
+                length += 1;
             },
             .repeater => {
                 const rot: ms.Orientation = if (vec[0] > prev_vec[0]) .west else if (vec[0] < prev_vec[0]) .east else if (vec[2] > prev_vec[2]) .north else .south;
@@ -242,6 +293,8 @@ fn buildRouteBlocks(a: std.mem.Allocator, from: WorldCoord, to: WorldCoord, pare
                 try abs_blocks.append(a, .{ .block = .dust, .loc = mid, .rot = .center });
                 try abs_blocks.append(a, .{ .block = .block, .loc = mid + WorldCoord{ 0, -1, 0 }, .rot = .center });
                 try abs_blocks.append(a, .{ .block = .block, .loc = vec + WorldCoord{ 0, -1, 0 }, .rot = .center });
+                length += 1;
+                delay += 1; // repeaters add a delay of 1 tick
             },
             .via_up => {
                 const offsets = [_]struct { WorldCoord, ms.BlockCat, ms.Orientation }{
@@ -264,6 +317,9 @@ fn buildRouteBlocks(a: std.mem.Allocator, from: WorldCoord, to: WorldCoord, pare
                     });
                 }
                 // try abs_blocks.append(a, .{ .block = .block, .loc = vec + WorldCoord{ 0, -1, 0 }, .rot = .center });
+                delay += 2; // vias add a delay of 2 ticks
+                // well, 3 blocks up and 2 blocks over, kinda
+                length += 5;
             },
 
             .via_down => {
@@ -287,11 +343,10 @@ fn buildRouteBlocks(a: std.mem.Allocator, from: WorldCoord, to: WorldCoord, pare
                         .rot = rotated_rot,
                     });
                 }
+                delay += 2; // vias add a delay of 2 ticks
+                length += 5;
             },
         }
-
-        // Substrate block
-        // try abs_blocks.append(a, .{ .block = .block, .loc = vec + WorldCoord{ 0, -1, 0 }, .rot = .center });
 
         prev_vec = vec;
     }
@@ -306,7 +361,11 @@ fn buildRouteBlocks(a: std.mem.Allocator, from: WorldCoord, to: WorldCoord, pare
         min_coord[2] = @min(min_coord[2], b.loc[2]);
     }
 
-    return abs_blocks;
+    return .{
+        .route = abs_blocks,
+        .delay = delay,
+        .length = length,
+    };
 }
 
 fn rotateCoord(coord: WorldCoord, dir: WorldCoord) WorldCoord {
