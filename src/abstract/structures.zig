@@ -1,6 +1,9 @@
 const std = @import("std");
 pub const Graph = @import("graph.zig");
 
+const builtin = @import("builtin");
+const dbg = builtin.mode == std.builtin.OptimizeMode.Debug;
+
 pub const SchemCoord = @Vector(3, u15);
 pub const WorldCoord = @Vector(3, i32);
 
