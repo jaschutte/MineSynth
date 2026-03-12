@@ -9,7 +9,8 @@ pub fn blockcat_to_id(cat: ms.BlockCat) i8 {
         .dust => 55,
         .repeater => 94,
         .torch => 76,
-        .block => 35,
+        .block => 42,
+        .block2 => 41,
     };
 }
 
@@ -186,6 +187,7 @@ pub fn block_arr_to_schem(a: std.mem.Allocator, blocks: []ms.SchemBlock) void {
             .repeater => repeater_orientation_to_data(block.rot),
             .torch => torch_orientation_to_data(block.rot),
             .block => 0,
+            .block2 => 0,
         };
 
         // _ = block;

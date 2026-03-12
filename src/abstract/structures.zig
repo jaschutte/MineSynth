@@ -13,6 +13,7 @@ pub const BlockCat = enum {
     repeater,
     torch,
     block,
+    block2,
 };
 
 pub const Orientation = enum {

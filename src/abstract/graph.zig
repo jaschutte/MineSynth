@@ -153,7 +153,7 @@ pub fn Graph(comptime NodeBody: type) type {
 
         source: Source,
 
-        pub fn getEdge(self: *Self, edge_id: EdgeId) ?*Edge {
+        pub fn getEdge(self: *const Self, edge_id: EdgeId) ?*Edge {
             return self.edges.getPtr(edge_id);
         }
 
