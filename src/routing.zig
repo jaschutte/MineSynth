@@ -135,6 +135,14 @@ pub fn routeToUpdateForbiddenZone(a: std.mem.Allocator, from: WorldCoord, to: Wo
             try forbidden_zone.put(coord, void{});
         }
     }
+    // remove blocks around to and from
+    for (offsets) |offset| {
+        const from_coord = from + offset;
+        _ = forbidden_zone.remove(from_coord);
+
+        const to_coord = to + offset;
+        _ = forbidden_zone.remove(to_coord);
+    }
 
     return route;
 }
@@ -151,16 +159,16 @@ pub fn routeTo(a: std.mem.Allocator, from: WorldCoord, to: WorldCoord, forbidden
     }
 
     // extra debug checks
-    if (forbidden_zone.contains(from)) {
-        std.log.err("From coordinate .{any} is in the forbidden zone", .{from});
-        return error.InvalidToOrFromInForbiddenZone;
-    }
-    if (forbidden_zone.contains(to)) {
-        std.log.err("To coordinate .{any} is in the forbidden zone", .{to});
-        return error.InvalidToOrFromInForbiddenZone;
-    }
+    // if (forbidden_zone.contains(from)) {
+    //     std.log.err("From coordinate .{any} is in the forbidden zone", .{from});
+    //     return error.InvalidToOrFromInForbiddenZone;
+    // }
+    // if (forbidden_zone.contains(to)) {
+    //     std.log.err("To coordinate .{any} is in the forbidden zone", .{to});
+    //     return error.InvalidToOrFromInForbiddenZone;
+    // }
 
-    const SEARCH_RADIUS = 1000; // in Manhattan distance
+    const SEARCH_RADIUS = 200; // in Manhattan distance
 
     var queue = std.PriorityQueue(QueueItem, void, queueOrder).init(a, {});
     defer queue.deinit();

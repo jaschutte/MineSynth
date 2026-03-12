@@ -14,7 +14,7 @@ pub fn blockcat_to_id(cat: ms.BlockCat) i8 {
     };
 }
 
-pub fn torch_orientation_to_data(ori: ms.Orientation) i8 {
+pub fn torch_orientation_to_data(ori: ms.Orientation) u4 {
     return switch (ori) {
         .north => 4,
         .east => 1,
@@ -24,9 +24,9 @@ pub fn torch_orientation_to_data(ori: ms.Orientation) i8 {
     };
 }
 
-pub fn repeater_orientation_to_data(ori: ms.Orientation) i8 {
+pub fn repeater_orientation_to_data(ori: ms.Orientation) u4 {
     const delay = 1;
-    var orientation_value: i8 = 0;
+    var orientation_value: u4 = 0;
     switch (ori) {
         .north => orientation_value = 0,
         .east => orientation_value = 1,
@@ -182,13 +182,14 @@ pub fn block_arr_to_schem(a: std.mem.Allocator, blocks: []ms.SchemBlock) void {
     for (blocks) |block| {
         const idx = (block.loc[1] * length + block.loc[2]) * width + block.loc[0];
         blocks_byte_arr[idx] = blockcat_to_id(block.block);
-        data_byte_arr[idx] = switch (block.block) {
+        const block_data: u4 = switch (block.block) {
             .dust => 0,
             .repeater => repeater_orientation_to_data(block.rot),
             .torch => torch_orientation_to_data(block.rot),
             .block => 0,
             .block2 => 0,
         };
+        data_byte_arr[idx] = @intCast(block_data);
 
         // _ = block;
         // blocks.items

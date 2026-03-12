@@ -20,7 +20,7 @@ pub fn createGates(a: std.mem.Allocator, graph: *const glib.GateGraph) !void {
 
     const num_nodes = graph.nodes.count();
 
-    const spacing = 10;
+    const spacing = 8;
 
     const side_length: u32 = @intFromFloat(std.math.ceil(@as(f32, @floatFromInt(std.math.sqrt(num_nodes)))) * spacing);
     var pos: ms.WorldCoord = .{ 0, 0, 0 };
@@ -129,26 +129,32 @@ pub fn createGates(a: std.mem.Allocator, graph: *const glib.GateGraph) !void {
             std.log.err("Missing input or output for edge {d} between nodes {d} and {d}", .{ edge.id, edge.a, edge.b });
             continue;
         }
+        const new_a_output = a_output.?;
+        const new_b_input = b_input.?;
         // check if a_output in forbidden zone, if so, move it up by one and add to forbidden zone until we find a free spot
-        var new_a_output = a_output.?;
-        if (forbidden_zone.contains(a_output.?)) {
-            while (forbidden_zone.contains(new_a_output)) {
-                new_a_output += ms.WorldCoord{ 1, 0, 1 };
-            }
-            node_output_map.put(edge.a, new_a_output) catch @panic("oom");
-        }
-        var new_b_input = b_input.?;
-        if (forbidden_zone.contains(b_input.?)) {
-            while (forbidden_zone.contains(new_b_input)) {
-                new_b_input += ms.WorldCoord{ 1, 0, 1 };
-            }
-            node_input_map.put(edge.b, new_b_input) catch @panic("oom");
-        }
+        // var new_a_output = a_output.?;
+        // if (forbidden_zone.contains(a_output.?)) {
+        //     while (forbidden_zone.contains(new_a_output)) {
+        //         new_a_output += ms.WorldCoord{ 1, 0, 1 };
+        //     }
+        //     node_output_map.put(edge.a, new_a_output) catch @panic("oom");
+        // }
+        // var new_b_input = b_input.?;
+        // if (forbidden_zone.contains(b_input.?)) {
+        //     while (forbidden_zone.contains(new_b_input)) {
+        //         new_b_input += ms.WorldCoord{ 1, 0, 1 };
+        //     }
+        //     node_input_map.put(edge.b, new_b_input) catch @panic("oom");
+        // }
 
-        std.log.debug("Routing between {any} and {any}", .{ new_a_output, new_b_input });
+        std.log.info("Routing between {any} and {any}", .{ new_a_output, new_b_input });
         var route = rt.routeToUpdateForbiddenZone(a, new_a_output, new_b_input, &forbidden_zone) catch |err| {
             std.log.err("Failed to route between {any} and {any}: {any}", .{ new_a_output, b_input.?, err });
             std.log.err("Gate info: {d} of kind {any} at position {any}", .{ edge.a, graph.source.getGate(edge.a).kind, a_output.? });
+            if (err == error.PathNotFound) {
+                std.log.err("No path found between {any} and {any}", .{ new_a_output, new_b_input });
+                continue;
+            }
             return err;
         };
         blocks.appendSlice(a, route.route.items) catch @panic("oom");
