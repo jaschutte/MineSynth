@@ -160,7 +160,7 @@ pub fn routeTo(a: std.mem.Allocator, from: WorldCoord, to: WorldCoord, forbidden
         return error.InvalidToOrFromInForbiddenZone;
     }
 
-    const SEARCH_RADIUS = 100; // in Manhattan distance
+    const SEARCH_RADIUS = 1000; // in Manhattan distance
 
     var queue = std.PriorityQueue(QueueItem, void, queueOrder).init(a, {});
     defer queue.deinit();
@@ -227,11 +227,12 @@ pub fn routeTo(a: std.mem.Allocator, from: WorldCoord, to: WorldCoord, forbidden
 
             if (move.conn_type == .dust) {
                 if (signal_strength == 0) continue;
-                // need at least signal strength 1 at output
+                // need at least signal strength 1 at input
                 if (signal_strength == 1 and coordEq(coord, to)) continue;
                 signal_strength -= 1;
             } else if (move.conn_type == .repeater) {
-                signal_strength = 14;
+                if (signal_strength == 0) continue;
+                signal_strength = 15;
             } else if (move.conn_type == .via_up or move.conn_type == .via_down) {
                 if (signal_strength < 2) continue;
                 signal_strength = 14;
@@ -285,12 +286,12 @@ fn buildRouteBlocks(a: std.mem.Allocator, from: WorldCoord, to: WorldCoord, pare
                 length += 1;
             },
             .repeater => {
+                const mid = (prev_vec + vec) / @as(WorldCoord, @splat(2));
                 const rot: ms.Orientation = if (vec[0] > prev_vec[0]) .west else if (vec[0] < prev_vec[0]) .east else if (vec[2] > prev_vec[2]) .north else .south;
 
-                try abs_blocks.append(a, .{ .block = .repeater, .loc = vec, .rot = rot });
+                try abs_blocks.append(a, .{ .block = .repeater, .loc = mid, .rot = rot });
 
-                const mid = (prev_vec + vec) / @as(WorldCoord, @splat(2));
-                try abs_blocks.append(a, .{ .block = .dust, .loc = mid, .rot = .center });
+                try abs_blocks.append(a, .{ .block = .dust, .loc = vec, .rot = .center });
                 try abs_blocks.append(a, .{ .block = .block, .loc = mid + WorldCoord{ 0, -1, 0 }, .rot = .center });
                 try abs_blocks.append(a, .{ .block = .block, .loc = vec + WorldCoord{ 0, -1, 0 }, .rot = .center });
                 length += 1;
