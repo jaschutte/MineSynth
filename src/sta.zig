@@ -31,14 +31,11 @@ pub fn AAT(the_graph: *glib.GateGraph) void {
     const to_visit = DepthFirstSearch(the_graph);
     defer the_graph.gpa.free(to_visit);
 
-    std.debug.print("len{d}\n", .{to_visit.len});
-    // for (to_visit) |node_id| {
-    // reverse for
+    // reverse for loop:
     var i: usize = to_visit.len;
     while (i > 0) {
         i -= 1;
         const node_id = to_visit[i];
-        std.debug.print("node:{d}\n", .{node_id});
         const this_node = the_graph.getNode(node_id).?;
         var this_aa: f32 = 0;
         if (this_node.metadata == .timing) {
@@ -81,6 +78,8 @@ const MarkState = enum {
 };
 
 // returns allocated array of node id's on topological order.
+// output nodes are at the beginning of the array, input nodes are last.
+// so by iterating from the end of the array to the beginning we go from input to output.
 pub fn DepthFirstSearch(the_graph: *const glib.GateGraph) []glib.NodeId {
     errdefer @panic("Ran out of memory when allocating");
     var sorted = std.ArrayList(glib.NodeId).empty;
@@ -109,6 +108,7 @@ pub fn DepthFirstSearch(the_graph: *const glib.GateGraph) []glib.NodeId {
 
 // returns whether to continue search
 // returns false when a cycle is found
+// marks the node according to the depth first search algorithm
 fn visit(the_graph: *const glib.GateGraph, nodeId: glib.NodeId, toMark: *std.ArrayList(glib.NodeId), sorted: *std.ArrayList(glib.NodeId), marks: *std.AutoHashMap(glib.NodeId, MarkState)) bool {
     errdefer @panic("Ran out of memory when allocating");
     // lookup an ID
