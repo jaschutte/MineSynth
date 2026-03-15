@@ -17,7 +17,7 @@ pub fn AAT(the_graph: *glib.GateGraph) void {
 
     InitializeTimingMetadata(the_graph);
 
-    const to_visit = DepthFirstSearch(the_graph);
+    const to_visit = the_graph.topologicalSort();
     defer the_graph.gpa.free(to_visit);
 
     // reverse for loop:
@@ -58,75 +58,4 @@ pub fn AAT(the_graph: *glib.GateGraph) void {
             }
         }
     }
-}
-
-const MarkState = enum {
-    Unmarked,
-    TempMark,
-    PermMark,
-};
-
-// returns allocated array of node id's on topological order.
-// output nodes are at the beginning of the array, input nodes are last.
-// so by iterating from the end of the array to the beginning we go from input to output.
-pub fn DepthFirstSearch(the_graph: *const glib.GateGraph) []glib.NodeId {
-    errdefer @panic("Ran out of memory when allocating");
-    var sorted = std.ArrayList(glib.NodeId).empty;
-
-    var marks = std.AutoHashMap(glib.NodeId, MarkState).init(the_graph.gpa);
-    defer marks.deinit();
-    var unMarked = std.ArrayList(glib.NodeId).empty;
-    defer unMarked.deinit(the_graph.gpa);
-
-    // add all to unmarked
-    for (the_graph.nodes.values()) |*node| {
-        try marks.put(node.id, MarkState.Unmarked);
-        try unMarked.append(the_graph.gpa, node.id);
-    }
-
-    // permanently mark all nodes
-    while (unMarked.items.len > 0) {
-        if (!visit(the_graph, unMarked.items[0], &unMarked, &sorted, &marks)) return try sorted.toOwnedSlice(the_graph.gpa);
-        _ = unMarked.orderedRemove(0);
-    }
-
-    return try sorted.toOwnedSlice(the_graph.gpa);
-}
-
-// returns whether to continue search
-// returns false when a cycle is found
-// marks the node according to the depth first search algorithm
-fn visit(the_graph: *const glib.GateGraph, nodeId: glib.NodeId, toMark: *std.ArrayList(glib.NodeId), sorted: *std.ArrayList(glib.NodeId), marks: *std.AutoHashMap(glib.NodeId, MarkState)) bool {
-    errdefer @panic("Ran out of memory when allocating");
-
-    const m = marks.get(nodeId) orelse {
-        std.debug.print("ID not found\n", .{});
-        return false;
-    };
-
-    switch (m) {
-        .PermMark => return true,
-        .TempMark => {
-            std.debug.print("cycle detected\n", .{});
-            return false;
-        },
-        .Unmarked => {},
-    }
-
-    // assign temp mark
-    try marks.put(nodeId, MarkState.TempMark);
-    // visit adjacent nodes
-    const current_edges = the_graph.getNodeEdges(nodeId, .output);
-    defer the_graph.gpa.free(current_edges);
-    for (current_edges) |edgeID| {
-        var adjacent_node = the_graph.getConstEdge(edgeID).?.b;
-        if (adjacent_node == nodeId) {
-            adjacent_node = the_graph.getConstEdge(edgeID).?.a;
-        }
-        if (!visit(the_graph, adjacent_node, toMark, sorted, marks)) return false;
-    }
-    // add this node to sorted list, and permanently mark.
-    try marks.put(nodeId, MarkState.PermMark);
-    try sorted.append(the_graph.gpa, nodeId);
-    return true;
 }
