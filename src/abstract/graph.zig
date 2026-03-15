@@ -281,5 +281,74 @@ pub fn Graph(comptime NodeBody: type) type {
             graph.source = source;
             return graph;
         }
+
+        const MarkState = enum {
+            Unmarked,
+            TempMark,
+            PermMark,
+        };
+
+        // returns list of node id's in topological order.
+        // output nodes are at the beginning of the array, input nodes are last.
+        // so by iterating from the end of the array to the beginning we go from input to output.
+        pub fn topologicalSort(self: *Self) []NodeId {
+            errdefer @panic("Ran out of memory during topological sort");
+            var sorted = std.ArrayList(NodeId).empty;
+
+            // perform depth first search:
+            var marks = std.AutoHashMap(NodeId, MarkState).init(self.gpa);
+            defer marks.deinit();
+            var unMarked = std.ArrayList(NodeId).empty;
+            defer unMarked.deinit(self.gpa);
+
+            // add all to unmarked
+            for (self.nodes.values()) |*node| {
+                try marks.put(node.id, MarkState.Unmarked);
+                try unMarked.append(self.gpa, node.id);
+            }
+
+            // permanently mark all nodes
+            while (unMarked.items.len > 0) {
+                if (!depthFirstSearchVisit(self, unMarked.items[0], &unMarked, &sorted, &marks)) return try sorted.toOwnedSlice(self.gpa);
+                _ = unMarked.orderedRemove(0);
+            }
+
+            return try sorted.toOwnedSlice(self.gpa);
+        }
+
+        // returns whether to continue search
+        // returns false when a cycle is found
+        // marks the node according to the depth first search algorithm
+        fn depthFirstSearchVisit(self: *Self, nodeId: NodeId, toMark: *std.ArrayList(NodeId), sorted: *std.ArrayList(NodeId), marks: *std.AutoHashMap(NodeId, MarkState)) bool {
+            errdefer @panic("Ran out of memory during topological sort");
+
+            const m = marks.get(nodeId) orelse {
+                std.debug.print("ID not found\n", .{});
+                return false;
+            };
+            // skip if already marked and abort if there is a cycle.
+            switch (m) {
+                .PermMark => return true,
+                .TempMark => {
+                    std.debug.print("cycle detected\n", .{});
+                    return false;
+                },
+                .Unmarked => {},
+            }
+            try marks.put(nodeId, MarkState.TempMark);
+            // visit adjacent nodes
+            const current_edges = self.getNodeEdges(nodeId, .output);
+            defer self.gpa.free(current_edges);
+            for (current_edges) |edgeID| {
+                var adjacent_node = self.getConstEdge(edgeID).?.b;
+                if (adjacent_node == nodeId) {
+                    adjacent_node = self.getConstEdge(edgeID).?.a;
+                }
+                if (!depthFirstSearchVisit(self, adjacent_node, toMark, sorted, marks)) return false;
+            }
+            try marks.put(nodeId, MarkState.PermMark);
+            try sorted.append(self.gpa, nodeId);
+            return true;
+        }
     };
 }

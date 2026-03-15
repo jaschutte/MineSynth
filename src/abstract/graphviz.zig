@@ -19,8 +19,10 @@ pub fn printNode(graph: *const glib.GateGraph, string: *std.io.Writer.Allocating
     var timing: f32 = 0;
     if (node.metadata == .timing) {
         timing = node.metadata.timing.actual_arrival;
+        try string.writer.print("    {} [label=\"{s}--{d}\", fillcolor={s}, tooltip=\"{}\"];\n", .{ node.id, symbol, timing, color, node.id });
+    } else {
+        try string.writer.print("    {} [label=\"{s}\", fillcolor={s}, tooltip=\"{}\"];\n", .{ node.id, symbol, color, node.id });
     }
-    try string.writer.print("    {} [label=\"{s}--{d}\", fillcolor={s}, tooltip=\"{}\"];\n", .{ node.id, symbol, timing, color, node.id });
 }
 
 pub fn printEdge(graph: *const glib.GateGraph, string: *std.io.Writer.Allocating, edge: *glib.GateGraph.Edge) void {

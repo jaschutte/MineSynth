@@ -7,6 +7,7 @@ const graphviz = @import("abstract/graphviz.zig");
 const rt = @import("routing.zig");
 const nbt = @import("nbt.zig");
 const ms = @import("abstract/structures.zig");
+const sta = @import("sta.zig");
 
 pub fn main() !void {
     var real_gpa: std.heap.DebugAllocator(.{}) = .init;
@@ -25,6 +26,7 @@ pub fn main() !void {
     var graph = glib.GraphConstructors.fromNetlist(gpa, &netlist);
     graphviz.GraphVisualizer(glib.GateBody).printDFS(gpa, graph);
     glibopt.PreProcessor(glib.GateBody).preprocess(graph);
+    sta.AAT(graph);
     graphviz.GraphVisualizer(glib.GateBody).print(gpa, graph);
     graph.deinit();
 
