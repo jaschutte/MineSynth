@@ -10,17 +10,6 @@ pub fn InitializeTimingMetadata(the_graph: *const glib.GateGraph) void {
     }
 }
 
-// reset all computed timings to 0
-pub fn ResetTiming(the_graph: *const glib.GateGraph) void {
-    for (the_graph.nodes.values()) |*node| {
-        if (node.metadata == .timing) {
-            node.metadata.timing.actual_arrival = 0;
-            node.metadata.timing.required_arrival = 0;
-            node.metadata.timing.slack = 0;
-        }
-    }
-}
-
 // Compute AAT from graph: Actual Arrival Time.
 // results are written in graph.node.metadata.timing.actual_arrival for each node
 pub fn AAT(the_graph: *glib.GateGraph) void {
@@ -101,8 +90,6 @@ pub fn DepthFirstSearch(the_graph: *const glib.GateGraph) []glib.NodeId {
         _ = unMarked.orderedRemove(0);
     }
 
-    // return sorted id's
-    // pass ownership of allocated memory to function caller.
     return try sorted.toOwnedSlice(the_graph.gpa);
 }
 
@@ -111,7 +98,7 @@ pub fn DepthFirstSearch(the_graph: *const glib.GateGraph) []glib.NodeId {
 // marks the node according to the depth first search algorithm
 fn visit(the_graph: *const glib.GateGraph, nodeId: glib.NodeId, toMark: *std.ArrayList(glib.NodeId), sorted: *std.ArrayList(glib.NodeId), marks: *std.AutoHashMap(glib.NodeId, MarkState)) bool {
     errdefer @panic("Ran out of memory when allocating");
-    // lookup an ID
+
     const m = marks.get(nodeId) orelse {
         std.debug.print("ID not found\n", .{});
         return false;
