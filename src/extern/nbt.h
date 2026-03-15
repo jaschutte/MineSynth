@@ -83,7 +83,7 @@ struct nbt_tag_t {
       int8_t value;
     } tag_byte;
     struct {
-      int16_t value;
+      uint16_t value;
     } tag_short;
     struct {
       int32_t value;
@@ -152,7 +152,7 @@ nbt_tag_t* nbt_parse(nbt_reader_t reader, int parse_flags);
 void nbt_write(nbt_writer_t writer, nbt_tag_t* tag, int write_flags);
 
 nbt_tag_t* nbt_new_tag_byte(int8_t value);
-nbt_tag_t* nbt_new_tag_short(int16_t value);
+nbt_tag_t* nbt_new_tag_short(uint16_t value);
 nbt_tag_t* nbt_new_tag_int(int32_t value);
 nbt_tag_t* nbt_new_tag_long(int64_t value);
 nbt_tag_t* nbt_new_tag_float(float value);
@@ -496,7 +496,7 @@ void nbt__put_byte(nbt__write_stream_t* stream, uint8_t value) {
   stream->size++;
 }
 
-void nbt__put_int16(nbt__write_stream_t* stream, int16_t value) {
+void nbt__put_uint16(nbt__write_stream_t* stream, int16_t value) {
   uint8_t* value_array = (uint8_t*)&value;
   for (int i = 1; i >= 0; i--) {
     nbt__put_byte(stream, value_array[i]);
@@ -538,7 +538,7 @@ void nbt__write_tag(nbt__write_stream_t* stream, nbt_tag_t* tag, int write_name,
   }
 
   if (write_name && tag->type != NBT_TYPE_END) {
-    nbt__put_int16(stream, tag->name_size);
+    nbt__put_uint16(stream, tag->name_size);
     for (size_t i = 0; i < tag->name_size; i++) {
       nbt__put_byte(stream, tag->name[i]);
     }
@@ -554,7 +554,7 @@ void nbt__write_tag(nbt__write_stream_t* stream, nbt_tag_t* tag, int write_name,
       break;
     }
     case NBT_TYPE_SHORT: {
-      nbt__put_int16(stream, tag->tag_short.value);
+      nbt__put_uint16(stream, tag->tag_short.value);
       break;
     }
     case NBT_TYPE_INT: {
@@ -581,7 +581,7 @@ void nbt__write_tag(nbt__write_stream_t* stream, nbt_tag_t* tag, int write_name,
       break;
     }
     case NBT_TYPE_STRING: {
-      nbt__put_int16(stream, tag->tag_string.size);
+      nbt__put_uint16(stream, tag->tag_string.size);
       for (size_t i = 0; i < tag->tag_string.size; i++) {
         nbt__put_byte(stream, tag->tag_string.value[i]);
       }
@@ -789,7 +789,7 @@ nbt_tag_t* nbt_new_tag_byte(int8_t value) {
   return tag;
 }
 
-nbt_tag_t* nbt_new_tag_short(int16_t value) {
+nbt_tag_t* nbt_new_tag_short(uint16_t value) {
   nbt_tag_t* tag = nbt__new_tag_base();
 
   tag->type = NBT_TYPE_SHORT;

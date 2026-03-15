@@ -9,7 +9,8 @@ pub fn blockcat_to_id(cat: ms.BlockCat) i8 {
         .dust => 55,
         .repeater => 94,
         .torch => 76,
-        .block => 35,
+        .block => 42,
+        .block2 => 41,
     };
 }
 
@@ -36,7 +37,7 @@ pub fn repeater_orientation_to_data(ori: ms.Orientation) i8 {
     return (delay - 1) * 4 + orientation_value;
 }
 
-const and_gate = [_]ms.Block{
+const and_gate = [_]ms.SchemBlock{
     .{
         .block = .dust,
         .loc = .{ 0, 0, 0 },
@@ -99,14 +100,35 @@ const and_gate = [_]ms.Block{
     },
 };
 
-pub fn block_arr_to_schem(a: std.mem.Allocator, blocks: []ms.Block) void {
+pub fn abs_block_arr_to_schem(a: std.mem.Allocator, blocks: []ms.AbsBlock) void {
+    var min_coord = @as(ms.WorldCoord, @splat(std.math.maxInt(i32)));
+    for (blocks) |b| {
+        min_coord[0] = @min(min_coord[0], b.loc[0]);
+        min_coord[1] = @min(min_coord[1], b.loc[1]);
+        min_coord[2] = @min(min_coord[2], b.loc[2]);
+    }
+    var schem_blocks = a.alloc(ms.SchemBlock, blocks.len) catch @panic("oom");
+    errdefer a.free(schem_blocks);
+    defer a.free(schem_blocks);
+
+    for (blocks, 0..) |b, i| {
+        schem_blocks[i] = .{
+            .block = b.block,
+            .loc = @intCast(b.loc - min_coord),
+            .rot = b.rot,
+        };
+    }
+    block_arr_to_schem(a, schem_blocks);
+}
+
+pub fn block_arr_to_schem(a: std.mem.Allocator, blocks: []ms.SchemBlock) void {
     const out = c.nbt_new_tag_compound();
     c.nbt_set_tag_name(out, "Schematic", c.strlen("Schematic"));
 
     // get length and width
-    var length: u15 = 1;
-    var width: u15 = 1;
-    var height: u15 = 1;
+    var length: ms.SchemCoordNum = 1;
+    var width: ms.SchemCoordNum = 1;
+    var height: ms.SchemCoordNum = 1;
     for (blocks) |block| {
         if (block.loc[0] + 1 > width) width = block.loc[0] + 1;
         if (block.loc[1] + 1 > height) height = block.loc[1] + 1;
@@ -137,10 +159,20 @@ pub fn block_arr_to_schem(a: std.mem.Allocator, blocks: []ms.Block) void {
     // optional: WorldEdit offset and origin. not needed for now
     //
     //
+    // const tag_WEOffsetX = c.nbt_new_tag_int(offset[0]);
+    // const tag_WEOffsetY = c.nbt_new_tag_int(offset[1] - 10);
+    // const tag_WEOffsetZ = c.nbt_new_tag_int(offset[2]);
+    // c.nbt_set_tag_name(tag_WEOffsetX, "WEOriginX", c.strlen("WEOffsetX"));
+    // c.nbt_set_tag_name(tag_WEOffsetY, "WEOriginY", c.strlen("WEOffsetY"));
+    // c.nbt_set_tag_name(tag_WEOffsetZ, "WEOriginZ", c.strlen("WEOffsetZ"));
+    // c.nbt_tag_compound_append(out, tag_WEOffsetX);
+    // c.nbt_tag_compound_append(out, tag_WEOffsetY);
+    // c.nbt_tag_compound_append(out, tag_WEOffsetZ);
 
     // blocks and block data
 
-    const volume = length * height * width;
+    const volume: u64 = length * height * width;
+    std.log.debug("nbt conversion dims: {d}x{d}x{d}, volume: {d}", .{ length, width, height, volume });
     var blocks_byte_arr = a.alloc(i8, volume) catch @panic("oom");
     @memset(blocks_byte_arr, 0);
     defer a.free(blocks_byte_arr);
@@ -155,6 +187,7 @@ pub fn block_arr_to_schem(a: std.mem.Allocator, blocks: []ms.Block) void {
             .repeater => repeater_orientation_to_data(block.rot),
             .torch => torch_orientation_to_data(block.rot),
             .block => 0,
+            .block2 => 0,
         };
 
         // _ = block;
@@ -168,8 +201,10 @@ pub fn block_arr_to_schem(a: std.mem.Allocator, blocks: []ms.Block) void {
 
     c.nbt_tag_compound_append(out, tag_blocks);
     c.nbt_tag_compound_append(out, tag_data);
-    print_nbt_tree(out, 0);
+    // print_nbt_tree(out, 0);
     write_nbt_file("out.schematic", out, c.NBT_WRITE_FLAG_USE_GZIP);
+
+    c.nbt_free_tag(out);
     // write_nbt_file("out.schematic", out, c.NBT_WRITE_FLAG_USE_RAW);
 }
 
