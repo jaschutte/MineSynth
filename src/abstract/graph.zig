@@ -298,19 +298,19 @@ pub fn Graph(comptime NodeBody: type) type {
             // perform depth first search:
             var marks = std.AutoHashMap(NodeId, MarkState).init(self.gpa);
             defer marks.deinit();
-            var unMarked = std.ArrayList(NodeId).empty;
-            defer unMarked.deinit(self.gpa);
+            var unmarked = std.ArrayList(NodeId).empty;
+            defer unmarked.deinit(self.gpa);
 
             // add all to unmarked
             for (self.nodes.values()) |*node| {
                 try marks.put(node.id, MarkState.Unmarked);
-                try unMarked.append(self.gpa, node.id);
+                try unmarked.append(self.gpa, node.id);
             }
 
             // permanently mark all nodes
-            while (unMarked.items.len > 0) {
-                if (!depthFirstSearchVisit(self, unMarked.items[0], &unMarked, &sorted, &marks)) return try sorted.toOwnedSlice(self.gpa);
-                _ = unMarked.orderedRemove(0);
+            while (unmarked.items.len > 0) {
+                if (!depthFirstSearchVisit(self, unmarked.items[0], &unmarked, &sorted, &marks)) return try sorted.toOwnedSlice(self.gpa);
+                _ = unmarked.orderedRemove(0);
             }
 
             return try sorted.toOwnedSlice(self.gpa);
@@ -319,10 +319,10 @@ pub fn Graph(comptime NodeBody: type) type {
         // returns whether to continue search
         // returns false when a cycle is found
         // marks the node according to the depth first search algorithm
-        fn depthFirstSearchVisit(self: *Self, nodeId: NodeId, toMark: *std.ArrayList(NodeId), sorted: *std.ArrayList(NodeId), marks: *std.AutoHashMap(NodeId, MarkState)) bool {
+        fn depthFirstSearchVisit(self: *Self, node_id: NodeId, to_mark: *std.ArrayList(NodeId), sorted: *std.ArrayList(NodeId), marks: *std.AutoHashMap(NodeId, MarkState)) bool {
             errdefer @panic("Ran out of memory during topological sort");
 
-            const m = marks.get(nodeId) orelse {
+            const m = marks.get(node_id) orelse {
                 std.debug.print("ID not found\n", .{});
                 return false;
             };
@@ -335,19 +335,19 @@ pub fn Graph(comptime NodeBody: type) type {
                 },
                 .Unmarked => {},
             }
-            try marks.put(nodeId, MarkState.TempMark);
+            try marks.put(node_id, MarkState.TempMark);
             // visit adjacent nodes
-            const current_edges = self.getNodeEdges(nodeId, .output);
+            const current_edges = self.getNodeEdges(node_id, .output);
             defer self.gpa.free(current_edges);
             for (current_edges) |edgeID| {
                 var adjacent_node = self.getConstEdge(edgeID).?.b;
-                if (adjacent_node == nodeId) {
+                if (adjacent_node == node_id) {
                     adjacent_node = self.getConstEdge(edgeID).?.a;
                 }
-                if (!depthFirstSearchVisit(self, adjacent_node, toMark, sorted, marks)) return false;
+                if (!depthFirstSearchVisit(self, adjacent_node, to_mark, sorted, marks)) return false;
             }
-            try marks.put(nodeId, MarkState.PermMark);
-            try sorted.append(self.gpa, nodeId);
+            try marks.put(node_id, MarkState.PermMark);
+            try sorted.append(self.gpa, node_id);
             return true;
         }
     };
