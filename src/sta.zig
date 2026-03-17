@@ -4,7 +4,7 @@ const physical = @import("physical.zig");
 const glib = @import("abstract/graph.zig");
 
 // set metadata to timing
-pub fn InitializeTimingMetadata(the_graph: *const glib.GateGraph) void {
+pub fn initializeTimingMetadata(the_graph: *const glib.GateGraph) void {
     for (the_graph.nodes.values()) |*node| {
         node.metadata = .{ .timing = .{ .actual_arrival = 0, .required_arrival = 0, .slack = 0 } };
     }
@@ -15,7 +15,7 @@ pub fn InitializeTimingMetadata(the_graph: *const glib.GateGraph) void {
 pub fn AAT(the_graph: *glib.GateGraph) void {
     errdefer @panic("Skill issue");
 
-    InitializeTimingMetadata(the_graph);
+    initializeTimingMetadata(the_graph);
 
     const to_visit = the_graph.topologicalSort();
     defer the_graph.gpa.free(to_visit);
