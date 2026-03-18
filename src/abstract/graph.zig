@@ -37,7 +37,7 @@ pub const GraphConstructors = struct {
                     if (added_edges.contains([2]nl.NetPtr{ to_ptr, from_ptr })) continue;
                     try added_edges.put(.{ to_ptr, from_ptr }, undefined);
 
-                    _ = graph.addEdge(added_nodes.get(from_ptr).?, added_nodes.get(to_ptr).?, net_ptr);
+                    _ = graph.addEdge(added_nodes.get(from_ptr).?, added_nodes.get(to_ptr).?, net_ptr, 0);
                 }
             }
         }
@@ -61,6 +61,7 @@ pub fn Graph(comptime NodeBody: type) type {
             pub const MetadataKind = enum {
                 none,
                 partitioning,
+                timing,
             };
 
             pub const Metadata = union(MetadataKind) {
@@ -68,6 +69,7 @@ pub fn Graph(comptime NodeBody: type) type {
                 partitioning: struct {
                     fixed: bool,
                 },
+                timing: struct { actual_arrival: f32, required_arrival: f32, slack: f32 },
             };
 
             pub const EdgeRelation = enum {
@@ -79,7 +81,7 @@ pub fn Graph(comptime NodeBody: type) type {
 
             body: NodeBody,
             id: NodeId,
-            metadata: MetadataKind,
+            metadata: Metadata,
             // Only null when the node is detached from any graph
             owner: ?*Graph(NodeBody),
 
@@ -137,6 +139,7 @@ pub fn Graph(comptime NodeBody: type) type {
                 else => void,
             };
 
+            weight: f32,
             body: Edge.Body,
             id: EdgeId,
             a: NodeId,
@@ -179,15 +182,15 @@ pub fn Graph(comptime NodeBody: type) type {
                 if (filter) |f| {
                     for (edges.items) |edge_id| {
                         if (node.edgeRelation(edge_id) == f) {
-                            results.append(self.gpa, edge_id);
+                            try results.append(self.gpa, edge_id);
                         }
                     }
                 } else {
-                    results.appendSlice(self.gpa, edges.items);
+                    try results.appendSlice(self.gpa, edges.items);
                 }
             }
 
-            return results.toOwnedSlice(self.gpa);
+            return try results.toOwnedSlice(self.gpa);
         }
 
         pub fn addNode(self: *Self, body: Body, meta: Node.Metadata) NodeId {
@@ -205,11 +208,12 @@ pub fn Graph(comptime NodeBody: type) type {
         }
 
         // NOTE: when adding edges, **ALWAYS** make sure to have ALL NODES OF THE EDGE registered
-        pub fn addEdge(self: *Self, a: NodeId, b: NodeId, body: Edge.Body) EdgeId {
+        pub fn addEdge(self: *Self, a: NodeId, b: NodeId, body: Edge.Body, weight: ?f32) EdgeId {
             errdefer @panic("Ran out of memory when adding edge");
 
             const edge_id = id.getId();
             try self.edges.putNoClobber(edge_id, Edge{
+                .weight = weight orelse 0,
                 .body = body,
                 .id = edge_id,
                 .a = a,
@@ -276,6 +280,75 @@ pub fn Graph(comptime NodeBody: type) type {
             graph.node2edges = .init(gpa);
             graph.source = source;
             return graph;
+        }
+
+        const MarkState = enum {
+            Unmarked,
+            TempMark,
+            PermMark,
+        };
+
+        // returns list of node id's in topological order.
+        // output nodes are at the beginning of the array, input nodes are last.
+        // so by iterating from the end of the array to the beginning we go from input to output.
+        pub fn topologicalSort(self: *Self) []NodeId {
+            errdefer @panic("Ran out of memory during topological sort");
+            var sorted = std.ArrayList(NodeId).empty;
+
+            // perform depth first search:
+            var marks = std.AutoHashMap(NodeId, MarkState).init(self.gpa);
+            defer marks.deinit();
+            var unmarked = std.ArrayList(NodeId).empty;
+            defer unmarked.deinit(self.gpa);
+
+            // add all to unmarked
+            for (self.nodes.values()) |*node| {
+                try marks.put(node.id, MarkState.Unmarked);
+                try unmarked.append(self.gpa, node.id);
+            }
+
+            // permanently mark all nodes
+            while (unmarked.items.len > 0) {
+                if (!depthFirstSearchVisit(self, unmarked.items[0], &unmarked, &sorted, &marks)) return try sorted.toOwnedSlice(self.gpa);
+                _ = unmarked.orderedRemove(0);
+            }
+
+            return try sorted.toOwnedSlice(self.gpa);
+        }
+
+        // returns whether to continue search
+        // returns false when a cycle is found
+        // marks the node according to the depth first search algorithm
+        fn depthFirstSearchVisit(self: *Self, node_id: NodeId, to_mark: *std.ArrayList(NodeId), sorted: *std.ArrayList(NodeId), marks: *std.AutoHashMap(NodeId, MarkState)) bool {
+            errdefer @panic("Ran out of memory during topological sort");
+
+            const m = marks.get(node_id) orelse {
+                std.debug.print("ID not found\n", .{});
+                return false;
+            };
+            // skip if already marked and abort if there is a cycle.
+            switch (m) {
+                .PermMark => return true,
+                .TempMark => {
+                    std.debug.print("cycle detected\n", .{});
+                    return false;
+                },
+                .Unmarked => {},
+            }
+            try marks.put(node_id, MarkState.TempMark);
+            // visit adjacent nodes
+            const current_edges = self.getNodeEdges(node_id, .output);
+            defer self.gpa.free(current_edges);
+            for (current_edges) |edgeID| {
+                var adjacent_node = self.getConstEdge(edgeID).?.b;
+                if (adjacent_node == node_id) {
+                    adjacent_node = self.getConstEdge(edgeID).?.a;
+                }
+                if (!depthFirstSearchVisit(self, adjacent_node, to_mark, sorted, marks)) return false;
+            }
+            try marks.put(node_id, MarkState.PermMark);
+            try sorted.append(self.gpa, node_id);
+            return true;
         }
     };
 }

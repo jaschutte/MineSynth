@@ -68,12 +68,13 @@ pub const GateType = enum {
         };
     }
 
-    pub inline fn delay(self: GateType) u8 {
+    pub inline fn delay(self: GateType) physical.Delay {
         return switch (self) {
             .input => 0,
             .output => 0,
             .inverter => 2,
             .and_gate => 3,
+            .or_gate => 1,
         };
     }
 };
