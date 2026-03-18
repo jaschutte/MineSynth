@@ -3,6 +3,8 @@ const std = @import("std");
 pub const Area = u64;
 pub const Coordinate = @Vector(3, u32);
 pub const Delay = u32;
+// pub const InputPositions = []@Vector(3, i32);
+pub const OutputPositionsRelative = @Vector(3, i32);
 
 pub const MIN_Y_LEVEL = 0;
 pub const MAX_Y_LEVEL = 3 * 10; // 10 layers

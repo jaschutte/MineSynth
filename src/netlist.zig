@@ -77,6 +77,35 @@ pub const GateType = enum {
             .or_gate => 1,
         };
     }
+
+    // assuming the default orientation (whatever we pick for default)
+    pub inline fn inputPositionsRelative(self: GateType) switch (self) {
+        .input => [1]@Vector(3, i32),
+        .output => [1]@Vector(3, i32),
+        .inverter => [1]@Vector(3, i32),
+        .and_gate => [2]@Vector(3, i32),
+        .or_gate => [2]@Vector(3, i32),
+    } {
+        return switch (self) {
+            .input => .{@Vector(3, i32){ 0, 0, 0 }},
+            .output => .{@Vector(3, i32){ 0, 0, 0 }},
+            .inverter => .{@Vector(3, i32){ 0, 0, 3 }},
+            .and_gate => .{ @Vector(3, i32){ 0, 0, 3 }, @Vector(3, i32){ 2, 0, 3 } },
+            .or_gate => .{ @Vector(3, i32){ 0, 0, 3 }, @Vector(3, i32){ 2, 0, 3 } },
+        };
+    }
+
+    // assuming the default orientation (whatever we pick for default)
+    pub inline fn outputPositionsRelative(self: GateType) physical.OutputPositionsRelative {
+        // return @Vector(3, i32){ 0, 0, -1 };
+        return switch (self) {
+            .input => @Vector(3, i32){ 0, 0, -1 },
+            .output => @Vector(3, i32){ 0, 0, -1 },
+            .inverter => @Vector(3, i32){ 0, 0, -1 },
+            .and_gate => @Vector(3, i32){ 1, 0, -1 },
+            .or_gate => @Vector(3, i32){ 1, 0, -1 },
+        };
+    }
 };
 
 pub const Gate = struct {

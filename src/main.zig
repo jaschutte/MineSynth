@@ -33,6 +33,11 @@ pub fn main() !void {
     var forbidden_zone = ms.ForbiddenZone.init(gpa);
     defer forbidden_zone.deinit();
 
+    std.log.info(
+        "please actually compile my code {d}\n",
+        .{nl.GateType.output.inputPositionsRelative()[0]},
+    );
+
     const test_endpoints = [_][2][3]i32{
         .{ .{ -20, 0, 0 }, .{ 40, 0, 0 } },
         .{ .{ 10, 0, -20 }, .{ 10, 0, 20 } },
