@@ -2,7 +2,14 @@ const std = @import("std");
 const glib = @import("abstract/graph.zig");
 const Graph = glib.GateGraph;
 
-const Position = struct { x: f64, y: f64 };
+const Orientation = enum {
+    North,
+    East,
+    South,
+    West,
+};
+
+const Position = struct { x: i64, y: i64, orientation: Orientation };
 
 const Placement = struct { locations: std.AutoArrayHashMap(glib.NodeId, Position) };
 
@@ -13,11 +20,27 @@ fn cost(the_Placement: *Placement) f64 {
     return costWireLength(the_Placement) + costRowLength(the_Placement) + costOverlap(the_Placement);
 }
 
-fn costWireLength(the_Placement: *Placement) f64 {}
+fn costWireLength(the_Placement: *Placement) f64 {
+    return 0;
+}
 
-fn costRowLength(the_Placement: *Placement) f64 {}
+fn costRowLength(the_Placement: *Placement) f64 {
+    return 0;
+}
 
-fn costOverlap(the_Placement: *Placement) f64 {}
+fn costOverlap(the_Placement: *Placement) f64 {
+    return 0;
+}
+
+fn move(){
+
+}
+
+fn swap(){
+    
+}
+
+
 
 // randomly perturbs the placement
 fn perturb(the_Placement: *Placement) *Placement {}
@@ -55,12 +78,11 @@ pub fn placement_annealing(the_graph: *Graph, initial_temperature: i64, minimum_
             } else {
                 const value = rand.float(f32);
                 // compute e^(-Δcost/T):
-                const exponent = (-cost_diff/temperature);
+                const exponent = (-cost_diff / temperature);
                 if (value < std.math.exp(exponent)) {
                     current_placement.deinit();
                     current_placement = new_placement;
-                }
-                else {
+                } else {
                     new_placement.deinit();
                 }
             }
