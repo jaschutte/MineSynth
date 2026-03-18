@@ -31,7 +31,7 @@ pub fn AAT(the_graph: *glib.GateGraph) void {
             // if this node has not yet been set to a higher value, this is an input node.
             // so, we set its actual_arrival to the gate's delay.
             if (this_node.metadata.timing.actual_arrival == 0) {
-                this_node.metadata.timing.actual_arrival = @floatFromInt(this_node.getGate().kind.delay());
+                this_node.metadata.timing.actual_arrival = @floatFromInt(this_node.body.kind.delay());
             }
             this_aa = this_node.metadata.timing.actual_arrival;
         } else {
@@ -47,7 +47,7 @@ pub fn AAT(the_graph: *glib.GateGraph) void {
             if (edge.b == node_id) {
                 next_node = the_graph.getNode(edge.a).?;
             }
-            const new_arrival = @as(f32, @floatFromInt(next_node.getGate().kind.delay())) + edge.weight + this_aa;
+            const new_arrival = @as(f32, @floatFromInt(next_node.body.kind.delay())) + edge.weight + this_aa;
             if (next_node.metadata == .timing) {
                 if (new_arrival > next_node.metadata.timing.actual_arrival) {
                     next_node.metadata.timing.actual_arrival = new_arrival;

@@ -61,7 +61,7 @@ pub const GraphConstructors = struct {
                         0b11 => @panic("Gate output directly connected to input or vice versa"),
                     };
 
-                    _ = graph.addEdge(added_nodes.get(from_ptr).?, from_relation, added_nodes.get(to_ptr).?, to_relation, net_ptr);
+                    _ = graph.addEdge(added_nodes.get(from_ptr).?, from_relation, added_nodes.get(to_ptr).?, to_relation, net_ptr, null);
                 }
             }
         }
@@ -118,15 +118,6 @@ pub fn Graph(comptime NodeBody: type) type {
                 else => @compileError("NodeBody does not support retrieving the gate"),
             };
 
-            pub const getGate = switch (NodeBody) {
-                GateBody => struct {
-                    fn gate(self: *const Node) *nl.Gate {
-                        return self.owner.?.source.getGate(self.body);
-                    }
-                }.gate,
-                else => @compileError("NodeBody does not support retrieving the gate"),
-            };
-
             pub const getSize = switch (NodeBody) {
                 GateBody => struct {
                     fn size(self: *const Node) physical.Size {
@@ -160,6 +151,7 @@ pub fn Graph(comptime NodeBody: type) type {
             };
 
             body: Edge.Body,
+            weight: f32,
             id: EdgeId,
             a: NodeId,
             a_relation: Relation,
@@ -193,7 +185,7 @@ pub fn Graph(comptime NodeBody: type) type {
             return self.nodes.getPtr(node_id);
         }
 
-        pub fn getNodeEdges(self: *const Self, node_id: NodeId, filter: ?Node.EdgeRelation) []EdgeId {
+        pub fn getNodeEdges(self: *const Self, node_id: NodeId, filter: ?Edge.Relation) []EdgeId {
             errdefer @panic("Ran out of memory when retrieving node edges");
 
             const node = self.getConstNode(node_id) orelse @panic("Invalid node provided");
@@ -229,7 +221,7 @@ pub fn Graph(comptime NodeBody: type) type {
         }
 
         // NOTE: when adding edges, **ALWAYS** make sure to have ALL NODES OF THE EDGE registered
-        pub fn addEdge(self: *Self, a: NodeId, a_relation: Edge.Relation, b: NodeId, b_relation: Edge.Relation, body: Edge.Body) EdgeId {
+        pub fn addEdge(self: *Self, a: NodeId, a_relation: Edge.Relation, b: NodeId, b_relation: Edge.Relation, body: Edge.Body, weight: ?f32) EdgeId {
             errdefer @panic("Ran out of memory when adding edge");
 
             const edge_id = id.getId();

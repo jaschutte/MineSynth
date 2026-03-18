@@ -5,8 +5,6 @@ const glib = @import("abstract/graph.zig");
 const glibopt = @import("abstract/preprocessor.zig");
 const graphviz = @import("abstract/graphviz.zig");
 const rt = @import("routing.zig");
-const sta = @import("sta.zig");
-
 const nbt = @import("nbt.zig");
 const ms = @import("abstract/structures.zig");
 const sta = @import("sta.zig");
