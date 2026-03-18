@@ -27,10 +27,10 @@ pub fn main() !void {
     defer _ = netlist.deinit();
 
     var graph = glib.GraphConstructors.fromNetlist(gpa, &netlist);
+    defer _ = graph.deinit();
 
     graphviz.GraphVisualizer(glib.GateBody).printDFS(gpa, graph);
     glibopt.PreProcessor(glib.GateBody).preprocess(graph);
     graphviz.GraphVisualizer(glib.GateBody).print(gpa, graph);
 
-    graph.deinit();
 }

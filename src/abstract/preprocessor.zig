@@ -10,8 +10,8 @@ pub fn removeLooseConnections(graph: *glib.GateGraph) void {
     defer _ = faulty_edges.deinit(graph.gpa);
 
     for (graph.edges.values()) |*edge| {
-        const a_connected = graph.getNode(edge.a).?.edgeRelation(edge.id);
-        const b_connected = graph.getNode(edge.b).?.edgeRelation(edge.id);
+        const a_connected = edge.a_relation;
+        const b_connected = edge.b_relation;
 
         if (!((a_connected == .input and b_connected == .output) or (a_connected == .output and b_connected == .input))) {
             try faulty_edges.append(graph.gpa, edge.id);
