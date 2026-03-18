@@ -27,10 +27,6 @@ pub fn main() !void {
     graphviz.GraphVisualizer(glib.GateBody).printDFS(gpa, graph);
     glibopt.PreProcessor(glib.GateBody).preprocess(graph);
     sta.AAT(graph);
-    graphviz.GraphVisualizer(glib.GateBody).print(gpa, graph);
-    graph.deinit();
-
-    sta.AAT(graph);
 
     graphviz.GraphVisualizer(glib.GateBody).print(gpa, graph);
 
