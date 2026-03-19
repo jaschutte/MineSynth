@@ -8,6 +8,7 @@ const rt = @import("routing.zig");
 const nbt = @import("nbt.zig");
 const ms = @import("abstract/structures.zig");
 const sta = @import("sta.zig");
+const plc = @import("placement.zig");
 
 pub fn main() !void {
     var real_gpa: std.heap.DebugAllocator(.{}) = .init;
@@ -28,49 +29,53 @@ pub fn main() !void {
     glibopt.PreProcessor(glib.GateBody).preprocess(graph);
     sta.AAT(graph);
     graphviz.GraphVisualizer(glib.GateBody).print(gpa, graph);
+    // "The authors of [28] experimentally determined that designs with ~200 cells require
+    // 100 iterations per cell, or roughly 2 *10^4 runs per temperature step."
+    // so, for us it would be around 10^4 runs.
+    // "The annealing process starts at a high temperature, such as 4*10^6"
+    // From a first quick run, this is way too high lmao, it really doesnt find any improvements at that temperature.
+    var placement = plc.placement_annealing(graph, 1000, 1, 10000, 300).?;
+    plc.print(graph, placement, graph.gpa);
+    placement.deinit(graph.gpa);
+
     graph.deinit();
 
-    var forbidden_zone = ms.ForbiddenZone.init(gpa);
-    defer forbidden_zone.deinit();
+    // var forbidden_zone = ms.ForbiddenZone.init(gpa);
+    // defer forbidden_zone.deinit();
 
-    std.log.info(
-        "please actually compile my code {d}\n",
-        .{nl.GateType.output.inputPositionsRelative()[0]},
-    );
+    // const test_endpoints = [_][2][3]i32{
+    //     .{ .{ -20, 0, 0 }, .{ 40, 0, 0 } },
+    //     .{ .{ 10, 0, -20 }, .{ 10, 0, 20 } },
+    //     .{ .{ -20, 0, 10 }, .{ 40, 0, 10 } },
+    //     .{ .{ 30, 0, -30 }, .{ -10, 0, 30 } },
+    //     .{ .{ -40, 0, -10 }, .{ 20, 0, -10 } },
+    //     .{ .{ 0, 0, -40 }, .{ 0, 0, 40 } },
+    //     .{ .{ 50, 0, -50 }, .{ -20, 0, 20 } },
+    //     .{ .{ -50, 0, 40 }, .{ 30, 0, 50 } },
+    // };
 
-    const test_endpoints = [_][2][3]i32{
-        .{ .{ -20, 0, 0 }, .{ 40, 0, 0 } },
-        .{ .{ 10, 0, -20 }, .{ 10, 0, 20 } },
-        .{ .{ -20, 0, 10 }, .{ 40, 0, 10 } },
-        .{ .{ 30, 0, -30 }, .{ -10, 0, 30 } },
-        .{ .{ -40, 0, -10 }, .{ 20, 0, -10 } },
-        .{ .{ 0, 0, -40 }, .{ 0, 0, 40 } },
-        .{ .{ 50, 0, -50 }, .{ -20, 0, 20 } },
-        .{ .{ -50, 0, 40 }, .{ 30, 0, 50 } },
-    };
+    // var master_route = try rt.routeToUpdateForbiddenZone(gpa, test_endpoints[0][0], test_endpoints[0][1], &forbidden_zone);
+    // defer master_route.deinit(gpa);
 
-    var master_route = try rt.routeToUpdateForbiddenZone(gpa, test_endpoints[0][0], test_endpoints[0][1], &forbidden_zone);
-    defer master_route.deinit(gpa);
+    // std.log.info(
+    //     "path of length {d} and delay {d} found between {any} and {any}\n",
+    //     .{ master_route.length, master_route.delay, test_endpoints[0][0], test_endpoints[0][1] },
+    // );
 
-    std.log.info(
-        "path of length {d} and delay {d} found between {any} and {any}\n",
-        .{ master_route.length, master_route.delay, test_endpoints[0][0], test_endpoints[0][1] },
-    );
+    // for (test_endpoints[1..]) |endpoints| {
+    //     const start = endpoints[0];
+    //     const end = endpoints[1];
 
-    for (test_endpoints[1..]) |endpoints| {
-        const start = endpoints[0];
-        const end = endpoints[1];
+    //     var route = try rt.routeToUpdateForbiddenZone(gpa, start, end, &forbidden_zone);
+    //     defer route.deinit(gpa);
 
-        var route = try rt.routeToUpdateForbiddenZone(gpa, start, end, &forbidden_zone);
-        defer route.deinit(gpa);
+    //     std.log.info(
+    //         "path of length {d} and delay {d} found between {any} and {any}",
+    //         .{ route.length, route.delay, start, end },
+    //     );
 
-        std.log.info(
-            "path of length {d} and delay {d} found between {any} and {any}",
-            .{ route.length, route.delay, start, end },
-        );
+    //     try master_route.route.appendSlice(gpa, route.route.items);
+    // }
 
-        try master_route.route.appendSlice(gpa, route.route.items);
-    }
-
-    nbt.abs_block_arr_to_schem(gpa, master_route.route.items);
+    // nbt.abs_block_arr_to_schem(gpa, master_route.route.items);
 }

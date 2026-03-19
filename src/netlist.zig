@@ -78,20 +78,24 @@ pub const GateType = enum {
         };
     }
 
+    // TODO: fix multiple inputs
     // assuming the default orientation (whatever we pick for default)
-    pub inline fn inputPositionsRelative(self: GateType) switch (self) {
-        .input => [1]@Vector(3, i32),
-        .output => [1]@Vector(3, i32),
-        .inverter => [1]@Vector(3, i32),
-        .and_gate => [2]@Vector(3, i32),
-        .or_gate => [2]@Vector(3, i32),
-    } {
+    pub inline fn inputPositionsRelative(self: GateType) physical.InputPositionsRelative
+    
+    // switch (self) {
+    //     .input => [1]@Vector(3, i32),
+    //     .output => [1]@Vector(3, i32),
+    //     .inverter => [1]@Vector(3, i32),
+    //     .and_gate => [2]@Vector(3, i32),
+    //     .or_gate => [2]@Vector(3, i32),
+    // } 
+    {
         return switch (self) {
-            .input => .{@Vector(3, i32){ 0, 0, 0 }},
-            .output => .{@Vector(3, i32){ 0, 0, 0 }},
-            .inverter => .{@Vector(3, i32){ 0, 0, 3 }},
-            .and_gate => .{ @Vector(3, i32){ 0, 0, 3 }, @Vector(3, i32){ 2, 0, 3 } },
-            .or_gate => .{ @Vector(3, i32){ 0, 0, 3 }, @Vector(3, i32){ 2, 0, 3 } },
+            .input => @Vector(3, i32){ 0, 0, 0 },
+            .output => @Vector(3, i32){ 0, 0, 0 },
+            .inverter => @Vector(3, i32){ 0, 0, 3 },
+            .and_gate => @Vector(3, i32){ 0, 0, 3 }, //@Vector(3, i32){ 2, 0, 3 } },
+            .or_gate => @Vector(3, i32){ 0, 0, 3 }, //@Vector(3, i32){ 2, 0, 3 } },
         };
     }
 
