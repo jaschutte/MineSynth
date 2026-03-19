@@ -10,16 +10,16 @@ const wire_cost_weight: f32 = 1;
 const initial_spacing: u32 = 7;
 const initial_row_size: u32 = 10;
 
-const Orientation = enum {
+pub const Orientation = enum {
     North,
     East,
     South,
     West,
 };
 
-const Position = struct { x: i32, y: i32, orientation: Orientation };
+pub const Position = struct { x: i32, y: i32, orientation: Orientation };
 
-const Placement = struct {
+pub const Placement = struct {
     locations: std.AutoArrayHashMap(glib.NodeId, Position),
 
     pub fn clone(self: *const Placement, allocator: std.mem.Allocator) !*Placement {
@@ -222,7 +222,7 @@ fn initialPlacement(the_graph: *const Graph) *Placement {
 
 // computes the cost of the given placement
 fn cost(the_graph: *const Graph, the_placement: *const Placement) f32 {
-    return costWireLength(the_graph, the_placement);
+    return costWireLength(the_graph, the_placement) + costOverlap(the_graph, the_placement);
 }
 
 fn costWireLength(the_graph: *const Graph, the_placement: *const Placement) f32 {
@@ -262,14 +262,45 @@ fn costWireLength(the_graph: *const Graph, the_placement: *const Placement) f32 
 //     return 0;
 // }
 
-// fn costOverlap(the_placement: *Placement) f32 {
-//     return 0;
-// }
+fn computeOverlapArea(the_graph: *const Graph, the_placement: *const Placement, i: glib.NodeId, j: glib.NodeId) f32 {
+    if (i == j) return 0;
+
+    const sizei = the_graph.getConstNode(i).?.body.kind.size();
+    const sizej = the_graph.getConstNode(j).?.body.kind.size();
+    const ipos = the_placement.locations.get(i).?;
+    const jpos = the_placement.locations.get(j).?;
+
+    const x_overlap = @max(0, @min(ipos.x + @as(i32, @intCast(sizei.w)), jpos.x + @as(i32, @intCast(sizej.w))) -
+        @max(ipos.x, jpos.x));
+
+    const y_overlap = @max(0, @min(ipos.y + @as(i32, @intCast(sizei.h)), jpos.y + @as(i32, @intCast(sizej.h))) -
+        @max(ipos.y, jpos.y));
+
+    return @floatFromInt(x_overlap * y_overlap);
+}
+
+// computationally expensive :(
+fn costOverlap(the_graph: *const Graph, the_placement: *const Placement) f32 {
+    var sum: f32 = 0;
+
+    for (the_placement.locations.keys()) |i| {
+        for (the_placement.locations.keys()) |j| {
+            const overlap = computeOverlapArea(the_graph, the_placement, i, j);
+            sum += overlap * overlap;
+        }
+    }
+
+    return sum;
+}
 
 fn move(the_placement: *Placement, to_perturb: glib.NodeId, window_size: i32, random: std.Random) bool {
     errdefer @panic("Skill issue");
-    const new_x = random.intRangeLessThan(i32, -window_size, window_size);
-    const new_y = random.intRangeLessThan(i32, -window_size, window_size);
+    var size_to_use = window_size;
+    if (size_to_use < 5) {
+        size_to_use = 5;
+    }
+    const new_x = random.intRangeLessThan(i32, -size_to_use, size_to_use);
+    const new_y = random.intRangeLessThan(i32, -size_to_use, size_to_use);
     const orientation = the_placement.locations.get(to_perturb).?.orientation;
     try the_placement.locations.put(to_perturb, .{ .x = new_x, .y = new_y, .orientation = orientation });
     return true;
@@ -353,7 +384,7 @@ pub fn placement_annealing(the_graph: *const Graph, initial_temperature: f32, mi
             const progress = (@as(f32, @floatFromInt(i)) / @as(f32, @floatFromInt(moves_per_temperature))) * 100;
             if (moves_per_temperature > 100) {
                 // print every 10%
-                if (i % (moves_per_temperature / 1000) == 0) {
+                if (i % (moves_per_temperature / 10) == 0) {
                     std.log.info(
                         "{d}% progress of Temp: {d}, Cost: {d}",
                         .{ progress, temperature, lastCost },

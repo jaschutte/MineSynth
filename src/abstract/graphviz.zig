@@ -1,10 +1,11 @@
 const std = @import("std");
 const nl = @import("../netlist.zig");
 const glib = @import("graph.zig");
+const placement = @import("../placement.zig");
 
 // https://magjac.com/graphviz-visual-editor/
 
-pub fn printNode(string: *std.io.Writer.Allocating, node: *glib.GateGraph.Node) void {
+pub fn printNode(string: *std.io.Writer.Allocating, node: *glib.GateGraph.Node, position: ?@Vector(2, i32)) void {
     errdefer @panic("Skill issue");
 
     const symbol = node.body.symbol;
@@ -15,13 +16,17 @@ pub fn printNode(string: *std.io.Writer.Allocating, node: *glib.GateGraph.Node) 
         .input => "\"#33f747\"",
         .output => "\"#33f7f0\"",
     };
+    try string.writer.print("    {} [label=\"{s}", .{ node.id, symbol });
     var timing: f32 = 0;
     if (node.metadata == .timing) {
         timing = node.metadata.timing.actual_arrival;
-        try string.writer.print("    {} [label=\"{s}--{d}\", fillcolor={s}, tooltip=\"{}\"];\n", .{ node.id, symbol, timing, color, node.id });
-    } else {
-        try string.writer.print("    {} [label=\"{s}\", fillcolor={s}, tooltip=\"{}\"];\n", .{ node.id, symbol, color, node.id });
+        try string.writer.print("--{d}", .{timing});
     }
+    try string.writer.print("\", fillcolor={s}, tooltip=\"{}\"", .{ color, node.id });
+    if (position != null) {
+        try string.writer.print(", pos=\"{d},{d}!, pin=true\"", .{ position.?[0], position.?[1] });
+    }
+    try string.writer.print("];\n", .{});
 }
 
 pub fn printEdge(graph: *const glib.GateGraph, string: *std.io.Writer.Allocating, edge: *glib.GateGraph.Edge) void {
@@ -43,6 +48,32 @@ pub fn printEdge(graph: *const glib.GateGraph, string: *std.io.Writer.Allocating
     try string.writer.print("\", color={s}, tooltip=\"{}\"]\n", .{ color, edge.id });
 }
 
+pub fn printPlacement(gpa: std.mem.Allocator, graph: *const glib.GateGraph, the_placement: *const placement.Placement) void {
+    errdefer @panic("Skill issue");
+
+    var string = std.io.Writer.Allocating.init(gpa);
+    try string.writer.writeAll("digraph {\n");
+    try string.writer.writeAll("    layout = fdp;\n");
+    try string.writer.writeAll("    node [style=filled];\n");
+
+    for (graph.edges.values()) |*edge| {
+        printEdge(graph, &string, edge);
+    }
+
+    for (graph.nodes.values()) |*node| {
+        const pos = the_placement.locations.get(node.id) orelse {
+            std.debug.print("node {d} not placed\n", .{node.id});
+            continue;
+        };
+        printNode(&string, node, @Vector(2, i32){ pos.x, pos.y });
+    }
+
+    try string.writer.writeAll("}\n");
+
+    std.debug.print("{s}", .{string.written()});
+    string.deinit();
+}
+
 pub fn printGate(gpa: std.mem.Allocator, graph: *const glib.GateGraph) void {
     errdefer @panic("Skill issue");
 
@@ -56,7 +87,7 @@ pub fn printGate(gpa: std.mem.Allocator, graph: *const glib.GateGraph) void {
     }
 
     for (graph.nodes.values()) |*node| {
-        printNode(&string, node);
+        printNode(&string, node, null);
     }
 
     try string.writer.writeAll("}\n");
@@ -115,7 +146,7 @@ pub fn printGateDFS(gpa: std.mem.Allocator, graph: *const glib.GateGraph) void {
     }
     for (visited.keys()) |node_id| {
         const node = non_const_graph.getNode(node_id).?;
-        printNode(&string, node);
+        printNode(&string, node, null);
     }
 
     try string.writer.writeAll("}\n");

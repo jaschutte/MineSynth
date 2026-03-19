@@ -34,10 +34,13 @@ pub fn main() !void {
     // so, for us it would be around 10^4 runs.
     // "The annealing process starts at a high temperature, such as 4*10^6"
     // From a first quick run, this is way too high lmao, it really doesnt find any improvements at that temperature.
-    var placement = plc.placement_annealing(graph, 1000, 1, 10000, 300).?;
+    // around 30 seems fine
+    // "we start at a window size of twice the chip size"
+    // so around 100 for us ?
+    var placement = plc.placement_annealing(graph, 30, 1, 10000, 100).?;
     plc.print(graph, placement, graph.gpa);
+    graphviz.printPlacement(graph.gpa, graph, placement);
     placement.deinit(graph.gpa);
-
     graph.deinit();
 
     // var forbidden_zone = ms.ForbiddenZone.init(gpa);
