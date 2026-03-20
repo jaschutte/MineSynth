@@ -222,32 +222,42 @@ fn initialPlacement(the_graph: *const Graph) *Placement {
 
 // computes the cost of the given placement
 fn cost(the_graph: *const Graph, the_placement: *const Placement) f32 {
-    return costWireLength(the_graph, the_placement) + costOverlap(the_graph, the_placement);
+    return costWireLength(the_graph, the_placement); // + costOverlap(the_graph, the_placement);
 }
 
 fn costWireLength(the_graph: *const Graph, the_placement: *const Placement) f32 {
     var sum: f32 = 0;
     for (the_graph.edges.values()) |net| {
-        const pos_a = the_placement.locations.get(net.a) orelse {
+        const pos_a = the_placement.locations.getPtr(net.a) orelse {
             std.debug.print("node 'net.a' {d} not placed\n", .{net.a});
             continue;
         };
-        const pos_b = the_placement.locations.get(net.b) orelse {
+        const pos_b = the_placement.locations.getPtr(net.b) orelse {
             std.debug.print("node 'net.b' {d} not placed\n", .{net.b});
             continue;
         };
 
         const node_a = the_graph.getConstNode(net.a).?;
         const node_b = the_graph.getConstNode(net.b).?;
-        // lets just assume we always connect to the first input for now...
-        var port_a = node_a.body.kind.inputPositionsRelative();
-        var port_b = node_b.body.kind.outputPositionsRelative();
-        if (net.a_relation == .output) {
-            port_a = node_a.body.kind.outputPositionsRelative();
-            port_b = node_b.body.kind.inputPositionsRelative();
+        var output_node = node_a;
+        var input_node = node_b;
+        if (net.a_relation == .input) {
+            output_node = node_b;
+            input_node = node_a;
         }
-        const port_pos_a = getAbsolutePosition(&pos_a, port_a);
-        const port_pos_b = getAbsolutePosition(&pos_b, port_b);
+
+        const edges = the_graph.getNodeEdges(input_node.id, .input);
+        // if (edges.len == 0) continue;
+        std.debug.print("hey {d}\n", .{net.id});
+        var i: u8 = 0;
+        while (edges[i] == net.id) {
+            i += 1;
+        }
+        const port_output = output_node.body.kind.outputPositionsRelative();
+        const port_input = input_node.body.kind.inputPositionsRelative()[i].?;
+
+        const port_pos_a = getAbsolutePosition(pos_a, port_input);
+        const port_pos_b = getAbsolutePosition(pos_b, port_output);
 
         const net_width = @as(f32, @floatFromInt(@abs(port_pos_a[0] - port_pos_b[0]))); // x
         const net_height = @as(f32, @floatFromInt(@abs(port_pos_a[1] - port_pos_b[1]))); // y
@@ -267,8 +277,8 @@ fn computeOverlapArea(the_graph: *const Graph, the_placement: *const Placement, 
 
     const sizei = the_graph.getConstNode(i).?.body.kind.size();
     const sizej = the_graph.getConstNode(j).?.body.kind.size();
-    const ipos = the_placement.locations.get(i).?;
-    const jpos = the_placement.locations.get(j).?;
+    const ipos = the_placement.locations.getPtr(i).?;
+    const jpos = the_placement.locations.getPtr(j).?;
 
     const x_overlap = @max(0, @min(ipos.x + @as(i32, @intCast(sizei.w)), jpos.x + @as(i32, @intCast(sizej.w))) -
         @max(ipos.x, jpos.x));
@@ -301,7 +311,7 @@ fn move(the_placement: *Placement, to_perturb: glib.NodeId, window_size: i32, ra
     }
     const new_x = random.intRangeLessThan(i32, -size_to_use, size_to_use);
     const new_y = random.intRangeLessThan(i32, -size_to_use, size_to_use);
-    const orientation = the_placement.locations.get(to_perturb).?.orientation;
+    const orientation = the_placement.locations.getPtr(to_perturb).?.orientation;
     try the_placement.locations.put(to_perturb, .{ .x = new_x, .y = new_y, .orientation = orientation });
     return true;
 }
@@ -326,6 +336,7 @@ fn getRandomNodeID(
 // randomly perturbs the placement
 fn perturb(allocator: std.mem.Allocator, the_placement: *const Placement, random: std.Random, window_size: i32) *Placement {
     errdefer @panic("Ran out of memory lol");
+    // TODO: doing this full deep copy every iteration seems expensive
     const new_placement = try the_placement.clone(allocator);
 
     const to_perturb = getRandomNodeID(new_placement, random).?;
