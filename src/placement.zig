@@ -239,22 +239,21 @@ fn costWireLength(the_graph: *const Graph, the_placement: *const Placement) f32 
 
         const node_a = the_graph.getConstNode(net.a).?;
         const node_b = the_graph.getConstNode(net.b).?;
-        var output_node = node_a;
-        var input_node = node_b;
-        if (net.a_relation == .input) {
-            output_node = node_b;
-            input_node = node_a;
+        var from_node = node_a;
+        var to_node = node_b;
+        // inspired by graphviz.zig printedge
+        const relation = node_a.edgeRelation(net.id) orelse @panic("Invalid edge?");
+        if (relation == .input) {
+            from_node = node_b;
+            to_node = node_a;
         }
-
-        const edges = the_graph.getNodeEdges(input_node.id, .input);
-        // if (edges.len == 0) continue;
-        std.debug.print("hey {d}\n", .{net.id});
+        const edges = the_graph.getNodeEdges(to_node.id, .input);
         var i: u8 = 0;
-        while (edges[i] == net.id) {
+        while (edges[i] != net.id) {
             i += 1;
         }
-        const port_output = output_node.body.kind.outputPositionsRelative();
-        const port_input = input_node.body.kind.inputPositionsRelative()[i].?;
+        const port_output = from_node.body.kind.outputPositionsRelative();
+        const port_input = to_node.body.kind.inputPositionsRelative()[i].?;
 
         const port_pos_a = getAbsolutePosition(pos_a, port_input);
         const port_pos_b = getAbsolutePosition(pos_b, port_output);
