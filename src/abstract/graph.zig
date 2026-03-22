@@ -306,7 +306,7 @@ pub fn Graph(comptime NodeBody: type) type {
         // returns list of node id's in topological order.
         // output nodes are at the beginning of the array, input nodes are last.
         // so by iterating from the end of the array to the beginning we go from input to output.
-        pub fn topologicalSort(self: *Self) []NodeId {
+        pub fn topologicalSort(self: *const Self) []NodeId {
             errdefer @panic("Ran out of memory during topological sort");
             var sorted = std.ArrayList(NodeId).empty;
 
@@ -334,7 +334,7 @@ pub fn Graph(comptime NodeBody: type) type {
         // returns whether to continue search
         // returns false when a cycle is found
         // marks the node according to the depth first search algorithm
-        fn depthFirstSearchVisit(self: *Self, node_id: NodeId, to_mark: *std.ArrayList(NodeId), sorted: *std.ArrayList(NodeId), marks: *std.AutoHashMap(NodeId, MarkState)) bool {
+        fn depthFirstSearchVisit(self: *const Self, node_id: NodeId, to_mark: *std.ArrayList(NodeId), sorted: *std.ArrayList(NodeId), marks: *std.AutoHashMap(NodeId, MarkState)) bool {
             errdefer @panic("Ran out of memory during topological sort");
 
             const m = marks.get(node_id) orelse {

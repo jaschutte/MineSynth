@@ -226,6 +226,31 @@ fn initialPlacement(the_graph: *const Graph) *Placement {
     return placement;
 }
 
+// TODO: fix in-output positions to edges of board
+// research showed no dependence between intial placement and final result, so lets test ourselves by using this topological one lol
+fn topologicalInitialPlacement(the_graph: *const Graph) *Placement {
+    errdefer @panic("Ran out of memory lol");
+    const placement = try the_graph.gpa.create(Placement);
+    placement.init(the_graph.gpa);
+
+    var x: i32 = 0;
+    var y: i32 = 0;
+
+    const toposort = the_graph.topologicalSort();
+    defer the_graph.gpa.free(toposort);
+
+    for (toposort) |node_id| {
+        try place(placement, the_graph.getConstNode(node_id).?, x, y);
+        std.debug.assert(placement.locations.count() > 0);
+        x = x + initial_spacing;
+        if (x >= initial_row_size * initial_spacing) {
+            x = 0;
+            y = y + initial_spacing;
+        }
+    }
+    return placement;
+}
+
 // computes the cost of the given placement
 fn cost(the_graph: *const Graph, the_placement: *const Placement) f32 {
     return costWireLength(the_graph, the_placement); // + costOverlap(the_graph, the_placement);
