@@ -118,6 +118,17 @@ pub fn Graph(comptime NodeBody: type) type {
                 else => @compileError("NodeBody does not support retrieving the gate"),
             };
 
+            pub fn relatedNodes(self: *const Node, relation: Edge.Relation) []NodeId {
+                const graph = self.owner.?;
+                // Abusing the fact EdgeId and NodeIds are both 64 bits
+                var edges = graph.getNodeEdges(self.id, relation);
+                for (0.., edges) |index, edge_id| {
+                    const opposite_id = graph.getEdge(edge_id).?.oppositeNode(self.id).?;
+                    edges[index] = opposite_id;
+                }
+                return edges;
+            }
+
             pub const getSize = switch (NodeBody) {
                 GateBody => struct {
                     fn size(self: *const Node) physical.Size {
@@ -138,8 +149,6 @@ pub fn Graph(comptime NodeBody: type) type {
         };
 
         pub const Edge = struct {
-            const Self = @This();
-
             pub const Body = switch (NodeBody) {
                 GateBody => nl.NetPtr,
                 else => void,
@@ -159,6 +168,16 @@ pub fn Graph(comptime NodeBody: type) type {
             b_relation: Relation,
             // Only null when the node is detached from any graph
             owner: ?*Graph(NodeBody),
+
+            pub fn oppositeNode(self: *const Edge, this: NodeId) ?NodeId {
+                if (self.a == this) {
+                    return self.b;
+                } else if (self.b == this) {
+                    return self.a;
+                } else {
+                    return null;
+                }
+            }
         };
 
         gpa: std.mem.Allocator,
