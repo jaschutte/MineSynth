@@ -9,6 +9,10 @@ const y_weight: f32 = 2;
 const wire_cost_weight: f32 = 1;
 const initial_spacing: u32 = 7;
 const initial_row_size: u32 = 10;
+const grid_divisor: u8 = 4; // 4*4 grid segments
+const chipsize: u32 = 300;
+const postype = i32;
+const use_accurate_input_pos = false;
 
 pub const Orientation = enum {
     North,
@@ -17,20 +21,22 @@ pub const Orientation = enum {
     West,
 };
 
-pub const Position = struct { x: i32, y: i32, orientation: Orientation };
+pub const Position = struct { x: postype, y: postype, orientation: Orientation };
 
 pub const Placement = struct {
     locations: std.AutoArrayHashMap(glib.NodeId, Position),
+    occupancy_grid: [chipsize][chipsize]bool,
 
     pub fn clone(self: *const Placement, allocator: std.mem.Allocator) !*Placement {
         var placement = try allocator.create(Placement);
-        placement.init(allocator);
         placement.locations = try self.locations.clone();
+        placement.occupancy_grid = self.occupancy_grid;
         return placement;
     }
 
     pub fn init(self: *Placement, allocator: std.mem.Allocator) void {
         self.locations = std.AutoArrayHashMap(glib.NodeId, Position).init(allocator);
+        self.occupancy_grid = std.mem.zeroes([chipsize][chipsize]bool);
     }
 
     pub fn deinit(self: *Placement, allocator: std.mem.Allocator) void {
@@ -210,6 +216,7 @@ fn initialPlacement(the_graph: *const Graph) *Placement {
 
     for (the_graph.nodes.keys()) |node_id| {
         try placement.locations.put(node_id, .{ .orientation = .North, .x = x, .y = y });
+        place(placement, the_graph.getConstNode(node_id).?, x, y);
         std.debug.assert(placement.locations.count() > 0);
         x = x + initial_spacing;
         if (x >= initial_row_size * initial_spacing) {
@@ -237,20 +244,23 @@ fn costWireLength(the_graph: *const Graph, the_placement: *const Placement) f32 
             continue;
         };
 
-        const node_a = the_graph.getConstNode(net.a).?;
-        const node_b = the_graph.getConstNode(net.b).?;
-        var from_node = node_a;
-        var to_node = node_b;
-        // inspired by graphviz.zig printedge
-        const relation = node_a.edgeRelation(net.id) orelse @panic("Invalid edge?");
-        if (relation == .input) {
-            from_node = node_b;
-            to_node = node_a;
+        var from_node_id = net.a;
+        var to_node_id = net.b;
+        if (net.a_relation == .input) {
+            from_node_id = net.b;
+            to_node_id = net.a;
         }
-        const edges = the_graph.getNodeEdges(to_node.id, .input);
+        const from_node = the_graph.getConstNode(from_node_id).?;
+        const to_node = the_graph.getConstNode(to_node_id).?;
+
         var i: u8 = 0;
-        while (edges[i] != net.id) {
-            i += 1;
+        if (use_accurate_input_pos) {
+            // made compile time optional
+            const edges = the_graph.getNodeEdges(to_node_id, .input);
+
+            while (edges[i] != net.id) {
+                i += 1;
+            }
         }
         const port_output = from_node.body.kind.outputPositionsRelative();
         const port_input = to_node.body.kind.inputPositionsRelative()[i].?;
@@ -302,17 +312,73 @@ fn costOverlap(the_graph: *const Graph, the_placement: *const Placement) f32 {
     return sum;
 }
 
-fn move(the_placement: *Placement, to_perturb: glib.NodeId, window_size: i32, random: std.Random) bool {
+fn unsignedCast(value: postype) u64 {
+    const padding = @divFloor(chipsize, 2);
+    return @intCast(@as(i64, value) + @as(i64, padding));
+}
+
+fn place(the_placement: *Placement, to_place: *const glib.GateGraph.Node, new_x: postype, new_y: postype) void {
+    const rect = to_place.body.kind.size();
+    const unsigned_new_x = unsignedCast(new_x);
+    const unsigned_new_y = unsignedCast(new_y);
+
+    for (unsigned_new_x..unsigned_new_x + rect.w) |x| {
+        for (unsigned_new_y..unsigned_new_y + rect.h) |y| {
+            the_placement.occupancy_grid[x][y] = true;
+        }
+    }
+}
+
+// hopefully fast
+fn tryMove(the_placement: *Placement, to_place: *const glib.GateGraph.Node, last_pos: *const Position, new_x: postype, new_y: postype) bool {
+    // const node = the_graph.getConstNode(to_place);
+    const rect = to_place.body.kind.size();
+
+    const unsigned_new_x = unsignedCast(new_x);
+    const unsigned_new_y = unsignedCast(new_y);
+
+    for (unsigned_new_x..unsigned_new_x + rect.w) |x| {
+        for (unsigned_new_y..unsigned_new_y + rect.h) |y| {
+            if (the_placement.occupancy_grid[x][y] == true) {
+                return false;
+            }
+        }
+    }
+
+    const unsigned_last_x = unsignedCast(last_pos.x);
+    const unsigned_last_y = unsignedCast(last_pos.y);
+
+    // No collision, so move rectangle
+    for (unsigned_last_x..unsigned_last_x + rect.w) |x| {
+        for (unsigned_last_y..unsigned_last_y + rect.h) |y| {
+            the_placement.occupancy_grid[x][y] = false;
+        }
+    }
+
+    for (unsigned_new_x..unsigned_new_x + rect.w) |x| {
+        for (unsigned_new_y..unsigned_new_y + rect.h) |y| {
+            the_placement.occupancy_grid[x][y] = true;
+        }
+    }
+    return true;
+}
+
+fn move(the_graph: *const Graph, the_placement: *Placement, to_perturb: glib.NodeId, window_size: i32, random: std.Random, min_spacing: u8) bool {
     errdefer @panic("Skill issue");
     var size_to_use = window_size;
-    if (size_to_use < 5) {
-        size_to_use = 5;
+    if (size_to_use < min_spacing) {
+        size_to_use = min_spacing;
     }
-    const new_x = random.intRangeLessThan(i32, -size_to_use, size_to_use);
-    const new_y = random.intRangeLessThan(i32, -size_to_use, size_to_use);
-    const orientation = the_placement.locations.getPtr(to_perturb).?.orientation;
-    try the_placement.locations.put(to_perturb, .{ .x = new_x, .y = new_y, .orientation = orientation });
-    return true;
+    size_to_use = @divFloor(size_to_use, min_spacing);
+    const new_x = random.intRangeLessThan(postype, -size_to_use, size_to_use) * min_spacing;
+    const new_y = random.intRangeLessThan(postype, -size_to_use, size_to_use) * min_spacing;
+    const pos = the_placement.locations.getPtr(to_perturb).?;
+    const orientation = pos.orientation;
+    const result = tryMove(the_placement, the_graph.getConstNode(to_perturb).?, pos, new_x, new_y);
+    if (result) {
+        try the_placement.locations.put(to_perturb, .{ .x = new_x, .y = new_y, .orientation = orientation });
+    }
+    return result;
 }
 
 // fn swap(the_placement: *Placement) bool {}
@@ -333,13 +399,13 @@ fn getRandomNodeID(
 }
 
 // randomly perturbs the placement
-fn perturb(allocator: std.mem.Allocator, the_placement: *const Placement, random: std.Random, window_size: i32) *Placement {
+fn perturb(the_graph: *const Graph, the_placement: *const Placement, random: std.Random, window_size: i32, min_spacing: u8) *Placement {
     errdefer @panic("Ran out of memory lol");
     // TODO: doing this full deep copy every iteration seems expensive
-    const new_placement = try the_placement.clone(allocator);
+    const new_placement = try the_placement.clone(the_graph.gpa);
 
     const to_perturb = getRandomNodeID(new_placement, random).?;
-    _ = move(new_placement, to_perturb, window_size, random);
+    _ = move(the_graph, new_placement, to_perturb, window_size, random, min_spacing);
     // TODO: complete perturbation of the new placement
     return new_placement;
 }
@@ -368,7 +434,7 @@ pub fn placement_annealing(the_graph: *const Graph, initial_temperature: f32, mi
     while (temperature > minimum_temperature) {
         var lastCost: f32 = std.math.floatMax(f32);
         for (0..moves_per_temperature) |i| {
-            const new_placement = perturb(the_graph.gpa, current_placement, rand, @as(i32, @intFromFloat(current_window_size)));
+            const new_placement = perturb(the_graph, current_placement, rand, @as(i32, @intFromFloat(current_window_size)), 2);
             // std.debug.print("node 3 is placed here: {d}, {d}\n", .{ current_placement.locations.get(3).?.x, current_placement.locations.get(3).?.y });
             const current_cost = cost(the_graph, current_placement);
             const new_cost = cost(the_graph, new_placement);

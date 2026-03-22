@@ -37,7 +37,7 @@ pub fn main() !void {
     // around 30 seems fine
     // "we start at a window size of twice the chip size"
     // so around 100 for us ?
-    var placement = plc.placement_annealing(graph, 100, 1, 50000, 100).?;
+    var placement = plc.placement_annealing(graph, 100, 1, 1000, 100).?;
     plc.print(graph, placement, graph.gpa);
     graphviz.printPlacement(graph.gpa, graph, placement);
     placement.deinit(graph.gpa);
