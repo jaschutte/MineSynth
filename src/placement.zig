@@ -7,9 +7,9 @@ const physical = @import("physical.zig");
 const x_weight: f32 = 1;
 const y_weight: f32 = 2;
 const wire_cost_weight: f32 = 1;
-const initial_spacing: u32 = 7;
+const initial_spacing: u32 = 8;
 const initial_row_size: u32 = 10;
-const grid_divisor: u8 = 4; // 4*4 grid segments
+const grid_divisor: u8 = 2; // 4*4 grid segments
 const chipsize: u32 = 300;
 const postype = i32;
 const use_accurate_input_pos = false;
@@ -25,7 +25,7 @@ pub const Position = struct { x: postype, y: postype, orientation: Orientation }
 
 pub const Placement = struct {
     locations: std.AutoArrayHashMap(glib.NodeId, Position),
-    occupancy_grid: [chipsize][chipsize]bool,
+    occupancy_grid: [chipsize][chipsize]glib.NodeId,
 
     pub fn clone(self: *const Placement, allocator: std.mem.Allocator) !*Placement {
         var placement = try allocator.create(Placement);
@@ -36,7 +36,7 @@ pub const Placement = struct {
 
     pub fn init(self: *Placement, allocator: std.mem.Allocator) void {
         self.locations = std.AutoArrayHashMap(glib.NodeId, Position).init(allocator);
-        self.occupancy_grid = std.mem.zeroes([chipsize][chipsize]bool);
+        self.occupancy_grid = std.mem.zeroes([chipsize][chipsize]glib.NodeId);
     }
 
     pub fn deinit(self: *Placement, allocator: std.mem.Allocator) void {
@@ -215,8 +215,7 @@ fn initialPlacement(the_graph: *const Graph) *Placement {
     var y: i32 = 0;
 
     for (the_graph.nodes.keys()) |node_id| {
-        try placement.locations.put(node_id, .{ .orientation = .North, .x = x, .y = y });
-        place(placement, the_graph.getConstNode(node_id).?, x, y);
+        try place(placement, the_graph.getConstNode(node_id).?, x, y);
         std.debug.assert(placement.locations.count() > 0);
         x = x + initial_spacing;
         if (x >= initial_row_size * initial_spacing) {
@@ -277,10 +276,6 @@ fn costWireLength(the_graph: *const Graph, the_placement: *const Placement) f32 
     return wire_cost_weight * sum;
 }
 
-// fn costRowLength(the_placement: *Placement) f32 {
-//     return 0;
-// }
-
 fn computeOverlapArea(the_graph: *const Graph, the_placement: *const Placement, i: glib.NodeId, j: glib.NodeId) f32 {
     if (i == j) return 0;
 
@@ -299,6 +294,7 @@ fn computeOverlapArea(the_graph: *const Graph, the_placement: *const Placement, 
 }
 
 // computationally expensive :(
+// but unused, since movements do not cause overlaps
 fn costOverlap(the_graph: *const Graph, the_placement: *const Placement) f32 {
     var sum: f32 = 0;
 
@@ -317,20 +313,26 @@ fn unsignedCast(value: postype) u64 {
     return @intCast(@as(i64, value) + @as(i64, padding));
 }
 
-fn place(the_placement: *Placement, to_place: *const glib.GateGraph.Node, new_x: postype, new_y: postype) void {
+// places node at position without checking for collisions, used for initial placement.
+fn place(the_placement: *Placement, to_place: *const glib.GateGraph.Node, new_x: postype, new_y: postype) !void {
     const rect = to_place.body.kind.size();
     const unsigned_new_x = unsignedCast(new_x);
     const unsigned_new_y = unsignedCast(new_y);
 
     for (unsigned_new_x..unsigned_new_x + rect.w) |x| {
         for (unsigned_new_y..unsigned_new_y + rect.h) |y| {
-            the_placement.occupancy_grid[x][y] = true;
+            the_placement.occupancy_grid[x][y] = to_place.id;
         }
     }
+
+    try the_placement.locations.put(to_place.id, .{ .orientation = .North, .x = new_x, .y = new_y });
 }
 
-// hopefully fast
-fn tryMove(the_placement: *Placement, to_place: *const glib.GateGraph.Node, last_pos: *const Position, new_x: postype, new_y: postype) bool {
+// quite fast :)
+// tries to move a node to a new position, checking for collisions.
+// Returns 0 if move was succesful and without collisions
+// Returns the nodeid of the collision.
+fn tryMove(the_placement: *Placement, to_place: *const glib.GateGraph.Node, last_pos: *const Position, new_x: postype, new_y: postype) glib.NodeId {
     // const node = the_graph.getConstNode(to_place);
     const rect = to_place.body.kind.size();
 
@@ -339,8 +341,8 @@ fn tryMove(the_placement: *Placement, to_place: *const glib.GateGraph.Node, last
 
     for (unsigned_new_x..unsigned_new_x + rect.w) |x| {
         for (unsigned_new_y..unsigned_new_y + rect.h) |y| {
-            if (the_placement.occupancy_grid[x][y] == true) {
-                return false;
+            if (the_placement.occupancy_grid[x][y] != 0) {
+                return the_placement.occupancy_grid[x][y];
             }
         }
     }
@@ -351,19 +353,23 @@ fn tryMove(the_placement: *Placement, to_place: *const glib.GateGraph.Node, last
     // No collision, so move rectangle
     for (unsigned_last_x..unsigned_last_x + rect.w) |x| {
         for (unsigned_last_y..unsigned_last_y + rect.h) |y| {
-            the_placement.occupancy_grid[x][y] = false;
+            the_placement.occupancy_grid[x][y] = 0;
         }
     }
 
     for (unsigned_new_x..unsigned_new_x + rect.w) |x| {
         for (unsigned_new_y..unsigned_new_y + rect.h) |y| {
-            the_placement.occupancy_grid[x][y] = true;
+            the_placement.occupancy_grid[x][y] = to_place.id;
         }
     }
-    return true;
+    return 0;
 }
 
-fn move(the_graph: *const Graph, the_placement: *Placement, to_perturb: glib.NodeId, window_size: i32, random: std.Random, min_spacing: u8) bool {
+// picks a new random position for a given node.
+// the new position will never be further away from the original than window_size
+// Returns 0 if move was succesful and without collisions
+// Returns the nodeid of the collision.
+fn move(the_graph: *const Graph, the_placement: *Placement, to_perturb: glib.NodeId, window_size: i32, random: std.Random, min_spacing: u8) glib.NodeId {
     errdefer @panic("Skill issue");
     var size_to_use = window_size;
     if (size_to_use < min_spacing) {
@@ -375,16 +381,84 @@ fn move(the_graph: *const Graph, the_placement: *Placement, to_perturb: glib.Nod
     const pos = the_placement.locations.getPtr(to_perturb).?;
     const orientation = pos.orientation;
     const result = tryMove(the_placement, the_graph.getConstNode(to_perturb).?, pos, new_x, new_y);
-    if (result) {
+    if (result == 0) { // if movement was succesful
         try the_placement.locations.put(to_perturb, .{ .x = new_x, .y = new_y, .orientation = orientation });
     }
     return result;
 }
 
-// fn swap(the_placement: *Placement) bool {}
+// attempts to swap the 2 nodes given
+// if both fit at the new locations without collisions, it performs the swap and returns true.
+fn swap(the_graph: *const Graph, the_placement: *Placement, node_a_id: glib.NodeId, node_b_id: glib.NodeId) bool {
+    errdefer @panic("Skill issue");
+    const node_a = the_graph.getConstNode(node_a_id).?;
+    const node_b = the_graph.getConstNode(node_b_id).?;
+    const rect_a = node_a.body.kind.size();
+    const rect_b = node_b.body.kind.size();
+    const pos_a = the_placement.locations.getPtr(node_a_id).?;
+    const pos_b = the_placement.locations.getPtr(node_b_id).?;
+
+    const unsigned_new_x_a = unsignedCast(pos_b.x);
+    const unsigned_new_y_a = unsignedCast(pos_b.y);
+
+    // check whether a fits at b position
+    for (unsigned_new_x_a..unsigned_new_x_a + rect_a.w) |x| {
+        for (unsigned_new_y_a..unsigned_new_y_a + rect_a.h) |y| {
+            if (the_placement.occupancy_grid[x][y] != 0 and the_placement.occupancy_grid[x][y] != node_b_id) {
+                return false;
+            }
+        }
+    }
+
+    const unsigned_new_x_b = unsignedCast(pos_a.x);
+    const unsigned_new_y_b = unsignedCast(pos_a.y);
+
+    // check whether b fits at a position
+    for (unsigned_new_x_b..unsigned_new_x_b + rect_b.w) |x| {
+        for (unsigned_new_y_b..unsigned_new_y_b + rect_b.h) |y| {
+            if (the_placement.occupancy_grid[x][y] != 0 and the_placement.occupancy_grid[x][y] != node_a_id) {
+                return false;
+            }
+        }
+    }
+
+    // both fit, so proceed the swap:
+    // set both old positions to 0:
+    for (unsigned_new_x_b..unsigned_new_x_b + rect_a.w) |x| {
+        for (unsigned_new_y_b..unsigned_new_y_b + rect_a.h) |y| {
+            the_placement.occupancy_grid[x][y] = 0;
+        }
+    }
+    for (unsigned_new_x_a..unsigned_new_x_a + rect_b.w) |x| {
+        for (unsigned_new_y_a..unsigned_new_y_a + rect_b.h) |y| {
+            the_placement.occupancy_grid[x][y] = 0;
+        }
+    }
+
+    // set a to b position
+    for (unsigned_new_x_a..unsigned_new_x_a + rect_a.w) |x| {
+        for (unsigned_new_y_a..unsigned_new_y_a + rect_a.h) |y| {
+            the_placement.occupancy_grid[x][y] = node_a_id;
+        }
+    }
+
+    // set b to a position
+    for (unsigned_new_x_b..unsigned_new_x_b + rect_b.w) |x| {
+        for (unsigned_new_y_b..unsigned_new_y_b + rect_b.h) |y| {
+            the_placement.occupancy_grid[x][y] = node_b_id;
+        }
+    }
+    const new_x_b = pos_a.x;
+    const new_y_b = pos_a.y;
+
+    try the_placement.locations.put(node_a_id, .{ .x = pos_b.x, .y = pos_b.y, .orientation = pos_a.orientation });
+    try the_placement.locations.put(node_b_id, .{ .x = new_x_b, .y = new_y_b, .orientation = pos_b.orientation });
+
+    return true;
+}
 
 // fn mirror(the_placement: *Placement) bool {
-//     // TODO: swap input connection of a and b, after we figure out how lol
+//     // TODO: swap input connection of a and b, only useful if use accurate input positions are used to calculate wirelength cost
 // }
 
 fn getRandomNodeID(
@@ -399,19 +473,22 @@ fn getRandomNodeID(
 }
 
 // randomly perturbs the placement
-fn perturb(the_graph: *const Graph, the_placement: *const Placement, random: std.Random, window_size: i32, min_spacing: u8) *Placement {
+fn perturb(the_graph: *const Graph, the_placement: *Placement, random: std.Random, perturbation_amount: u32, window_size: i32, min_spacing: u8) void {
     errdefer @panic("Ran out of memory lol");
-    // TODO: doing this full deep copy every iteration seems expensive
-    const new_placement = try the_placement.clone(the_graph.gpa);
-
-    const to_perturb = getRandomNodeID(new_placement, random).?;
-    _ = move(the_graph, new_placement, to_perturb, window_size, random, min_spacing);
-    // TODO: complete perturbation of the new placement
-    return new_placement;
+    for (0..perturbation_amount) |_| {
+        const to_perturb = getRandomNodeID(the_placement, random).?;
+        const result = move(the_graph, the_placement, to_perturb, window_size, random, min_spacing);
+        if (result != 0) {
+            _ = swap(the_graph, the_placement, to_perturb, result);
+        }
+        // TODO: add mirror or other perturbations
+    }
 }
 
 // assigns a position to each cell in the graph, using the annealing placement algorithm.
-pub fn placement_annealing(the_graph: *const Graph, initial_temperature: f32, minimum_temperature: f32, moves_per_temperature: u32, initial_window_size: f32) ?*Placement {
+pub fn placement_annealing(the_graph: *const Graph, initial_temperature: f32, minimum_temperature: f32, moves_per_temperature: u32, initial_window_size: f32, perturbations_amount: u32) ?*Placement {
+    errdefer @panic("Skill issue");
+
     var current_placement = initialPlacement(the_graph);
     print(the_graph, current_placement, the_graph.gpa);
     var temperature = initial_temperature;
@@ -430,11 +507,14 @@ pub fn placement_annealing(the_graph: *const Graph, initial_temperature: f32, mi
     // should be a lower value at the start and end of the simulation, and a higher value in the middle, during refining.
     // it is constant for now.
     const alpha = 0.95;
+    const actual_moves_per_temperature = @divFloor(moves_per_temperature, perturbations_amount);
 
     while (temperature > minimum_temperature) {
         var lastCost: f32 = std.math.floatMax(f32);
-        for (0..moves_per_temperature) |i| {
-            const new_placement = perturb(the_graph, current_placement, rand, @as(i32, @intFromFloat(current_window_size)), 2);
+        for (0..actual_moves_per_temperature) |i| {
+            var new_placement = try current_placement.clone(the_graph.gpa);
+
+            perturb(the_graph, new_placement, rand, 2, @as(i32, @intFromFloat(current_window_size)), grid_divisor);
             // std.debug.print("node 3 is placed here: {d}, {d}\n", .{ current_placement.locations.get(3).?.x, current_placement.locations.get(3).?.y });
             const current_cost = cost(the_graph, current_placement);
             const new_cost = cost(the_graph, new_placement);
@@ -457,10 +537,10 @@ pub fn placement_annealing(the_graph: *const Graph, initial_temperature: f32, mi
                     lastCost = current_cost;
                 }
             }
-            const progress = (@as(f32, @floatFromInt(i)) / @as(f32, @floatFromInt(moves_per_temperature))) * 100;
-            if (moves_per_temperature > 100) {
+            const progress = (@as(f32, @floatFromInt(i)) / @as(f32, @floatFromInt(actual_moves_per_temperature))) * 100;
+            if (actual_moves_per_temperature > 100) {
                 // print every 10%
-                if (i % (moves_per_temperature / 10) == 0) {
+                if (i % (actual_moves_per_temperature / 10) == 0) {
                     std.log.info(
                         "{d}% progress of Temp: {d}, Cost: {d}",
                         .{ progress, temperature, lastCost },
@@ -472,8 +552,8 @@ pub fn placement_annealing(the_graph: *const Graph, initial_temperature: f32, mi
         print(the_graph, current_placement, the_graph.gpa);
 
         std.log.info(
-            "Cost: {d}, Temp: {d}\n",
-            .{ lastCost, temperature },
+            "Cost: {d}, Temp: {d}, windowsize: {d}\n",
+            .{ lastCost, temperature, current_window_size },
         );
         // compute wnext=wcurr*(log(tnext)/log(tcurr)):
         current_window_size = current_window_size * (std.math.log10(temperature * alpha) / std.math.log10(temperature));
