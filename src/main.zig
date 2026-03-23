@@ -29,16 +29,7 @@ pub fn main() !void {
     glibopt.PreProcessor(glib.GateBody).preprocess(graph);
     sta.AAT(graph);
     graphviz.GraphVisualizer(glib.GateBody).print(gpa, graph);
-    // - "The authors of [28] experimentally determined that designs with ~200 cells require
-    // 100 iterations per cell, or roughly 2 *10^4 runs per temperature step."
-    // so, for us it would be around 10^4 runs.
-    // - "The annealing process starts at a high temperature, such as 4*10^6"
-    // From a first quick run, this is way too high lmao, it really doesnt find any improvements at that temperature.
-    // around 30 seems fine
-    // - "we start at a window size of twice the chip size"
-    // since chip bounds are currently not taken into acount, we pick 100 for now
-    // - perturbations amount = 1 causes the cost to decrease way more effectively as temp decreases, although runtime increases
-    var placement = plc.placement_annealing(graph, 100, 1, 10000, 50, 1).?;
+    var placement = plc.placement_annealing(graph, .{}).?;
     plc.print(graph, placement, graph.gpa);
     graphviz.printPlacement(graph.gpa, graph, placement);
     placement.deinit(graph.gpa);

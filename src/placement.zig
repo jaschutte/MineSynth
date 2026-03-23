@@ -3,16 +3,35 @@ const glib = @import("abstract/graph.zig");
 const Graph = glib.GateGraph;
 const physical = @import("physical.zig");
 
-// prioritize usage of horizontal wiring by punishing large y deviations more
-const x_weight: f32 = 1;
-const y_weight: f32 = 2;
-const wire_cost_weight: f32 = 1;
-const initial_spacing: u32 = 8;
-const initial_row_size: u32 = 10;
-const grid_divisor: u8 = 2; // 4*4 grid segments
-const chipsize: u32 = 300;
 const postype = i32;
 const use_accurate_input_pos = false;
+const max_chipsize: u32 = 300;
+
+pub const AnnealingConfig = struct {
+    // - "The annealing process starts at a high temperature, such as 4*10^6"
+    // From a first quick run, this is way too high lmao, it really doesnt find any improvements at that temperature.
+    // around 30 seems fine
+    initial_temperature: f32 = 30,
+    minimum_temperature: f32 = 1,
+    // - "The authors of [28] experimentally determined that designs with ~200 cells require
+    // 100 iterations per cell, or roughly 2 *10^4 runs per temperature step."
+    // so, for us it would be around 10^4 runs.
+    moves_per_temperature: u32 = 10000,
+    // - "we start at a window size of twice the chip size"
+    // since chip bounds are currently not taken into acount, we pick 100 for now
+    initial_window_size: f32 = 100,
+    // - perturbations amount = 1 causes the cost to decrease way more effectively as temp decreases, although runtime increases
+    perturbations_amount: u32 = 1,
+    // we could prioritize usage of horizontal wiring by punishing large y deviations more
+    x_weight: f32 = 1,
+    y_weight: f32 = 1,
+    wire_cost_weight: f32 = 1,
+    // initial placement is completely independent from final result
+    initial_spacing: u32 = 8,
+    initial_row_size: u32 = 10,
+    // 2*2 grid segments
+    grid_divisor: u8 = 2,
+};
 
 pub const Orientation = enum {
     North,
@@ -25,7 +44,7 @@ pub const Position = struct { x: postype, y: postype, orientation: Orientation }
 
 pub const Placement = struct {
     locations: std.AutoArrayHashMap(glib.NodeId, Position),
-    occupancy_grid: [chipsize][chipsize]glib.NodeId,
+    occupancy_grid: [max_chipsize][max_chipsize]glib.NodeId,
 
     pub fn clone(self: *const Placement, allocator: std.mem.Allocator) !*Placement {
         var placement = try allocator.create(Placement);
@@ -36,7 +55,7 @@ pub const Placement = struct {
 
     pub fn init(self: *Placement, allocator: std.mem.Allocator) void {
         self.locations = std.AutoArrayHashMap(glib.NodeId, Position).init(allocator);
-        self.occupancy_grid = std.mem.zeroes([chipsize][chipsize]glib.NodeId);
+        self.occupancy_grid = std.mem.zeroes([max_chipsize][max_chipsize]glib.NodeId);
     }
 
     pub fn deinit(self: *Placement, allocator: std.mem.Allocator) void {
@@ -206,7 +225,7 @@ fn getAbsolutePosition(position: *const Position, port: @Vector(3, i32)) @Vector
 
 // TODO: fix in-output positions to edges of board
 // research showed no dependence between intial placement and final result, so lets do it computationally efficiently
-fn initialPlacement(the_graph: *const Graph) *Placement {
+fn initialPlacement(the_graph: *const Graph, initial_spacing: i32, initial_row_size: i32) *Placement {
     errdefer @panic("Ran out of memory lol");
     const placement = try the_graph.gpa.create(Placement);
     placement.init(the_graph.gpa);
@@ -228,7 +247,7 @@ fn initialPlacement(the_graph: *const Graph) *Placement {
 
 // TODO: fix in-output positions to edges of board
 // research showed no dependence between intial placement and final result, so lets test ourselves by using this topological one lol
-fn topologicalInitialPlacement(the_graph: *const Graph) *Placement {
+fn topologicalInitialPlacement(the_graph: *const Graph, initial_spacing: u32, initial_row_size: u32) *Placement {
     errdefer @panic("Ran out of memory lol");
     const placement = try the_graph.gpa.create(Placement);
     placement.init(the_graph.gpa);
@@ -252,11 +271,11 @@ fn topologicalInitialPlacement(the_graph: *const Graph) *Placement {
 }
 
 // computes the cost of the given placement
-fn cost(the_graph: *const Graph, the_placement: *const Placement) f32 {
-    return costWireLength(the_graph, the_placement); // + costOverlap(the_graph, the_placement);
+fn cost(the_graph: *const Graph, the_placement: *const Placement, x_weight: f32, y_weight: f32, wire_cost_weight: f32) f32 {
+    return costWireLength(the_graph, the_placement, x_weight, y_weight, wire_cost_weight); // + costOverlap(the_graph, the_placement);
 }
 
-fn costWireLength(the_graph: *const Graph, the_placement: *const Placement) f32 {
+fn costWireLength(the_graph: *const Graph, the_placement: *const Placement, x_weight: f32, y_weight: f32, wire_cost_weight: f32) f32 {
     var sum: f32 = 0;
     for (the_graph.edges.values()) |net| {
         const pos_a = the_placement.locations.getPtr(net.a) orelse {
@@ -301,6 +320,7 @@ fn costWireLength(the_graph: *const Graph, the_placement: *const Placement) f32 
     return wire_cost_weight * sum;
 }
 
+// depricated, movements now do not cause overlap at all
 fn computeOverlapArea(the_graph: *const Graph, the_placement: *const Placement, i: glib.NodeId, j: glib.NodeId) f32 {
     if (i == j) return 0;
 
@@ -334,7 +354,7 @@ fn costOverlap(the_graph: *const Graph, the_placement: *const Placement) f32 {
 }
 
 fn unsignedCast(value: postype) u64 {
-    const padding = @divFloor(chipsize, 2);
+    const padding = @divFloor(max_chipsize, 2);
     return @intCast(@as(i64, value) + @as(i64, padding));
 }
 
@@ -511,13 +531,32 @@ fn perturb(the_graph: *const Graph, the_placement: *Placement, random: std.Rando
 }
 
 // assigns a position to each cell in the graph, using the annealing placement algorithm.
-pub fn placement_annealing(the_graph: *const Graph, initial_temperature: f32, minimum_temperature: f32, moves_per_temperature: u32, initial_window_size: f32, perturbations_amount: u32) ?*Placement {
+// pseudo code:
+
+// Simulated Annealing Algorithm for Placement
+// Input: set of all cells V
+// Output: placement P
+// 1 T=T0
+// 2 P=PLACE(V)
+// 3 while(T>Tmin)
+// 4 while(!STOP())
+// new_P =PERTURB(P)
+// Δcost =COST(new_P)–COST(P)
+// if (Δcost <0)
+// P =new_P
+// else
+// r =RANDOM(0,1)
+// 11 if(r<e^(-Δcost/T))
+// P =new_P
+// T=α∙T
+
+pub fn placement_annealing(the_graph: *const Graph, annealing_config: AnnealingConfig) ?*Placement {
     errdefer @panic("Skill issue");
 
-    var current_placement = initialPlacement(the_graph);
+    var current_placement = initialPlacement(the_graph, @as(i32, @intCast(annealing_config.initial_spacing)), @as(i32, @intCast(annealing_config.initial_row_size)));
     print(the_graph, current_placement, the_graph.gpa);
-    var temperature = initial_temperature;
-    var current_window_size = initial_window_size;
+    var temperature = annealing_config.initial_temperature;
+    var current_window_size = annealing_config.initial_window_size;
 
     // get random generator:
     var seed: u32 = undefined;
@@ -532,19 +571,17 @@ pub fn placement_annealing(the_graph: *const Graph, initial_temperature: f32, mi
     // should be a lower value at the start and end of the simulation, and a higher value in the middle, during refining.
     // it is constant for now.
     const alpha = 0.95;
-    const actual_moves_per_temperature = @divFloor(moves_per_temperature, perturbations_amount);
+    const actual_moves_per_temperature = @divFloor(annealing_config.moves_per_temperature, annealing_config.perturbations_amount);
 
-    while (temperature > minimum_temperature) {
+    while (temperature > annealing_config.minimum_temperature) {
         var lastCost: f32 = std.math.floatMax(f32);
         for (0..actual_moves_per_temperature) |i| {
             var new_placement = try current_placement.clone(the_graph.gpa);
 
-            perturb(the_graph, new_placement, rand, 2, @as(i32, @intFromFloat(current_window_size)), grid_divisor);
-            // std.debug.print("node 3 is placed here: {d}, {d}\n", .{ current_placement.locations.get(3).?.x, current_placement.locations.get(3).?.y });
-            const current_cost = cost(the_graph, current_placement);
-            const new_cost = cost(the_graph, new_placement);
+            perturb(the_graph, new_placement, rand, 2, @as(i32, @intFromFloat(current_window_size)), annealing_config.grid_divisor);
+            const current_cost = cost(the_graph, current_placement, annealing_config.x_weight, annealing_config.y_weight, annealing_config.wire_cost_weight);
+            const new_cost = cost(the_graph, new_placement, annealing_config.x_weight, annealing_config.y_weight, annealing_config.wire_cost_weight);
             const cost_diff = new_cost - current_cost;
-            // std.debug.print("costs: {d}, {d}\n", .{ current_cost, new_cost });
             if (cost_diff < 0) {
                 current_placement.deinit(the_graph.gpa);
                 current_placement = new_placement;
@@ -587,22 +624,3 @@ pub fn placement_annealing(the_graph: *const Graph, initial_temperature: f32, mi
     }
     return current_placement;
 }
-
-// pseudo code:
-
-// Simulated Annealing Algorithm for Placement
-// Input: set of all cells V
-// Output: placement P
-// 1 T=T0
-// 2 P=PLACE(V)
-// 3 while(T>Tmin)
-// 4 while(!STOP())
-// new_P =PERTURB(P)
-// Δcost =COST(new_P)–COST(P)
-// if (Δcost <0)
-// P =new_P
-// else
-// r =RANDOM(0,1)
-// 11 if(r<e^(-Δcost/T))
-// P =new_P
-// T=α∙T

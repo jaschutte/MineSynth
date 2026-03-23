@@ -110,6 +110,8 @@ pub const GateType = enum {
             .or_gate => @Vector(3, i32){ 1, 0, 0 },
         };
     }
+
+    
 };
 
 pub const Gate = struct {
