@@ -1,7 +1,8 @@
 const std = @import("std");
-const ms = @import("abstract/structures.zig");
 const phys = @import("physical.zig");
 const nbt = @import("nbt.zig");
+const comp = @import("components/components.zig");
+const ms = @import("abstract/structures.zig");
 
 // return value
 route: std.ArrayList(ms.AbsBlock) = .empty,
@@ -21,13 +22,6 @@ pub const LAYER_HEIGHT: u2 = 3;
 
 const WorldCoord = ms.WorldCoord;
 
-const RouteComponent = enum {
-    dust,
-    repeater,
-    via_up,
-    via_down,
-};
-
 const NodeState = struct {
     coord: WorldCoord,
     signal: u4,
@@ -35,7 +29,7 @@ const NodeState = struct {
 
 const Parent = struct {
     prev: NodeState,
-    conn_type: RouteComponent,
+    def: *const comp.ComponentDef,
     violating: bool,
 };
 
@@ -55,39 +49,9 @@ const MoveFootprint = struct {
 
 fn getMoveFootprint(u: WorldCoord, move: Move) MoveFootprint {
     var fp: MoveFootprint = .{ .blocks = undefined, .count = 0 };
-    const coord = u + move.dir;
-
-    switch (move.conn_type) {
-        .dust => {
-            fp.blocks[0] = coord;
-            fp.count = 1;
-        },
-        .repeater => {
-            fp.blocks[0] = coord;
-            fp.blocks[1] = (u + coord) / @as(WorldCoord, @splat(2));
-            fp.count = 2;
-        },
-        .via_up => {
-            const base_blocks = [_]WorldCoord{
-                .{ 0, 0, 0 }, .{ 1, 0, 0 }, .{ 1, -1, 0 }, .{ 2, 0, 0 },
-                .{ 3, 1, 0 }, .{ 2, 1, 0 }, .{ 3, 0, 0 },
-            };
-            for (base_blocks) |base| {
-                fp.blocks[fp.count] = u + rotateCoord(base, move.dir);
-                fp.count += 1;
-            }
-        },
-        .via_down => {
-            const base_blocks = [_]WorldCoord{
-                .{ 0, 0, 0 },  .{ 0, -1, 0 }, .{ 2, -2, 0 }, .{ 2, -1, 0 },
-                .{ 2, 0, 0 },  .{ 1, 0, 0 },  .{ 1, -2, 0 }, .{ 1, -3, 0 },
-                .{ 1, -4, 0 },
-            };
-            for (base_blocks) |base| {
-                fp.blocks[fp.count] = u + rotateCoord(base, move.dir);
-                fp.count += 1;
-            }
-        },
+    for (move.def.footprint) |base| {
+        fp.blocks[fp.count] = u + rotateCoord(base, move.dir);
+        fp.count += 1;
     }
     return fp;
 }
@@ -106,7 +70,10 @@ fn moveIntersectsPath(new_u: WorldCoord, new_move: Move, start_state: NodeState,
         // 2. Check for physical edge volume overlap
         if (parents.get(curr)) |p| {
             const prev_u = p.prev.coord;
-            const past_move = Move{ .dir = curr.coord - prev_u, .weight = 0, .conn_type = p.conn_type };
+            const past_move = Move{
+                .dir = curr.coord - prev_u,
+                .def = p.def,
+            };
             const past_fp = getMoveFootprint(prev_u, past_move);
 
             for (new_fp.blocks[0..new_fp.count]) |b1| {
@@ -161,8 +128,7 @@ const DistanceMetric = struct {
 
 const Move = struct {
     dir: WorldCoord,
-    weight: u32,
-    conn_type: RouteComponent,
+    def: *const comp.ComponentDef,
 };
 
 fn check_validity(coord: WorldCoord, forbidden_zone: ms.ForbiddenZone) MoveValidity {
@@ -184,56 +150,15 @@ const MoveValidity = enum {
 };
 
 fn isMoveValid(u: WorldCoord, move: Move, forbidden_zone: ms.ForbiddenZone) MoveValidity {
-    const coord = u + move.dir;
-    // check bounds
-    if (coord[1] > phys.MAX_Y_LEVEL or coord[1] < phys.MIN_Y_LEVEL) return .invalid;
+    const target_coord = u + move.dir;
+    if (target_coord[1] > phys.MAX_Y_LEVEL or target_coord[1] < phys.MIN_Y_LEVEL) return .invalid;
 
-    // if (forbidden_zone.contains(coord)) return false;
-    var verdict = check_validity(coord, forbidden_zone);
-    if (verdict == .invalid) return .invalid;
-
-    switch (move.conn_type) {
-        .dust => return verdict,
-        .repeater => {
-            const mid = (u + coord) / @as(WorldCoord, @splat(2));
-            const validity = check_validity(mid, forbidden_zone);
-            if (validity == .invalid) return .invalid;
-            if (validity == .violation) verdict = .violation;
-        },
-        .via_up => {
-            const base_blocks = [_]WorldCoord{
-                .{ 0, 0, 0 },
-                .{ 1, 0, 0 },
-                .{ 1, -1, 0 },
-                .{ 2, 0, 0 },
-                .{ 3, 1, 0 },
-                .{ 2, 1, 0 },
-                .{ 3, 0, 0 },
-            };
-            for (base_blocks) |base| {
-                const rotated = rotateCoord(base, move.dir);
-                if (check_validity(u + rotated, forbidden_zone) == .invalid) return .invalid;
-                if (check_validity(u + rotated, forbidden_zone) == .violation) verdict = .violation;
-            }
-        },
-        .via_down => {
-            const base_blocks = [_]WorldCoord{
-                .{ 0, 0, 0 },
-                .{ 0, -1, 0 },
-                .{ 2, -2, 0 },
-                .{ 2, -1, 0 },
-                .{ 2, 0, 0 },
-                .{ 1, 0, 0 },
-                .{ 1, -2, 0 },
-                .{ 1, -3, 0 },
-                .{ 1, -4, 0 },
-            };
-            for (base_blocks) |base| {
-                const rotated = rotateCoord(base, move.dir);
-                if (check_validity(u + rotated, forbidden_zone) == .invalid) return .invalid;
-                if (check_validity(u + rotated, forbidden_zone) == .violation) verdict = .violation;
-            }
-        },
+    var verdict: MoveValidity = .valid;
+    for (move.def.footprint) |base| {
+        const rotated = rotateCoord(base, move.dir);
+        const check = check_validity(u + rotated, forbidden_zone);
+        if (check == .invalid) return .invalid;
+        if (check == .violation) verdict = .violation;
     }
     return verdict;
 }
@@ -300,26 +225,19 @@ pub fn routeTo(a: std.mem.Allocator, from: WorldCoord, to: WorldCoord, forbidden
     try queue.add(.{ .state = start_state, .g = 0, .f = heuristic(from, to) });
 
     // Edge weights must be > 0. Scaled to reflect relative pathing delays/material costs.
-    const moves = [_]Move{
-        .{ .dir = .{ 1, 0, 0 }, .weight = 0, .conn_type = .dust },
-        .{ .dir = .{ 0, 0, 1 }, .weight = 0, .conn_type = .dust },
-        .{ .dir = .{ -1, 0, 0 }, .weight = 0, .conn_type = .dust },
-        .{ .dir = .{ 0, 0, -1 }, .weight = 0, .conn_type = .dust },
-
-        .{ .dir = .{ 2, 0, 0 }, .weight = 2, .conn_type = .repeater },
-        .{ .dir = .{ 0, 0, 2 }, .weight = 2, .conn_type = .repeater },
-        .{ .dir = .{ -2, 0, 0 }, .weight = 2, .conn_type = .repeater },
-        .{ .dir = .{ 0, 0, -2 }, .weight = 2, .conn_type = .repeater },
-
-        .{ .dir = .{ 2, 3, 0 }, .weight = 5, .conn_type = .via_up },
-        .{ .dir = .{ -2, 3, 0 }, .weight = 5, .conn_type = .via_up },
-        .{ .dir = .{ 0, 3, 2 }, .weight = 5, .conn_type = .via_up },
-        .{ .dir = .{ 0, 3, -2 }, .weight = 5, .conn_type = .via_up },
-
-        .{ .dir = .{ 2, -3, 0 }, .weight = 5, .conn_type = .via_down },
-        .{ .dir = .{ -2, -3, 0 }, .weight = 5, .conn_type = .via_down },
-        .{ .dir = .{ 0, -3, 2 }, .weight = 5, .conn_type = .via_down },
-        .{ .dir = .{ 0, -3, -2 }, .weight = 5, .conn_type = .via_down },
+    const moves = comptime blk: {
+        var m: [comp.components.len * 4]Move = undefined;
+        var idx = 0;
+        for (&comp.components) |*def| {
+            for ([_]WorldCoord{ .{ 1, 0, 0 }, .{ 0, 0, 1 }, .{ -1, 0, 0 }, .{ 0, 0, -1 } }) |cdir| {
+                m[idx] = .{
+                    .dir = rotateCoord(def.base_dir, cdir),
+                    .def = def,
+                };
+                idx += 1;
+            }
+        }
+        break :blk m;
     };
 
     var final_state: ?NodeState = null;
@@ -336,50 +254,44 @@ pub fn routeTo(a: std.mem.Allocator, from: WorldCoord, to: WorldCoord, forbidden
             final_state = u_state;
             break;
         }
-
         for (moves) |move| {
             const coord = u + move.dir;
             if (moveIntersectsPath(u, move, u_state, &parents)) continue;
             const validity = isMoveValid(u, move, forbidden_zone);
             if (validity == .invalid) continue;
 
+            // Data-driven signal calculation
             var next_signal = u_state.signal;
+            if (next_signal < move.def.min_signal) continue;
 
-            if (move.conn_type == .dust) {
-                if (next_signal == 0) continue;
-                if (next_signal == 1 and coordEq(coord, to)) continue;
-                next_signal -= 1;
-            } else if (move.conn_type == .repeater) {
-                if (next_signal == 0) continue;
-                next_signal = 15;
-            } else if (move.conn_type == .via_up or move.conn_type == .via_down) {
-                if (next_signal < 2) continue;
-                next_signal = 14;
+            switch (move.def.signal_behavior) {
+                .decay => {
+                    if (next_signal == 1 and coordEq(coord, to)) continue;
+                    next_signal -= 1;
+                },
+                .reset => next_signal = 15,
+                .via => next_signal = 14,
             }
 
             const next_state = NodeState{ .coord = coord, .signal = next_signal };
 
-            var move_cost = move.weight;
-            if (validity == .violation) {
-                move_cost += 100;
-            }
-
+            var move_cost = move.def.weight;
+            if (validity == .violation) move_cost += 100;
             const g_cost = item.g + move_cost;
-            const existing_g = distances.get(next_state);
 
+            const existing_g = distances.get(next_state);
             if (existing_g == null or g_cost < existing_g.?) {
                 distances.put(next_state, g_cost) catch @panic("oom");
                 parents.put(next_state, .{
                     .prev = u_state,
-                    .conn_type = move.conn_type,
+                    .def = move.def,
                     .violating = validity == .violation,
                 }) catch @panic("oom");
 
-                const h_cost = heuristic(coord, to);
                 queue.add(.{
                     .state = next_state,
                     .g = g_cost,
-                    .f = g_cost + h_cost,
+                    .f = g_cost + heuristic(coord, to),
                 }) catch @panic("oom");
             }
         }
@@ -395,11 +307,10 @@ pub fn routeTo(a: std.mem.Allocator, from: WorldCoord, to: WorldCoord, forbidden
 
 fn buildRouteBlocks(a: std.mem.Allocator, from: WorldCoord, final_state: NodeState, parents: std.AutoHashMap(NodeState, Parent)) !Route {
     var abs_blocks: std.ArrayList(ms.AbsBlock) = .empty;
-
     var length: u32 = 0;
     var delay: u32 = 0;
-
     var violating = false;
+
     var curr_state = final_state;
     var vec = curr_state.coord;
     var prev_vec = vec;
@@ -412,88 +323,25 @@ fn buildRouteBlocks(a: std.mem.Allocator, from: WorldCoord, final_state: NodeSta
         if (p.violating) violating = true;
         const move_dir = prev_vec - vec;
 
-        switch (p.conn_type) {
-            .dust => {
-                try abs_blocks.append(a, .{ .block = .dust, .loc = vec, .rot = .center });
-                try abs_blocks.append(a, .{ .block = .block, .loc = vec + WorldCoord{ 0, -1, 0 }, .rot = .center });
-                length += 1;
-            },
-            .repeater => {
-                const mid = (prev_vec + vec) / @as(WorldCoord, @splat(2));
-                const rot: ms.Orientation = if (vec[0] > prev_vec[0]) .west else if (vec[0] < prev_vec[0]) .east else if (vec[2] > prev_vec[2]) .north else .south;
+        // Data-driven block placement utilizing the pre-defined offsets
+        for (p.def.build_blocks) |block_def| {
+            const rotated_coord = rotateCoord(block_def.offset, move_dir);
+            const rotated_rot = rotateOrientation(block_def.rot, move_dir);
 
-                try abs_blocks.append(a, .{ .block = .repeater, .loc = mid, .rot = rot });
-
-                try abs_blocks.append(a, .{ .block = .dust, .loc = vec, .rot = .center });
-                try abs_blocks.append(a, .{ .block = .block, .loc = mid + WorldCoord{ 0, -1, 0 }, .rot = .center });
-                try abs_blocks.append(a, .{ .block = .block, .loc = vec + WorldCoord{ 0, -1, 0 }, .rot = .center });
-                length += 2;
-                delay += 1; // repeaters add a delay of 1 tick
-            },
-            .via_up => {
-                const offsets = [_]struct { WorldCoord, ms.BlockCat, ms.Orientation }{
-                    .{ .{ 0, 0, 0 }, .dust, .center },
-                    .{ .{ 0, -1, 0 }, .block, .center },
-                    .{ .{ 1, 0, 0 }, .dust, .center },
-                    .{ .{ 1, -1, 0 }, .block, .center },
-                    .{ .{ 2, 0, 0 }, .block, .center },
-                    .{ .{ 3, 1, 0 }, .block, .center },
-                    .{ .{ 2, 1, 0 }, .torch, .west },
-                    .{ .{ 3, 0, 0 }, .torch, .east },
-                };
-                for (offsets) |off| {
-                    const rotated_coord = rotateCoord(off[0], move_dir);
-                    const rotated_rot = rotateOrientation(off[2], move_dir);
-                    try abs_blocks.append(a, .{
-                        .block = off[1],
-                        .loc = vec + rotated_coord,
-                        .rot = rotated_rot,
-                    });
-                }
-                // try abs_blocks.append(a, .{ .block = .block, .loc = vec + WorldCoord{ 0, -1, 0 }, .rot = .center });
-                delay += 2; // vias add a delay of 2 ticks
-                // well, 3 blocks up and 2 blocks over, kinda
-                length += 5;
-            },
-
-            .via_down => {
-                const offsets = [_]struct { WorldCoord, ms.BlockCat, ms.Orientation }{
-                    .{ .{ 0, 0, 0 }, .dust, .center },
-                    .{ .{ 0, -1, 0 }, .block, .center },
-                    .{ .{ 2, -2, 0 }, .block, .center },
-                    .{ .{ 2, -1, 0 }, .dust, .center },
-                    .{ .{ 2, 0, 0 }, .torch, .east },
-                    .{ .{ 1, 0, 0 }, .block, .center },
-                    .{ .{ 1, -2, 0 }, .torch, .west },
-                    .{ .{ 1, -3, 0 }, .dust, .west },
-                    .{ .{ 1, -4, 0 }, .block, .center },
-                };
-                for (offsets) |off| {
-                    const rotated_coord = rotateCoord(off[0], move_dir);
-                    const rotated_rot = rotateOrientation(off[2], move_dir);
-                    try abs_blocks.append(a, .{
-                        .block = off[1],
-                        .loc = vec + rotated_coord,
-                        .rot = rotated_rot,
-                    });
-                }
-                delay += 2; // vias add a delay of 2 ticks
-                length += 5;
-            },
+            try abs_blocks.append(a, .{
+                .block = block_def.cat,
+                .loc = vec + rotated_coord,
+                .rot = rotated_rot,
+            });
         }
 
+        length += p.def.length;
+        delay += p.def.delay;
         prev_vec = vec;
     }
-    // append output
+
     try abs_blocks.append(a, .{ .block = .dust, .loc = final_state.coord, .rot = .center });
     try abs_blocks.append(a, .{ .block = .block, .loc = final_state.coord + WorldCoord{ 0, -1, 0 }, .rot = .center });
-
-    var min_coord = @as(WorldCoord, @splat(std.math.maxInt(i32)));
-    for (abs_blocks.items) |b| {
-        min_coord[0] = @min(min_coord[0], b.loc[0]);
-        min_coord[1] = @min(min_coord[1], b.loc[1]);
-        min_coord[2] = @min(min_coord[2], b.loc[2]);
-    }
 
     return .{
         .route = abs_blocks,
