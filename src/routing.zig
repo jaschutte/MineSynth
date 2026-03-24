@@ -47,6 +47,89 @@ fn heuristic(curr: WorldCoord, target: WorldCoord) u32 {
     return dx + dy + dz;
 }
 
+const MaxMoveBlocks = 10;
+const MoveFootprint = struct {
+    blocks: [MaxMoveBlocks]WorldCoord,
+    count: usize,
+};
+
+fn getMoveFootprint(u: WorldCoord, move: Move) MoveFootprint {
+    var fp: MoveFootprint = .{ .blocks = undefined, .count = 0 };
+    const coord = u + move.dir;
+
+    switch (move.conn_type) {
+        .dust => {
+            fp.blocks[0] = coord;
+            fp.count = 1;
+        },
+        .repeater => {
+            fp.blocks[0] = coord;
+            fp.blocks[1] = (u + coord) / @as(WorldCoord, @splat(2));
+            fp.count = 2;
+        },
+        .via_up => {
+            const base_blocks = [_]WorldCoord{
+                .{ 0, 0, 0 }, .{ 1, 0, 0 }, .{ 1, -1, 0 }, .{ 2, 0, 0 },
+                .{ 3, 1, 0 }, .{ 2, 1, 0 }, .{ 3, 0, 0 },
+            };
+            for (base_blocks) |base| {
+                fp.blocks[fp.count] = u + rotateCoord(base, move.dir);
+                fp.count += 1;
+            }
+        },
+        .via_down => {
+            const base_blocks = [_]WorldCoord{
+                .{ 0, 0, 0 },  .{ 0, -1, 0 }, .{ 2, -2, 0 }, .{ 2, -1, 0 },
+                .{ 2, 0, 0 },  .{ 1, 0, 0 },  .{ 1, -2, 0 }, .{ 1, -3, 0 },
+                .{ 1, -4, 0 },
+            };
+            for (base_blocks) |base| {
+                fp.blocks[fp.count] = u + rotateCoord(base, move.dir);
+                fp.count += 1;
+            }
+        },
+    }
+    return fp;
+}
+
+fn moveIntersectsPath(new_u: WorldCoord, new_move: Move, start_state: NodeState, parents: *const std.AutoHashMap(NodeState, Parent)) bool {
+    const new_fp = getMoveFootprint(new_u, new_move);
+    const new_coord = new_u + new_move.dir;
+
+    var curr = start_state;
+    var is_immediate_parent = true;
+
+    while (true) {
+        // 1. Check for node overlap
+        if (coordEq(curr.coord, new_coord)) return true;
+
+        // 2. Check for physical edge volume overlap
+        if (parents.get(curr)) |p| {
+            const prev_u = p.prev.coord;
+            const past_move = Move{ .dir = curr.coord - prev_u, .weight = 0, .conn_type = p.conn_type };
+            const past_fp = getMoveFootprint(prev_u, past_move);
+
+            for (new_fp.blocks[0..new_fp.count]) |b1| {
+                for (past_fp.blocks[0..past_fp.count]) |b2| {
+                    if (coordEq(b1, b2)) {
+                        // Allow the new move to share a node with its immediate parent edge
+                        if (is_immediate_parent and coordEq(b1, new_u)) {
+                            continue;
+                        }
+                        return true;
+                    }
+                }
+            }
+            curr = p.prev;
+            is_immediate_parent = false;
+        } else {
+            break;
+        }
+    }
+
+    return false;
+}
+
 // any formless volume
 const Volume = ms.OrderedSet(WorldCoord);
 
@@ -256,6 +339,7 @@ pub fn routeTo(a: std.mem.Allocator, from: WorldCoord, to: WorldCoord, forbidden
 
         for (moves) |move| {
             const coord = u + move.dir;
+            if (moveIntersectsPath(u, move, u_state, &parents)) continue;
             const validity = isMoveValid(u, move, forbidden_zone);
             if (validity == .invalid) continue;
 
