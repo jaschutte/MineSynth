@@ -6,6 +6,7 @@ pub const ms = @import("abstract/structures.zig");
 
 pub fn blockcat_to_id(cat: ms.BlockCat) i8 {
     return switch (cat) {
+        .air => 0,
         .dust => 55,
         .repeater => 94,
         .torch => 76,
@@ -183,6 +184,7 @@ pub fn block_arr_to_schem(a: std.mem.Allocator, blocks: []ms.SchemBlock) void {
         const idx: u64 = (@as(u64, block.loc[1] * length) + block.loc[2]) * width + block.loc[0];
         blocks_byte_arr[idx] = blockcat_to_id(block.block);
         data_byte_arr[idx] = switch (block.block) {
+            .air => 0,
             .dust => 0,
             .repeater => repeater_orientation_to_data(block.rot),
             .torch => torch_orientation_to_data(block.rot),

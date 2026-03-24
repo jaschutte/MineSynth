@@ -9,6 +9,7 @@ pub const SchemCoord = @Vector(3, SchemCoordNum);
 pub const WorldCoord = @Vector(3, i32);
 
 pub const BlockCat = enum {
+    air,
     dust,
     repeater,
     torch,
@@ -42,6 +43,7 @@ pub const ForbiddenZoneType = enum {
 };
 pub const ForbiddenZoneInfo = struct {
     ftype: ForbiddenZoneType,
+    ref_count: u32 = 1,
 };
 
 pub const ForbiddenZone = std.AutoHashMap(WorldCoord, ForbiddenZoneInfo);

@@ -6,12 +6,14 @@ const ms = @import("abstract/structures.zig");
 
 // return value
 route: std.ArrayList(ms.AbsBlock) = .empty,
+footprints: std.ArrayList(WorldCoord) = .empty,
 delay: u32 = 0,
 length: u32 = 0,
 violating: bool, // whether the route violates another route
 
 pub fn deinit(self: *Route, allocator: std.mem.Allocator) void {
     self.route.deinit(allocator);
+    self.footprints.deinit(allocator);
 }
 
 const Route = @This();
@@ -41,7 +43,21 @@ fn heuristic(curr: WorldCoord, target: WorldCoord) u32 {
     return dx + dy + dz;
 }
 
-const MaxMoveBlocks = 10;
+const SURROUNDING_OFFSETS = blk: {
+    var arr: [27]WorldCoord = undefined;
+    var i: usize = 0;
+    for ([_]i32{ -1, 0, 1 }) |x| {
+        for ([_]i32{ -1, 0, 1 }) |y| {
+            for ([_]i32{ -1, 0, 1 }) |z| {
+                arr[i] = .{ x, y, z };
+                i += 1;
+            }
+        }
+    }
+    break :blk arr;
+};
+
+const MaxMoveBlocks = 12;
 const MoveFootprint = struct {
     blocks: [MaxMoveBlocks]WorldCoord,
     count: usize,
@@ -163,36 +179,200 @@ fn isMoveValid(u: WorldCoord, move: Move, forbidden_zone: ms.ForbiddenZone) Move
     return verdict;
 }
 
-pub fn routeAll(a: std.mem.Allocator, pairs: []struct { from: WorldCoord, to: WorldCoord }, forbidden_zone: *ms.ForbiddenZone) !Route {
-    for (pairs) |pair| {
-        const route = routeTo(a, pair.from, pair.to, forbidden_zone);
-        for (route.route.items) |b| {
-            _ = b; // autofix
-            // for (offsets) |offset| {
-            // const coord = b.loc + offset;
-            // try forbidden_zone.put(coord, .{ .ftype = .wire });
-            // }
+const Net = struct {
+    from: WorldCoord,
+    to: WorldCoord,
+    route: ?Route,
+    failures: u32,
+    is_violating: bool = false, // Track global violations
+};
+
+// Heuristic for REORDER(): Route nets with the most failures first.
+// Tie-breaker: Route physically longer nets first.
+fn sortNetPtrsDescending(_: void, lhs: *Net, rhs: *Net) bool {
+    if (lhs.failures == rhs.failures) {
+        const dist_lhs = heuristic(lhs.from, lhs.to);
+        const dist_rhs = heuristic(rhs.from, rhs.to);
+        return dist_lhs > dist_rhs;
+    }
+    return lhs.failures > rhs.failures;
+}
+
+fn ripUp(net: *Net, forbidden_zone: *ms.ForbiddenZone, a: std.mem.Allocator) void {
+    if (net.route) |*r| {
+        for (r.footprints.items) |coord| {
+            for (SURROUNDING_OFFSETS) |offset| {
+                const target = coord + offset;
+
+                if (forbidden_zone.getPtr(target)) |existing| {
+                    if (existing.ftype == .wire) {
+                        existing.ref_count -= 1;
+                        if (existing.ref_count == 0) {
+                            _ = forbidden_zone.remove(target);
+                        }
+                    }
+                }
+            }
+        }
+        r.deinit(a);
+        net.route = null;
+    }
+}
+
+pub const RoutePair = struct {
+    from: WorldCoord,
+    to: WorldCoord,
+};
+const CellInfo = struct {
+    first_net: *Net,
+};
+
+fn updateViolations(a: std.mem.Allocator, nets: []Net) !void {
+    var owners = std.AutoHashMap(WorldCoord, CellInfo).init(a);
+    defer owners.deinit();
+
+    // 1. Initialize from A*'s baseline violation check (e.g., hitting static geometry)
+    for (nets) |*net| {
+        net.is_violating = if (net.route) |*r| r.violating else false;
+    }
+
+    // 2. Cross-check all routed nets for mutual intersections
+    for (nets) |*net| {
+        if (net.route) |*r| {
+            for (r.footprints.items) |coord| {
+                // Check direct footprint against the fattened owners map
+                if (owners.getPtr(coord)) |info| {
+                    if (info.first_net != net) {
+                        info.first_net.is_violating = true;
+                        net.is_violating = true;
+                    }
+                }
+
+                // Fatten the volume for subsequent net checks
+                for (SURROUNDING_OFFSETS) |offset| {
+                    const target = coord + offset;
+                    // Only insert if empty so we don't overwrite the true first_net
+                    if (!owners.contains(target)) {
+                        try owners.put(target, .{ .first_net = net });
+                    }
+                }
+            }
         }
     }
+
+    // 3. Sync flags back to the Route structs
+    for (nets) |*net| {
+        if (net.route) |*r| {
+            r.violating = net.is_violating;
+        }
+    }
+}
+
+pub fn routeAll(a: std.mem.Allocator, pairs: []RoutePair, forbidden_zone: *ms.ForbiddenZone) !Route {
+    var nets = try a.alloc(Net, pairs.len);
+
+    defer {
+        for (nets) |*net| {
+            if (net.route) |*r| r.deinit(a);
+        }
+        a.free(nets);
+    }
+
+    var v_nets: std.ArrayList(*Net) = .empty;
+    defer v_nets.deinit(a);
+
+    // Initial routing pass
+    for (pairs, 0..) |pair, i| {
+        nets[i] = .{
+            .from = pair.from,
+            .to = pair.to,
+            .route = null,
+            .failures = 0,
+            .is_violating = false,
+        };
+        nets[i].route = try routeToUpdateForbiddenZone(a, nets[i].from, nets[i].to, forbidden_zone);
+    }
+
+    // Evaluate global collisions and populate v_nets
+    try updateViolations(a, nets);
+    for (nets) |*net| {
+        if (net.is_violating) {
+            try v_nets.append(a, net);
+            std.log.info("Initial route for net from {any} to {any} has violating=true", .{ net.from, net.to });
+        }
+    }
+
+    const MAX_ITERS = 20;
+    var iters: u32 = 0;
+
+    // Iterative rip-up and reroute
+    while (v_nets.items.len > 0 and iters < MAX_ITERS) : (iters += 1) {
+        std.sort.block(*Net, v_nets.items, {}, sortNetPtrsDescending);
+        const num_v_nets_this_pass = v_nets.items.len;
+
+        std.log.info("Iteration {}: Routing {} violating nets", .{ iters, num_v_nets_this_pass });
+
+        for (0..num_v_nets_this_pass) |_| {
+            std.log.info("Re-routing net from {any} to {any} with {} failures", .{ v_nets.items[0].from, v_nets.items[0].to, v_nets.items[0].failures });
+            var net = v_nets.orderedRemove(0);
+            ripUp(net, forbidden_zone, a);
+            net.route = try routeToUpdateForbiddenZone(a, net.from, net.to, forbidden_zone);
+        }
+
+        // Recalculate global collisions after all queued nets have re-routed
+        try updateViolations(a, nets);
+
+        // Rebuild v_nets queue based on the updated global intersection map
+        v_nets.clearRetainingCapacity();
+        for (nets) |*net| {
+            if (net.is_violating) {
+                net.failures += 1;
+                try v_nets.append(a, net);
+            }
+        }
+    }
+
+    if (v_nets.items.len > 0) {
+        std.log.warn("routeAll finished with {} unresolved violations after {} iterations.", .{ v_nets.items.len, MAX_ITERS });
+    }
+
+    // Assemble final aggregate Route
+    var final_route = Route{
+        .route = .empty,
+        .footprints = .empty,
+        .delay = 0,
+        .length = 0,
+        .violating = v_nets.items.len > 0,
+    };
+    errdefer final_route.deinit(a);
+
+    std.log.info("Assembling final route with total {} nets, {} violating.", .{ nets.len, v_nets.items.len });
+    for (nets) |*net| {
+        if (net.route) |*r| {
+            try final_route.route.appendSlice(a, r.route.items);
+            try final_route.footprints.appendSlice(a, r.footprints.items);
+            final_route.delay += r.delay;
+            final_route.length += r.length;
+        }
+    }
+
+    return final_route;
 }
 
 pub fn routeToUpdateForbiddenZone(a: std.mem.Allocator, from: WorldCoord, to: WorldCoord, forbidden_zone: *ms.ForbiddenZone) !Route {
     const route = try routeTo(a, from, to, forbidden_zone.*);
 
-    const offsets = [_]WorldCoord{
-        .{ 0, 0, 0 }, // Target block
-        .{ 1, 0, 0 }, // +X
-        .{ -1, 0, 0 }, // -X
-        .{ 0, 1, 0 }, // +Y
-        .{ 0, -1, 0 }, // -Y
-        .{ 0, 0, 1 }, // +Z
-        .{ 0, 0, -1 }, // -Z
-    };
+    for (route.footprints.items) |coord| {
+        for (SURROUNDING_OFFSETS) |offset| {
+            const target = coord + offset;
 
-    for (route.route.items) |b| {
-        for (offsets) |offset| {
-            const coord = b.loc + offset;
-            try forbidden_zone.put(coord, .{ .ftype = .wire });
+            if (forbidden_zone.getPtr(target)) |existing| {
+                if (existing.ftype == .wire) {
+                    existing.ref_count += 1;
+                }
+            } else {
+                try forbidden_zone.put(target, .{ .ftype = .wire, .ref_count = 1 });
+            }
         }
     }
 
@@ -267,7 +447,7 @@ pub fn routeTo(a: std.mem.Allocator, from: WorldCoord, to: WorldCoord, forbidden
             switch (move.def.signal_behavior) {
                 .decay => {
                     if (next_signal == 1 and coordEq(coord, to)) continue;
-                    next_signal -= 1;
+                    next_signal -= move.def.min_signal;
                 },
                 .reset => next_signal = 15,
                 .via => next_signal = 14,
@@ -307,9 +487,14 @@ pub fn routeTo(a: std.mem.Allocator, from: WorldCoord, to: WorldCoord, forbidden
 
 fn buildRouteBlocks(a: std.mem.Allocator, from: WorldCoord, final_state: NodeState, parents: std.AutoHashMap(NodeState, Parent)) !Route {
     var abs_blocks: std.ArrayList(ms.AbsBlock) = .empty;
+    var footprints: std.ArrayList(WorldCoord) = .empty;
     var length: u32 = 0;
     var delay: u32 = 0;
     var violating = false;
+
+    // initialize
+    // add from to the footprint to ensure the starting point is included in the forbidden zone
+    try footprints.append(a, from);
 
     var curr_state = final_state;
     var vec = curr_state.coord;
@@ -323,7 +508,6 @@ fn buildRouteBlocks(a: std.mem.Allocator, from: WorldCoord, final_state: NodeSta
         if (p.violating) violating = true;
         const move_dir = prev_vec - vec;
 
-        // Data-driven block placement utilizing the pre-defined offsets
         for (p.def.build_blocks) |block_def| {
             const rotated_coord = rotateCoord(block_def.offset, move_dir);
             const rotated_rot = rotateOrientation(block_def.rot, move_dir);
@@ -335,6 +519,12 @@ fn buildRouteBlocks(a: std.mem.Allocator, from: WorldCoord, final_state: NodeSta
             });
         }
 
+        // Track the mathematical footprint of the component
+        for (p.def.footprint) |base| {
+            const rotated_coord = rotateCoord(base, move_dir);
+            try footprints.append(a, vec + rotated_coord);
+        }
+
         length += p.def.length;
         delay += p.def.delay;
         prev_vec = vec;
@@ -343,8 +533,12 @@ fn buildRouteBlocks(a: std.mem.Allocator, from: WorldCoord, final_state: NodeSta
     try abs_blocks.append(a, .{ .block = .dust, .loc = final_state.coord, .rot = .center });
     try abs_blocks.append(a, .{ .block = .block, .loc = final_state.coord + WorldCoord{ 0, -1, 0 }, .rot = .center });
 
+    try footprints.append(a, final_state.coord);
+    try footprints.append(a, final_state.coord + WorldCoord{ 0, -1, 0 });
+
     return .{
         .route = abs_blocks,
+        .footprints = footprints,
         .delay = delay,
         .length = length,
         .violating = violating,
