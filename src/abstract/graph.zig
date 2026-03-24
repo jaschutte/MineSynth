@@ -30,7 +30,7 @@ pub const GraphConstructors = struct {
                 if (added_nodes.contains(gate_ptr)) continue;
 
                 const gate = netlist.getGate(gate_ptr);
-                const node_id = graph.addNode(.{ .kind = gate.kind, .symbol = gate.symbol }, .none);
+                const node_id = graph.addNode(.{ .kind = gate.kind, .symbol = try gpa.dupe(u8, gate.symbol) }, .none);
                 try added_nodes.put(gate_ptr, node_id);
             }
 
@@ -66,7 +66,7 @@ pub const GraphConstructors = struct {
                     try net.literal.writeSymbol(&writer.writer);
 
                     _ = graph.addEdge(added_nodes.get(from_ptr).?, from_relation, added_nodes.get(to_ptr).?, to_relation, .{
-                        .symbol = writer.written(),
+                        .symbol = try writer.toOwnedSlice(),
                         .negated = switch (net.literal.isNegated()) {
                             true => .negated,
                             false => .unnegated,
@@ -156,6 +156,15 @@ pub fn Graph(comptime NodeBody: type) type {
                 }.area,
                 else => @compileError("NodeBody does not support retrieving its area"),
             };
+
+            pub fn deinit(self: *const Node, gpa: std.mem.Allocator) void {
+                switch (NodeBody) {
+                    GateBody => {
+                        gpa.free(self.body.symbol);
+                    },
+                    else => {},
+                }
+            }
         };
 
         pub const Edge = struct {
@@ -167,9 +176,8 @@ pub fn Graph(comptime NodeBody: type) type {
                         undefined,
                     };
 
-                    symbol: []u8,
+                    symbol: []const u8,
                     negated: Negation,
-
                 },
                 else => void,
             };
@@ -196,6 +204,15 @@ pub fn Graph(comptime NodeBody: type) type {
                     return self.a;
                 } else {
                     return null;
+                }
+            }
+
+            pub fn deinit(self: *const Edge, gpa: std.mem.Allocator) void {
+                switch (NodeBody) {
+                    GateBody => {
+                        gpa.free(self.body.symbol);
+                    },
+                    else => {},
                 }
             }
         };
@@ -282,6 +299,7 @@ pub fn Graph(comptime NodeBody: type) type {
         pub fn removeEdge(self: *Self, edge_id: EdgeId) void {
             errdefer @panic("Ran out of memory when removing edge");
 
+            self.edges.getPtr(edge_id).?.deinit(self.gpa);
             _ = self.edges.swapRemove(edge_id);
 
             for (self.node2edges.values()) |*node_edges| {
@@ -305,9 +323,10 @@ pub fn Graph(comptime NodeBody: type) type {
             var cloned = try self.node2edges.getPtr(node_id).?.clone(self.gpa);
             defer _ = cloned.deinit(self.gpa);
             for (cloned.items) |edge_id| {
-                try self.removeEdge(edge_id);
+                self.removeEdge(edge_id);
             }
 
+            self.nodes.getPtr(node_id).?.deinit(self.gpa);
             _ = self.nodes.swapRemove(node_id);
             self.node2edges.getPtr(node_id).?.deinit(self.gpa);
             _ = self.node2edges.swapRemove(node_id);
@@ -316,6 +335,13 @@ pub fn Graph(comptime NodeBody: type) type {
         pub fn deinit(self: *Self) void {
             for (self.node2edges.values()) |*node_edges| {
                 node_edges.deinit(self.gpa);
+            }
+
+            for (self.nodes.values()) |*node| {
+                node.deinit(self.gpa);
+            }
+            for (self.edges.values()) |*edge| {
+                edge.deinit(self.gpa);
             }
 
             self.nodes.deinit();
