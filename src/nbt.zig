@@ -171,7 +171,7 @@ pub fn block_arr_to_schem(a: std.mem.Allocator, blocks: []ms.SchemBlock) void {
 
     // blocks and block data
 
-    const volume: u64 = length * height * width;
+    const volume: u64 = length * @as(u64, height * width);
     std.log.debug("nbt conversion dims: {d}x{d}x{d}, volume: {d}", .{ length, width, height, volume });
     var blocks_byte_arr = a.alloc(i8, volume) catch @panic("oom");
     @memset(blocks_byte_arr, 0);
@@ -180,7 +180,7 @@ pub fn block_arr_to_schem(a: std.mem.Allocator, blocks: []ms.SchemBlock) void {
     @memset(data_byte_arr, 0);
     defer a.free(data_byte_arr);
     for (blocks) |block| {
-        const idx = (block.loc[1] * length + block.loc[2]) * width + block.loc[0];
+        const idx: u64 = (@as(u64, block.loc[1] * length) + block.loc[2]) * width + block.loc[0];
         blocks_byte_arr[idx] = blockcat_to_id(block.block);
         data_byte_arr[idx] = switch (block.block) {
             .dust => 0,

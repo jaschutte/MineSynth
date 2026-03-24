@@ -7,6 +7,7 @@ const nbt = @import("nbt.zig");
 route: std.ArrayList(ms.AbsBlock) = .empty,
 delay: u32 = 0,
 length: u32 = 0,
+violating: bool, // whether the route violates another route
 
 pub fn deinit(self: *Route, allocator: std.mem.Allocator) void {
     self.route.deinit(allocator);
@@ -30,6 +31,7 @@ const RouteComponent = enum {
 const Parent = struct {
     prev: WorldCoord,
     conn_type: RouteComponent,
+    violating: bool,
 };
 
 // any formless volume
@@ -65,18 +67,40 @@ const Move = struct {
     conn_type: RouteComponent,
 };
 
-fn isMoveValid(u: WorldCoord, move: Move, forbidden_zone: ms.ForbiddenZone) bool {
+fn check_validity(coord: WorldCoord, forbidden_zone: ms.ForbiddenZone) MoveValidity {
+    const zone_conflict = forbidden_zone.get(coord);
+    // return zone_conflict != null and zone_conflict.?.ftype == .gate;
+    if (zone_conflict != null and zone_conflict.?.ftype == .gate) {
+        return .invalid;
+    }
+    if (zone_conflict != null and zone_conflict.?.ftype == .wire) {
+        return .violation;
+    }
+    return .valid;
+}
+
+const MoveValidity = enum {
+    valid,
+    invalid,
+    violation,
+};
+
+fn isMoveValid(u: WorldCoord, move: Move, forbidden_zone: ms.ForbiddenZone) MoveValidity {
     const coord = u + move.dir;
     // check bounds
-    if (coord[1] > phys.MAX_Y_LEVEL or coord[1] < phys.MIN_Y_LEVEL) return false;
+    if (coord[1] > phys.MAX_Y_LEVEL or coord[1] < phys.MIN_Y_LEVEL) return .invalid;
 
-    if (forbidden_zone.contains(coord)) return false;
+    // if (forbidden_zone.contains(coord)) return false;
+    var verdict = check_validity(coord, forbidden_zone);
+    if (verdict == .invalid) return .invalid;
 
     switch (move.conn_type) {
-        .dust => return true,
+        .dust => return verdict,
         .repeater => {
             const mid = (u + coord) / @as(WorldCoord, @splat(2));
-            return !forbidden_zone.contains(mid);
+            const validity = check_validity(mid, forbidden_zone);
+            if (validity == .invalid) return .invalid;
+            if (validity == .violation) verdict = .violation;
         },
         .via_up => {
             const base_blocks = [_]WorldCoord{
@@ -90,9 +114,9 @@ fn isMoveValid(u: WorldCoord, move: Move, forbidden_zone: ms.ForbiddenZone) bool
             };
             for (base_blocks) |base| {
                 const rotated = rotateCoord(base, move.dir);
-                if (forbidden_zone.contains(u + rotated)) return false;
+                if (check_validity(u + rotated, forbidden_zone) == .invalid) return .invalid;
+                if (check_validity(u + rotated, forbidden_zone) == .violation) verdict = .violation;
             }
-            return true;
         },
         .via_down => {
             const base_blocks = [_]WorldCoord{
@@ -108,10 +132,24 @@ fn isMoveValid(u: WorldCoord, move: Move, forbidden_zone: ms.ForbiddenZone) bool
             };
             for (base_blocks) |base| {
                 const rotated = rotateCoord(base, move.dir);
-                if (forbidden_zone.contains(u + rotated)) return false;
+                if (check_validity(u + rotated, forbidden_zone) == .invalid) return .invalid;
+                if (check_validity(u + rotated, forbidden_zone) == .violation) verdict = .violation;
             }
-            return true;
         },
+    }
+    return verdict;
+}
+
+pub fn routeAll(a: std.mem.Allocator, pairs: []struct { from: WorldCoord, to: WorldCoord }, forbidden_zone: *ms.ForbiddenZone) !Route {
+    for (pairs) |pair| {
+        const route = routeTo(a, pair.from, pair.to, forbidden_zone);
+        for (route.route.items) |b| {
+            _ = b; // autofix
+            // for (offsets) |offset| {
+            // const coord = b.loc + offset;
+            // try forbidden_zone.put(coord, .{ .ftype = .wire });
+            // }
+        }
     }
 }
 
@@ -130,9 +168,8 @@ pub fn routeToUpdateForbiddenZone(a: std.mem.Allocator, from: WorldCoord, to: Wo
 
     for (route.route.items) |b| {
         for (offsets) |offset| {
-            // WorldCoord acts as a vector here, permitting direct addition
             const coord = b.loc + offset;
-            try forbidden_zone.put(coord, void{});
+            try forbidden_zone.put(coord, .{ .ftype = .wire });
         }
     }
 
@@ -150,17 +187,7 @@ pub fn routeTo(a: std.mem.Allocator, from: WorldCoord, to: WorldCoord, forbidden
         return error.InvalidToOrFromYLevel;
     }
 
-    // extra debug checks
-    if (forbidden_zone.contains(from)) {
-        std.log.err("From coordinate .{any} is in the forbidden zone", .{from});
-        return error.InvalidToOrFromInForbiddenZone;
-    }
-    if (forbidden_zone.contains(to)) {
-        std.log.err("To coordinate .{any} is in the forbidden zone", .{to});
-        return error.InvalidToOrFromInForbiddenZone;
-    }
-
-    const SEARCH_RADIUS = 1000; // in Manhattan distance
+    const SEARCH_RADIUS = 100; // in Manhattan distance
 
     var queue = std.PriorityQueue(QueueItem, void, queueOrder).init(a, {});
     defer queue.deinit();
@@ -217,7 +244,8 @@ pub fn routeTo(a: std.mem.Allocator, from: WorldCoord, to: WorldCoord, forbidden
         for (moves) |move| {
             const coord = u + move.dir;
 
-            if (!isMoveValid(u, move, forbidden_zone)) continue;
+            const validity = isMoveValid(u, move, forbidden_zone);
+            if (validity == .invalid) continue;
             // check if within search radius
             const manhattan = @abs(coord[0] - from[0]) + @abs(coord[2] - from[2]);
             if (manhattan > SEARCH_RADIUS) continue;
@@ -238,13 +266,24 @@ pub fn routeTo(a: std.mem.Allocator, from: WorldCoord, to: WorldCoord, forbidden
                 signal_strength = 14;
             }
 
-            const dist = prev_metric.distance + move.weight;
+            // check if intersects forbidden zone
+            var dist = prev_metric.distance + move.weight;
+            if (validity == .violation) {
+                dist += 100; // allow violations with large weight penalty
+            }
             const distv = distances.get(coord);
 
             // If we found a strictly better path to `coord`
             if (distv == null or dist < distv.?.distance) {
                 distances.put(coord, .{ .signal_strength = signal_strength, .distance = dist }) catch @panic("oom");
-                parents.put(coord, .{ .conn_type = move.conn_type, .prev = u }) catch @panic("oom");
+                parents.put(
+                    coord,
+                    .{
+                        .conn_type = move.conn_type,
+                        .prev = u,
+                        .violating = validity == .violation,
+                    },
+                ) catch @panic("oom");
 
                 // Push duplicate entry. The heap sorts by this static item.dist.
                 queue.add(.{ .coord = coord, .dist = dist, .manhattan = @as(u32, @intCast(manhattan)) }) catch @panic("oom");
@@ -273,9 +312,11 @@ fn buildRouteBlocks(a: std.mem.Allocator, from: WorldCoord, to: WorldCoord, pare
     var length: u32 = 0;
     var delay: u32 = 0;
 
+    var violating = false;
     while (!coordEq(vec, from)) {
         const p = parents.get(vec) orelse return error.MissingParent;
         vec = p.prev;
+        if (p.violating) violating = true;
 
         const move_dir = prev_vec - vec;
 
@@ -294,7 +335,7 @@ fn buildRouteBlocks(a: std.mem.Allocator, from: WorldCoord, to: WorldCoord, pare
                 try abs_blocks.append(a, .{ .block = .dust, .loc = vec, .rot = .center });
                 try abs_blocks.append(a, .{ .block = .block, .loc = mid + WorldCoord{ 0, -1, 0 }, .rot = .center });
                 try abs_blocks.append(a, .{ .block = .block, .loc = vec + WorldCoord{ 0, -1, 0 }, .rot = .center });
-                length += 1;
+                length += 2;
                 delay += 1; // repeaters add a delay of 1 tick
             },
             .via_up => {
@@ -366,6 +407,7 @@ fn buildRouteBlocks(a: std.mem.Allocator, from: WorldCoord, to: WorldCoord, pare
         .route = abs_blocks,
         .delay = delay,
         .length = length,
+        .violating = violating,
     };
 }
 

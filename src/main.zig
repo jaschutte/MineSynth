@@ -35,22 +35,24 @@ pub fn main() !void {
     defer forbidden_zone.deinit();
 
     const test_endpoints = [_][2][3]i32{
+        .{ .{ 0, 0, 0 }, .{ 0, 0, 5 } },
+        .{ .{ 5, 0, 5 }, .{ 0, 0, 6 } },
         .{ .{ -20, 0, 0 }, .{ 40, 0, 0 } },
-        .{ .{ 10, 0, -20 }, .{ 10, 0, 20 } },
-        .{ .{ -20, 0, 10 }, .{ 40, 0, 10 } },
-        .{ .{ 30, 0, -30 }, .{ -10, 0, 30 } },
-        .{ .{ -40, 0, -10 }, .{ 20, 0, -10 } },
-        .{ .{ 0, 0, -40 }, .{ 0, 0, 40 } },
-        .{ .{ 50, 0, -50 }, .{ -20, 0, 20 } },
-        .{ .{ -50, 0, 40 }, .{ 30, 0, 50 } },
+        // .{ .{ 10, 0, -20 }, .{ 10, 0, 20 } },
+        // .{ .{ -20, 0, 10 }, .{ 40, 0, 10 } },
+        // .{ .{ 30, 0, -30 }, .{ -10, 0, 30 } },
+        // .{ .{ -40, 0, -10 }, .{ 20, 0, -10 } },
+        // .{ .{ 0, 0, -40 }, .{ 0, 0, 40 } },
+        // .{ .{ 50, 0, -50 }, .{ -20, 0, 20 } },
+        // .{ .{ -50, 0, 40 }, .{ 30, 0, 50 } },
     };
 
     var master_route = try rt.routeToUpdateForbiddenZone(gpa, test_endpoints[0][0], test_endpoints[0][1], &forbidden_zone);
     defer master_route.deinit(gpa);
 
     std.log.info(
-        "path of length {d} and delay {d} found between {any} and {any}\n",
-        .{ master_route.length, master_route.delay, test_endpoints[0][0], test_endpoints[0][1] },
+        "path of length {d} and delay {d} with violating {any} found between {any} and {any}\n",
+        .{ master_route.length, master_route.delay, master_route.violating, test_endpoints[0][0], test_endpoints[0][1] },
     );
 
     for (test_endpoints[1..]) |endpoints| {
@@ -61,8 +63,8 @@ pub fn main() !void {
         defer route.deinit(gpa);
 
         std.log.info(
-            "path of length {d} and delay {d} found between {any} and {any}",
-            .{ route.length, route.delay, start, end },
+            "path of length {d} and delay {d} with violating {any} found between {any} and {any}",
+            .{ route.length, route.delay, route.violating, start, end },
         );
 
         try master_route.route.appendSlice(gpa, route.route.items);

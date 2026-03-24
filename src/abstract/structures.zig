@@ -35,7 +35,17 @@ pub const AbsBlock = struct {
     rot: Orientation,
     loc: WorldCoord,
 };
-pub const ForbiddenZone = std.AutoHashMap(WorldCoord, void);
+
+pub const ForbiddenZoneType = enum {
+    gate,
+    wire,
+};
+pub const ForbiddenZoneInfo = struct {
+    ftype: ForbiddenZoneType,
+};
+
+pub const ForbiddenZone = std.AutoHashMap(WorldCoord, ForbiddenZoneInfo);
+
 pub fn OrderedSet(T: type) type {
     return struct {
         const This = @This();
