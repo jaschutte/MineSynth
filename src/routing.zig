@@ -28,11 +28,24 @@ const RouteComponent = enum {
     via_down,
 };
 
+const NodeState = struct {
+    coord: WorldCoord,
+    signal: u4,
+};
+
 const Parent = struct {
-    prev: WorldCoord,
+    prev: NodeState,
     conn_type: RouteComponent,
     violating: bool,
 };
+
+// 3D Manhattan distance towards the target acts as an admissible heuristic.
+fn heuristic(curr: WorldCoord, target: WorldCoord) u32 {
+    const dx = @as(u32, @intCast(@abs(curr[0] - target[0])));
+    const dy = @as(u32, @intCast(@abs(curr[1] - target[1])));
+    const dz = @as(u32, @intCast(@abs(curr[2] - target[2])));
+    return dx + dy + dz;
+}
 
 // any formless volume
 const Volume = ms.OrderedSet(WorldCoord);
@@ -42,18 +55,20 @@ fn coordEq(a: WorldCoord, b: WorldCoord) bool {
 }
 
 const QueueItem = struct {
-    coord: WorldCoord,
-    dist: u32,
-    manhattan: u32,
+    state: NodeState,
+    g: u32,
+    f: u32,
 };
 
 fn queueOrder(context: void, a: QueueItem, b: QueueItem) std.math.Order {
     _ = context;
-    const dist_order = std.math.order(a.dist, b.dist);
-    if (dist_order == .eq) {
-        return std.math.order(a.manhattan, b.manhattan);
+    const f_order = std.math.order(a.f, b.f);
+    if (f_order == .eq) {
+        // Tie-breaker: If f is equal, prioritize the node with the higher g-cost
+        // because it has a smaller h-cost and is deeper in the search tree (closer to goal).
+        return std.math.order(b.g, a.g);
     }
-    return dist_order;
+    return f_order;
 }
 
 const DistanceMetric = struct {
@@ -187,137 +202,130 @@ pub fn routeTo(a: std.mem.Allocator, from: WorldCoord, to: WorldCoord, forbidden
         return error.InvalidToOrFromYLevel;
     }
 
-    const SEARCH_RADIUS = 100; // in Manhattan distance
-
     var queue = std.PriorityQueue(QueueItem, void, queueOrder).init(a, {});
     defer queue.deinit();
 
-    var parents = std.AutoHashMap(WorldCoord, Parent).init(a);
+    // Dictionaries now key on NodeState (Coord + Signal Strength)
+    var parents = std.AutoHashMap(NodeState, Parent).init(a);
     defer parents.deinit();
 
-    var explored = std.AutoHashMap(WorldCoord, void).init(a);
-    defer explored.deinit();
-
-    var distances = std.AutoHashMap(WorldCoord, DistanceMetric).init(a);
+    var distances = std.AutoHashMap(NodeState, u32).init(a);
     defer distances.deinit();
 
-    try distances.put(from, .{ .distance = 0, .signal_strength = 15 });
-    try queue.add(.{ .coord = from, .dist = 0, .manhattan = 0 });
+    const start_state = NodeState{ .coord = from, .signal = 15 };
+    try distances.put(start_state, 0);
+    try queue.add(.{ .state = start_state, .g = 0, .f = heuristic(from, to) });
 
+    // Edge weights must be > 0. Scaled to reflect relative pathing delays/material costs.
     const moves = [_]Move{
-        // consider regular redstone
         .{ .dir = .{ 1, 0, 0 }, .weight = 0, .conn_type = .dust },
         .{ .dir = .{ 0, 0, 1 }, .weight = 0, .conn_type = .dust },
         .{ .dir = .{ -1, 0, 0 }, .weight = 0, .conn_type = .dust },
         .{ .dir = .{ 0, 0, -1 }, .weight = 0, .conn_type = .dust },
-        // consider repeaters
-        .{ .dir = .{ 2, 0, 0 }, .weight = 1, .conn_type = .repeater },
-        .{ .dir = .{ 0, 0, 2 }, .weight = 1, .conn_type = .repeater },
-        .{ .dir = .{ -2, 0, 0 }, .weight = 1, .conn_type = .repeater },
-        .{ .dir = .{ 0, 0, -2 }, .weight = 1, .conn_type = .repeater },
-        // via up
-        .{ .dir = .{ 2, 3, 0 }, .weight = 2, .conn_type = .via_up },
-        .{ .dir = .{ -2, 3, 0 }, .weight = 2, .conn_type = .via_up },
-        .{ .dir = .{ 0, 3, 2 }, .weight = 2, .conn_type = .via_up },
-        .{ .dir = .{ 0, 3, -2 }, .weight = 2, .conn_type = .via_up },
-        // via down
-        .{ .dir = .{ 2, -3, 0 }, .weight = 2, .conn_type = .via_down },
-        .{ .dir = .{ -2, -3, 0 }, .weight = 2, .conn_type = .via_down },
-        .{ .dir = .{ 0, -3, 2 }, .weight = 2, .conn_type = .via_down },
-        .{ .dir = .{ 0, -3, -2 }, .weight = 2, .conn_type = .via_down },
+
+        .{ .dir = .{ 2, 0, 0 }, .weight = 2, .conn_type = .repeater },
+        .{ .dir = .{ 0, 0, 2 }, .weight = 2, .conn_type = .repeater },
+        .{ .dir = .{ -2, 0, 0 }, .weight = 2, .conn_type = .repeater },
+        .{ .dir = .{ 0, 0, -2 }, .weight = 2, .conn_type = .repeater },
+
+        .{ .dir = .{ 2, 3, 0 }, .weight = 5, .conn_type = .via_up },
+        .{ .dir = .{ -2, 3, 0 }, .weight = 5, .conn_type = .via_up },
+        .{ .dir = .{ 0, 3, 2 }, .weight = 5, .conn_type = .via_up },
+        .{ .dir = .{ 0, 3, -2 }, .weight = 5, .conn_type = .via_up },
+
+        .{ .dir = .{ 2, -3, 0 }, .weight = 5, .conn_type = .via_down },
+        .{ .dir = .{ -2, -3, 0 }, .weight = 5, .conn_type = .via_down },
+        .{ .dir = .{ 0, -3, 2 }, .weight = 5, .conn_type = .via_down },
+        .{ .dir = .{ 0, -3, -2 }, .weight = 5, .conn_type = .via_down },
     };
+
+    var final_state: ?NodeState = null;
 
     while (queue.count() > 0) {
         const item = queue.removeOrNull().?;
-        const u = item.coord;
+        const u_state = item.state;
+        const u = u_state.coord;
 
-        // Lazy Dijkstra: discard popped items that are stale
-        const best_dist = distances.get(u) orelse continue;
-        if (item.dist > best_dist.distance) continue;
+        const best_g = distances.get(u_state) orelse std.math.maxInt(u32);
+        if (item.g > best_g) continue;
 
-        // done once arrived at the destination for the first time
-        // could consider more options but this is still a good heuristic
-        // or maybe optimal considering our specific case...
-        // could add a search depth option and search limit
-        if (coordEq(u, to)) break;
+        if (coordEq(u, to)) {
+            final_state = u_state;
+            break;
+        }
 
         for (moves) |move| {
             const coord = u + move.dir;
-
             const validity = isMoveValid(u, move, forbidden_zone);
             if (validity == .invalid) continue;
-            // check if within search radius
-            const manhattan = @abs(coord[0] - from[0]) + @abs(coord[2] - from[2]);
-            if (manhattan > SEARCH_RADIUS) continue;
 
-            const prev_metric = distances.get(u).?;
-            var signal_strength = prev_metric.signal_strength;
+            var next_signal = u_state.signal;
 
             if (move.conn_type == .dust) {
-                if (signal_strength == 0) continue;
-                // need at least signal strength 1 at input
-                if (signal_strength == 1 and coordEq(coord, to)) continue;
-                signal_strength -= 1;
+                if (next_signal == 0) continue;
+                if (next_signal == 1 and coordEq(coord, to)) continue;
+                next_signal -= 1;
             } else if (move.conn_type == .repeater) {
-                if (signal_strength == 0) continue;
-                signal_strength = 15;
+                if (next_signal == 0) continue;
+                next_signal = 15;
             } else if (move.conn_type == .via_up or move.conn_type == .via_down) {
-                if (signal_strength < 2) continue;
-                signal_strength = 14;
+                if (next_signal < 2) continue;
+                next_signal = 14;
             }
 
-            // check if intersects forbidden zone
-            var dist = prev_metric.distance + move.weight;
+            const next_state = NodeState{ .coord = coord, .signal = next_signal };
+
+            var move_cost = move.weight;
             if (validity == .violation) {
-                dist += 100; // allow violations with large weight penalty
+                move_cost += 100;
             }
-            const distv = distances.get(coord);
 
-            // If we found a strictly better path to `coord`
-            if (distv == null or dist < distv.?.distance) {
-                distances.put(coord, .{ .signal_strength = signal_strength, .distance = dist }) catch @panic("oom");
-                parents.put(
-                    coord,
-                    .{
-                        .conn_type = move.conn_type,
-                        .prev = u,
-                        .violating = validity == .violation,
-                    },
-                ) catch @panic("oom");
+            const g_cost = item.g + move_cost;
+            const existing_g = distances.get(next_state);
 
-                // Push duplicate entry. The heap sorts by this static item.dist.
-                queue.add(.{ .coord = coord, .dist = dist, .manhattan = @as(u32, @intCast(manhattan)) }) catch @panic("oom");
+            if (existing_g == null or g_cost < existing_g.?) {
+                distances.put(next_state, g_cost) catch @panic("oom");
+                parents.put(next_state, .{
+                    .prev = u_state,
+                    .conn_type = move.conn_type,
+                    .violating = validity == .violation,
+                }) catch @panic("oom");
+
+                const h_cost = heuristic(coord, to);
+                queue.add(.{
+                    .state = next_state,
+                    .g = g_cost,
+                    .f = g_cost + h_cost,
+                }) catch @panic("oom");
             }
         }
-
-        explored.put(u, void{}) catch @panic("oom");
     }
 
-    // check if exhausted search space without finding destination
-    if (parents.get(to) == null) {
+    if (final_state == null) {
         std.log.err("Could not find a path to .{any}", .{to});
         return error.PathNotFound;
     }
 
-    // construct block array
-    return try buildRouteBlocks(a, from, to, parents);
+    return try buildRouteBlocks(a, from, final_state.?, parents);
 }
 
-fn buildRouteBlocks(a: std.mem.Allocator, from: WorldCoord, to: WorldCoord, parents: std.AutoHashMap(WorldCoord, Parent)) !Route {
+fn buildRouteBlocks(a: std.mem.Allocator, from: WorldCoord, final_state: NodeState, parents: std.AutoHashMap(NodeState, Parent)) !Route {
     var abs_blocks: std.ArrayList(ms.AbsBlock) = .empty;
-
-    var vec = to;
-    var prev_vec = to;
 
     var length: u32 = 0;
     var delay: u32 = 0;
 
     var violating = false;
-    while (!coordEq(vec, from)) {
-        const p = parents.get(vec) orelse return error.MissingParent;
-        vec = p.prev;
-        if (p.violating) violating = true;
+    var curr_state = final_state;
+    var vec = curr_state.coord;
+    var prev_vec = vec;
 
+    while (!coordEq(vec, from)) {
+        const p = parents.get(curr_state) orelse return error.MissingParent;
+        curr_state = p.prev;
+        vec = curr_state.coord;
+
+        if (p.violating) violating = true;
         const move_dir = prev_vec - vec;
 
         switch (p.conn_type) {
@@ -393,8 +401,8 @@ fn buildRouteBlocks(a: std.mem.Allocator, from: WorldCoord, to: WorldCoord, pare
         prev_vec = vec;
     }
     // append output
-    try abs_blocks.append(a, .{ .block = .dust, .loc = to, .rot = .center });
-    try abs_blocks.append(a, .{ .block = .block, .loc = to + WorldCoord{ 0, -1, 0 }, .rot = .center });
+    try abs_blocks.append(a, .{ .block = .dust, .loc = final_state.coord, .rot = .center });
+    try abs_blocks.append(a, .{ .block = .block, .loc = final_state.coord + WorldCoord{ 0, -1, 0 }, .rot = .center });
 
     var min_coord = @as(WorldCoord, @splat(std.math.maxInt(i32)));
     for (abs_blocks.items) |b| {
