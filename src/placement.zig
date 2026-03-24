@@ -28,7 +28,7 @@ pub const AnnealingConfig = struct {
     perturbations_amount: u32 = 1,
     // we could prioritize usage of horizontal wiring by punishing large y deviations more
     x_weight: f32 = 1,
-    y_weight: f32 = 1,
+    y_weight: f32 = 2,
     wire_cost_weight: f32 = 1,
     // initial placement is completely independent from final result
     initial_spacing: postype = 6,
@@ -253,14 +253,14 @@ pub fn print(the_graph: *const Graph, placement: *Placement, allocator: std.mem.
     string.deinit();
 }
 
-// not O(1) :(
-fn isOutput(the_graph: *const Graph, node_id: glib.NodeId) bool {
-    return (the_graph.getNodeEdges(node_id, .output).len == 0);
+// O(1) :)
+fn isOutput(the_placement: *const Placement, node_id: glib.NodeId) bool {
+    return the_placement.output_nodes.contains(node_id);
 }
 
-// not O(1) :(
-fn isInput(the_graph: *const Graph, node_id: glib.NodeId) bool {
-    return (the_graph.getNodeEdges(node_id, .input).len == 0);
+// O(1) :)
+fn isInput(the_placement: *const Placement, node_id: glib.NodeId) bool {
+    return the_placement.input_nodes.contains(node_id);
 }
 
 fn getAbsolutePosition(position: *const Position, port_pos_relative: @Vector(3, i32), min_pos: postype) @Vector(2, postype) {
@@ -283,14 +283,21 @@ fn initialPlacement(the_graph: *const Graph, annealing_config: AnnealingConfig) 
     placement.input_y = annealing_config.initial_input_y;
     placement.output_y = annealing_config.initial_output_y;
 
+    const first_x_pos = annealing_config.grid_size;
+    const first_y_pos = annealing_config.grid_size;
+
     // place input nodes:
-    var x: postype = 1 * annealing_config.grid_size;
+    var x: postype = first_x_pos;
     var y: postype = annealing_config.initial_input_y;
 
     var count: u32 = 0;
 
     for (the_graph.nodes.keys()) |node_id| {
-        if (isInput(the_graph, node_id)) {
+        // if there are no input edges connected to this node, it is considered an input to the chip
+        const nodes = the_graph.getNodeEdges(node_id, .input);
+        defer the_graph.gpa.free(nodes);
+
+        if (nodes.len == 0) {
             try place(placement, the_graph.getConstNode(node_id).?, x, y, .North);
             try placement.input_nodes.put(node_id, {});
             count += 1;
@@ -301,11 +308,15 @@ fn initialPlacement(the_graph: *const Graph, annealing_config: AnnealingConfig) 
     }
 
     // place output nodes:
-    x = 1 * annealing_config.grid_size;
+    x = first_x_pos;
     y = annealing_config.initial_output_y;
 
     for (the_graph.nodes.keys()) |node_id| {
-        if (isOutput(the_graph, node_id)) {
+        // if there are no output edges connected to this node, it is considered an output to the chip
+        const nodes = the_graph.getNodeEdges(node_id, .output);
+        defer the_graph.gpa.free(nodes);
+
+        if (nodes.len == 0) {
             try place(placement, the_graph.getConstNode(node_id).?, x, y, .North);
             try placement.output_nodes.put(node_id, {});
             count += 1;
@@ -315,11 +326,11 @@ fn initialPlacement(the_graph: *const Graph, annealing_config: AnnealingConfig) 
         }
     }
 
-    x = 1 * annealing_config.grid_size;
-    y = 1 * annealing_config.grid_size;
+    x = first_x_pos;
+    y = first_y_pos;
 
     for (the_graph.nodes.keys()) |node_id| {
-        if (isOutput(the_graph, node_id) or isInput(the_graph, node_id)) {
+        if (isOutput(placement, node_id) or isInput(placement, node_id)) {
             continue;
         }
         try place(placement, the_graph.getConstNode(node_id).?, x, y, .North);
@@ -342,15 +353,6 @@ fn cost(the_graph: *const Graph, the_placement: *const Placement, annealing_conf
 fn costWireLength(the_graph: *const Graph, the_placement: *const Placement, annealing_config: AnnealingConfig) f32 {
     var sum: f32 = 0;
     for (the_graph.edges.values()) |net| {
-        const pos_a = the_placement.locations.getPtr(net.a) orelse {
-            std.debug.print("node 'net.a' {d} not placed\n", .{net.a});
-            continue;
-        };
-        const pos_b = the_placement.locations.getPtr(net.b) orelse {
-            std.debug.print("node 'net.b' {d} not placed\n", .{net.b});
-            continue;
-        };
-
         var from_node_id = net.a;
         var to_node_id = net.b;
         if (net.a_relation == .input) {
@@ -359,6 +361,8 @@ fn costWireLength(the_graph: *const Graph, the_placement: *const Placement, anne
         }
         const from_node = the_graph.getConstNode(from_node_id).?;
         const to_node = the_graph.getConstNode(to_node_id).?;
+        std.debug.assert(!isInput(the_placement, to_node_id));
+        std.debug.assert(!isOutput(the_placement, from_node_id));
 
         var i: u8 = 0;
         if (use_accurate_input_pos) {
@@ -372,21 +376,37 @@ fn costWireLength(the_graph: *const Graph, the_placement: *const Placement, anne
         const port_output = from_node.body.kind.outputPositionsRelative();
         const port_input = to_node.body.kind.inputPositionsRelative()[i].?;
 
+        const pos_from = the_placement.locations.getPtr(from_node_id) orelse {
+            std.debug.print("node 'from_node_id' {d} not placed\n", .{from_node_id});
+            continue;
+        };
+        const pos_to = the_placement.locations.getPtr(to_node_id) orelse {
+            std.debug.print("node 'to_node_id' {d} not placed\n", .{to_node_id});
+            continue;
+        };
+
         // if this fails, positions are clamped to 0 and not accurate
-        std.debug.assert(@as(i32, @intCast(pos_a.x)) + port_input[0] >= 0);
-        std.debug.assert(@as(i32, @intCast(pos_a.y)) + port_input[0] >= 0);
-        std.debug.assert(@as(i32, @intCast(pos_b.x)) + port_output[2] >= 0);
-        std.debug.assert(@as(i32, @intCast(pos_b.y)) + port_output[2] >= 0);
+        std.debug.assert(@as(i32, @intCast(pos_to.x)) + port_input[0] >= 0);
+        std.debug.assert(@as(i32, @intCast(pos_to.y)) + port_input[0] >= 0);
+        std.debug.assert(@as(i32, @intCast(pos_from.x)) + port_output[2] >= 0);
+        std.debug.assert(@as(i32, @intCast(pos_from.y)) + port_output[2] >= 0);
+        
+        const port_pos_from = getAbsolutePosition(pos_from, port_output, 0);
+        const port_pos_to = getAbsolutePosition(pos_to, port_input, 0);
 
-        const port_pos_a = getAbsolutePosition(pos_a, port_input, 0);
-        const port_pos_b = getAbsolutePosition(pos_b, port_output, 0);
-
-        const diff_x = if (port_pos_a[0] > port_pos_b[0]) port_pos_a[0] - port_pos_b[0] else port_pos_b[0] - port_pos_a[0];
+        const diff_x = if (port_pos_to[0] > port_pos_from[0]) port_pos_to[0] - port_pos_from[0] else port_pos_from[0] - port_pos_to[0];
         const net_width = @as(f32, @floatFromInt(diff_x));
-        const diff_y = if (port_pos_a[1] > port_pos_b[1]) port_pos_a[1] - port_pos_b[1] else port_pos_b[1] - port_pos_a[1];
+        const diff_y = if (port_pos_to[1] > port_pos_from[1]) port_pos_to[1] - port_pos_from[1] else port_pos_from[1] - port_pos_to[1];
         const net_height = @as(f32, @floatFromInt(diff_y));
 
-        sum = sum + net_width * annealing_config.x_weight + net_height * annealing_config.y_weight;
+        const netcost = net_width * annealing_config.x_weight + net_height * annealing_config.y_weight;
+        // if (isInput(the_placement, from_node_id)) {
+        //     std.debug.print("input net cost: {d}\n", .{netcost});
+        // }
+        // if (isOutput(the_placement, to_node_id)) {
+        //     std.debug.print("output net cost: {d}\n", .{netcost});
+        // }
+        sum = sum + netcost;
     }
 
     return annealing_config.wire_cost_weight * sum;
@@ -492,7 +512,7 @@ fn randomMove(the_graph: *const Graph, the_placement: *Placement, to_perturb: gl
 
     const pos = the_placement.locations.getPtr(to_perturb).?;
 
-    // these normalizations are to keep the random normally distributed, so it may be omitted for performance just fine.
+    // these normalizations are to keep the average position universally distributed, so it may be omitted for performance just fine.
     const min_to_use_x: i32 = -@min(@divFloor(pos.x - min_pos, min_spacing), size_to_use);
     const max_to_use_x: i32 = @min(@divFloor(max_chipsize - pos.x, min_spacing), size_to_use);
 
@@ -519,10 +539,10 @@ fn randomMove(the_graph: *const Graph, the_placement: *Placement, to_perturb: gl
 // if both fit at the new locations without collisions, it performs the swap and returns true.
 fn swap(the_graph: *const Graph, the_placement: *Placement, node_a_id: glib.NodeId, node_b_id: glib.NodeId) bool {
     errdefer @panic("Skill issue");
-    if (isInput(the_graph, node_a_id) or isOutput(the_graph, node_a_id)) {
+    if (isInput(the_placement, node_a_id) or isOutput(the_placement, node_a_id)) {
         return false;
     }
-    if (isInput(the_graph, node_b_id) or isOutput(the_graph, node_b_id)) {
+    if (isInput(the_placement, node_b_id) or isOutput(the_placement, node_b_id)) {
         return false;
     }
 
@@ -643,9 +663,9 @@ fn perturb(the_graph: *const Graph, the_placement: *Placement, random: std.Rando
     errdefer @panic("Ran out of memory lol");
     for (0..annealing_config.perturbations_amount) |_| {
         const to_perturb = getRandomNodeID(the_placement, random).?;
-        if (isOutput(the_graph, to_perturb)) {
+        if (isOutput(the_placement, to_perturb)) {
             _ = randomMove(the_graph, the_placement, to_perturb, @intFromFloat(@ceil(current_window_size)), random, annealing_config.grid_size, annealing_config.grid_size, the_placement.output_y);
-        } else if (isInput(the_graph, to_perturb)) {
+        } else if (isInput(the_placement, to_perturb)) {
             // perform moveOutput 1 out of 10 times
             if (random.intRangeLessThan(usize, 0, 10) != 1) {
                 _ = randomMove(the_graph, the_placement, to_perturb, @intFromFloat(@ceil(current_window_size)), random, annealing_config.grid_size, annealing_config.grid_size, the_placement.input_y);
