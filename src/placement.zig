@@ -390,7 +390,7 @@ fn costWireLength(the_graph: *const Graph, the_placement: *const Placement, anne
         std.debug.assert(@as(i32, @intCast(pos_to.y)) + port_input[0] >= 0);
         std.debug.assert(@as(i32, @intCast(pos_from.x)) + port_output[2] >= 0);
         std.debug.assert(@as(i32, @intCast(pos_from.y)) + port_output[2] >= 0);
-        
+
         const port_pos_from = getAbsolutePosition(pos_from, port_output, 0);
         const port_pos_to = getAbsolutePosition(pos_to, port_input, 0);
 
@@ -602,20 +602,27 @@ fn swap(the_graph: *const Graph, the_placement: *Placement, node_a_id: glib.Node
 //     // TODO: swap input connection of a and b, only useful if use accurate input positions are used to calculate wirelength cost
 // }
 
-fn moveInputAxis(the_graph: *const Graph, the_placement: *Placement, window_size: u32, random: std.Random, min_spacing: u8, min_pos: postype) glib.NodeId {
+// useInput = true means we move the input axis, if false we use the output axis.
+fn moveInputOrOutputAxis(the_graph: *const Graph, the_placement: *Placement, window_size: u32, random: std.Random, min_spacing: u8, min_pos: postype, useInput: bool) glib.NodeId {
     errdefer @panic("Skill issue");
     var size_to_use: i32 = @intCast(window_size);
     if (size_to_use < min_spacing) {
         size_to_use = min_spacing;
     }
+
+    const y_to_use = if (useInput) the_placement.input_y else the_placement.output_y;
+
     size_to_use = @divFloor(size_to_use, min_spacing);
-    const min_to_use: i32 = -@min(@divFloor(the_placement.input_y, min_spacing), size_to_use);
+    const min_to_use: i32 = -@min(@divFloor(y_to_use, min_spacing), size_to_use);
 
     const dy = random.intRangeLessThan(i32, min_to_use, size_to_use) * min_spacing;
-    const new_y: postype = clampU32WithDelta(the_placement.input_y, dy, max_chipsize, min_pos);
+    const new_y: postype = clampU32WithDelta(y_to_use, dy, max_chipsize, min_pos);
     var lasytpos: ?postype = null;
+
+    const hashmap_to_use = if (useInput) the_placement.input_nodes else the_placement.output_nodes;
+
     // check for collisions:
-    var it1 = the_placement.input_nodes.iterator();
+    var it1 = hashmap_to_use.iterator();
     while (it1.next()) |entry| {
         const id: glib.NodeId = entry.key_ptr.*;
         const rect = the_graph.getConstNode(id).?.body.kind.size();
@@ -623,6 +630,7 @@ fn moveInputAxis(the_graph: *const Graph, the_placement: *Placement, window_size
         if (lasytpos == null) {
             lasytpos = pos.y;
         }
+        // ensure all in/output nodes are kept on the same y axis
         std.debug.assert(lasytpos == pos.y);
 
         const collision_result = try checkCollision(the_placement, id, rect, pos.x, new_y);
@@ -630,7 +638,7 @@ fn moveInputAxis(the_graph: *const Graph, the_placement: *Placement, window_size
     }
 
     // no collision: move all nodes to new position:
-    var it2 = the_placement.input_nodes.iterator();
+    var it2 = hashmap_to_use.iterator();
     while (it2.next()) |entry| {
         const id: glib.NodeId = entry.key_ptr.*;
         const pos = the_placement.locations.getPtr(id).?;
@@ -642,7 +650,12 @@ fn moveInputAxis(the_graph: *const Graph, the_placement: *Placement, window_size
         std.debug.assert(before == 0);
         std.debug.assert(result == 0);
     }
-    the_placement.input_y = new_y;
+
+    if (useInput) {
+        the_placement.input_y = new_y;
+    } else {
+        the_placement.output_y = new_y;
+    }
 
     return 0;
 }
@@ -664,13 +677,17 @@ fn perturb(the_graph: *const Graph, the_placement: *Placement, random: std.Rando
     for (0..annealing_config.perturbations_amount) |_| {
         const to_perturb = getRandomNodeID(the_placement, random).?;
         if (isOutput(the_placement, to_perturb)) {
-            _ = randomMove(the_graph, the_placement, to_perturb, @intFromFloat(@ceil(current_window_size)), random, annealing_config.grid_size, annealing_config.grid_size, the_placement.output_y);
+            if (random.intRangeLessThan(usize, 0, 10) != 1) {
+                _ = randomMove(the_graph, the_placement, to_perturb, @intFromFloat(@ceil(current_window_size)), random, annealing_config.grid_size, annealing_config.grid_size, the_placement.output_y);
+            } else {
+                _ = moveInputOrOutputAxis(the_graph, the_placement, @intFromFloat(@ceil(current_window_size)), random, annealing_config.grid_size, annealing_config.grid_size, false);
+            }
         } else if (isInput(the_placement, to_perturb)) {
             // perform moveOutput 1 out of 10 times
             if (random.intRangeLessThan(usize, 0, 10) != 1) {
                 _ = randomMove(the_graph, the_placement, to_perturb, @intFromFloat(@ceil(current_window_size)), random, annealing_config.grid_size, annealing_config.grid_size, the_placement.input_y);
             } else {
-                _ = moveInputAxis(the_graph, the_placement, @intFromFloat(@ceil(current_window_size)), random, annealing_config.grid_size, annealing_config.grid_size);
+                _ = moveInputOrOutputAxis(the_graph, the_placement, @intFromFloat(@ceil(current_window_size)), random, annealing_config.grid_size, annealing_config.grid_size, true);
             }
 
             // _ = moveRandomFixedY(the_graph, the_placement, to_perturb, @intFromFloat(@ceil(current_window_size)), random, annealing_config.grid_size, annealing_config.grid_size, the_placement.input_y);
@@ -708,9 +725,13 @@ pub fn placement_annealing(the_graph: *const Graph, annealing_config: AnnealingC
     errdefer @panic("Skill issue");
 
     var current_placement = initialPlacement(the_graph, annealing_config);
+    defer current_placement.deinit(the_graph.gpa);
     print(the_graph, current_placement, the_graph.gpa);
     var temperature = annealing_config.initial_temperature;
     var current_window_size = annealing_config.initial_window_size;
+
+    var best_placement = try current_placement.clone(the_graph.gpa);
+    var best_cost: f32 = std.math.floatMax(f32);
 
     // get random generator:
     var seed: u32 = undefined;
@@ -763,6 +784,13 @@ pub fn placement_annealing(the_graph: *const Graph, annealing_config: AnnealingC
                     );
                 }
             }
+
+            // store this amazing placement since it is great
+            if (new_cost < best_cost) {
+                best_cost = new_cost;
+                best_placement.deinit(the_graph.gpa);
+                best_placement = try current_placement.clone(the_graph.gpa);
+            }
         } // exit loop if in equilibrium at this temperature
 
         print(the_graph, current_placement, the_graph.gpa);
@@ -775,5 +803,5 @@ pub fn placement_annealing(the_graph: *const Graph, annealing_config: AnnealingC
         // compute tnext:
         temperature *= alpha;
     }
-    return current_placement;
+    return best_placement;
 }
