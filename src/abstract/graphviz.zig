@@ -5,7 +5,7 @@ const placement = @import("../placement.zig");
 
 // https://magjac.com/graphviz-visual-editor/
 
-pub fn printNode(string: *std.io.Writer.Allocating, node: *glib.GateGraph.Node, position: ?@Vector(2, i32)) void {
+pub fn printNode(string: *std.io.Writer.Allocating, node: *glib.GateGraph.Node, position: ?@Vector(2, placement.postype)) void {
     errdefer @panic("Skill issue");
 
     const symbol = node.body.symbol;
@@ -65,7 +65,7 @@ pub fn printPlacement(gpa: std.mem.Allocator, graph: *const glib.GateGraph, the_
             std.debug.print("node {d} not placed\n", .{node.id});
             continue;
         };
-        printNode(&string, node, @Vector(2, i32){ pos.x, pos.y });
+        printNode(&string, node, @Vector(2, placement.postype){ pos.x, pos.y });
     }
 
     try string.writer.writeAll("}\n");

@@ -3,9 +3,13 @@ const glib = @import("abstract/graph.zig");
 const Graph = glib.GateGraph;
 const physical = @import("physical.zig");
 
-const postype = i32;
+// comptime or private variables:
+// since schematic doesnt use negative coordinates, lets not bother with it here
+pub const postype = u32;
 const use_accurate_input_pos = false;
 const max_chipsize: u32 = 300;
+// used to avoid reading out of index in the grid
+const max_cell_size: u32 = 6;
 
 pub const AnnealingConfig = struct {
     // - "The annealing process starts at a high temperature, such as 4*10^6"
@@ -27,10 +31,10 @@ pub const AnnealingConfig = struct {
     y_weight: f32 = 1,
     wire_cost_weight: f32 = 1,
     // initial placement is completely independent from final result
-    initial_spacing: u32 = 8,
-    initial_row_size: u32 = 10,
+    initial_spacing: postype = 8,
+    initial_row_size: postype = 10,
     // 2*2 grid segments
-    grid_divisor: u8 = 2,
+    grid_size: u8 = 2,
 };
 
 pub const Orientation = enum {
@@ -44,18 +48,24 @@ pub const Position = struct { x: postype, y: postype, orientation: Orientation }
 
 pub const Placement = struct {
     locations: std.AutoArrayHashMap(glib.NodeId, Position),
-    occupancy_grid: [max_chipsize][max_chipsize]glib.NodeId,
+    occupancy_grid: [max_chipsize + max_cell_size][max_chipsize + max_cell_size]glib.NodeId,
+    output_y: postype, // to fix all outputs to this y position
+    input_y: postype, // to fix all inputs to this y position
 
     pub fn clone(self: *const Placement, allocator: std.mem.Allocator) !*Placement {
         var placement = try allocator.create(Placement);
         placement.locations = try self.locations.clone();
         placement.occupancy_grid = self.occupancy_grid;
+        placement.output_y = self.output_y;
+        placement.input_y = self.input_y;
         return placement;
     }
 
     pub fn init(self: *Placement, allocator: std.mem.Allocator) void {
         self.locations = std.AutoArrayHashMap(glib.NodeId, Position).init(allocator);
-        self.occupancy_grid = std.mem.zeroes([max_chipsize][max_chipsize]glib.NodeId);
+        self.occupancy_grid = std.mem.zeroes([max_chipsize + max_cell_size][max_chipsize + max_cell_size]glib.NodeId);
+        self.output_y = 0;
+        self.input_y = 0;
     }
 
     pub fn deinit(self: *Placement, allocator: std.mem.Allocator) void {
@@ -73,17 +83,17 @@ pub fn renderAscii(
     var it = placement.locations.iterator();
 
     // --- 1. Compute bounds ---
-    var min_x: i32 = std.math.maxInt(i32);
-    var min_y: i32 = std.math.maxInt(i32);
-    var max_x: i32 = std.math.minInt(i32);
-    var max_y: i32 = std.math.minInt(i32);
+    var min_x: postype = std.math.maxInt(postype);
+    var min_y: postype = std.math.maxInt(postype);
+    var max_x: postype = std.math.minInt(postype);
+    var max_y: postype = std.math.minInt(postype);
 
     while (it.next()) |entry| {
         const r = entry.value_ptr.*;
         const id: glib.NodeId = entry.key_ptr.*;
         const node = the_graph.getConstNode(id).?;
-        const w: i32 = @intCast(node.body.kind.size().w);
-        const h: i32 = @intCast(node.body.kind.size().h);
+        const w: postype = @intCast(node.body.kind.size().w);
+        const h: postype = @intCast(node.body.kind.size().h);
 
         if (r.x < min_x) min_x = r.x;
         if (r.y < min_y) min_y = r.y;
@@ -119,23 +129,23 @@ pub fn renderAscii(
         const r = entry.value_ptr.*;
         const id: glib.NodeId = entry.key_ptr.*;
         const node = the_graph.getConstNode(id).?;
-        const w: i32 = @intCast(node.body.kind.size().w);
-        const h: i32 = @intCast(node.body.kind.size().h);
+        const w: postype = @intCast(node.body.kind.size().w);
+        const h: postype = @intCast(node.body.kind.size().h);
 
         const group: u8 = idx / 26;
         const symbol: u8 = 'A' + (idx % 26);
         const color: u8 = colorForGroup(group);
 
-        var dy: i32 = 0;
+        var dy: postype = 0;
         while (dy < h) : (dy += 1) {
-            var dx: i32 = 0;
+            var dx: postype = 0;
             while (dx < w) : (dx += 1) {
                 // --- normalize coordinates ---
                 const gx = (r.x + dx) - min_x;
                 const gy_world = (r.y + dy) - min_y;
 
                 // --- flip Y for ASCII ---
-                const gy = @as(i32, @intCast(height)) - 1 - gy_world;
+                const gy = @as(postype, @intCast(height)) - 1 - gy_world;
 
                 if (gx < 0 or gy < 0) continue;
                 if (gx >= width or gy >= height) continue;
@@ -218,27 +228,42 @@ pub fn print(the_graph: *const Graph, placement: *Placement, allocator: std.mem.
     string.deinit();
 }
 
-fn getAbsolutePosition(position: *const Position, port: @Vector(3, i32)) @Vector(2, i32) {
+fn isOutput(the_graph: *const Graph, node_id: glib.NodeId) bool {
+    return (the_graph.getNodeEdges(node_id, .output).len == 0);
+}
+
+fn isInput(the_graph: *const Graph, node_id: glib.NodeId) bool {
+    return (the_graph.getNodeEdges(node_id, .input).len == 0);
+}
+
+fn getAbsolutePosition(position: *const Position, port_pos_relative: @Vector(3, i32), min_pos: postype) @Vector(2, postype) {
     // do not allow rotations for now
-    return @Vector(2, i32){ position.x + port[0], position.y + port[2] };
+    // this would cause pain for computewirelength if negative:
+    std.debug.assert(@as(i32, @intCast(position.x)) + port_pos_relative[0] >= 0);
+    std.debug.assert(@as(i32, @intCast(position.x)) + port_pos_relative[2] >= 0);
+
+    const new_x = clampU32WithDelta(position.x, port_pos_relative[0], max_chipsize, min_pos);
+    const new_y = clampU32WithDelta(position.y, port_pos_relative[2], max_chipsize, min_pos);
+
+    return @Vector(2, postype){ new_x, new_y };
 }
 
 // TODO: fix in-output positions to edges of board
 // research showed no dependence between intial placement and final result, so lets do it computationally efficiently
-fn initialPlacement(the_graph: *const Graph, initial_spacing: i32, initial_row_size: i32) *Placement {
+fn initialPlacement(the_graph: *const Graph, initial_spacing: postype, initial_row_size: postype, grid_size: u8) *Placement {
     errdefer @panic("Ran out of memory lol");
     const placement = try the_graph.gpa.create(Placement);
     placement.init(the_graph.gpa);
 
-    var x: i32 = 0;
-    var y: i32 = 0;
+    var x: postype = 1 * grid_size;
+    var y: postype = 1 * grid_size;
 
     for (the_graph.nodes.keys()) |node_id| {
         try place(placement, the_graph.getConstNode(node_id).?, x, y);
         std.debug.assert(placement.locations.count() > 0);
         x = x + initial_spacing;
         if (x >= initial_row_size * initial_spacing) {
-            x = 0;
+            x = 1 * grid_size;
             y = y + initial_spacing;
         }
     }
@@ -247,13 +272,13 @@ fn initialPlacement(the_graph: *const Graph, initial_spacing: i32, initial_row_s
 
 // TODO: fix in-output positions to edges of board
 // research showed no dependence between intial placement and final result, so lets test ourselves by using this topological one lol
-fn topologicalInitialPlacement(the_graph: *const Graph, initial_spacing: u32, initial_row_size: u32) *Placement {
+fn topologicalInitialPlacement(the_graph: *const Graph, initial_spacing: postype, initial_row_size: postype) *Placement {
     errdefer @panic("Ran out of memory lol");
     const placement = try the_graph.gpa.create(Placement);
     placement.init(the_graph.gpa);
 
-    var x: i32 = 0;
-    var y: i32 = 0;
+    var x: postype = 0;
+    var y: postype = 0;
 
     const toposort = the_graph.topologicalSort();
     defer the_graph.gpa.free(toposort);
@@ -271,11 +296,11 @@ fn topologicalInitialPlacement(the_graph: *const Graph, initial_spacing: u32, in
 }
 
 // computes the cost of the given placement
-fn cost(the_graph: *const Graph, the_placement: *const Placement, x_weight: f32, y_weight: f32, wire_cost_weight: f32) f32 {
-    return costWireLength(the_graph, the_placement, x_weight, y_weight, wire_cost_weight); // + costOverlap(the_graph, the_placement);
+fn cost(the_graph: *const Graph, the_placement: *const Placement, annealing_config: AnnealingConfig) f32 {
+    return costWireLength(the_graph, the_placement, annealing_config); // + costOverlap(the_graph, the_placement);
 }
 
-fn costWireLength(the_graph: *const Graph, the_placement: *const Placement, x_weight: f32, y_weight: f32, wire_cost_weight: f32) f32 {
+fn costWireLength(the_graph: *const Graph, the_placement: *const Placement, annealing_config: AnnealingConfig) f32 {
     var sum: f32 = 0;
     for (the_graph.edges.values()) |net| {
         const pos_a = the_placement.locations.getPtr(net.a) orelse {
@@ -308,16 +333,24 @@ fn costWireLength(the_graph: *const Graph, the_placement: *const Placement, x_we
         const port_output = from_node.body.kind.outputPositionsRelative();
         const port_input = to_node.body.kind.inputPositionsRelative()[i].?;
 
-        const port_pos_a = getAbsolutePosition(pos_a, port_input);
-        const port_pos_b = getAbsolutePosition(pos_b, port_output);
+        // if this fails, positions are clamped to 0 and not accurate
+        std.debug.assert(@as(i32, @intCast(pos_a.x)) + port_input[0] >= 0);
+        std.debug.assert(@as(i32, @intCast(pos_a.y)) + port_input[0] >= 0);
+        std.debug.assert(@as(i32, @intCast(pos_b.x)) + port_output[2] >= 0);
+        std.debug.assert(@as(i32, @intCast(pos_b.y)) + port_output[2] >= 0);
 
-        const net_width = @as(f32, @floatFromInt(@abs(port_pos_a[0] - port_pos_b[0]))); // x
-        const net_height = @as(f32, @floatFromInt(@abs(port_pos_a[1] - port_pos_b[1]))); // y
+        const port_pos_a = getAbsolutePosition(pos_a, port_input, 0);
+        const port_pos_b = getAbsolutePosition(pos_b, port_output, 0);
 
-        sum = sum + net_width * x_weight + net_height * y_weight;
+        const diff_x = if (port_pos_a[0] > port_pos_b[0]) port_pos_a[0] - port_pos_b[0] else port_pos_b[0] - port_pos_a[0];
+        const net_width = @as(f32, @floatFromInt(diff_x));
+        const diff_y = if (port_pos_a[1] > port_pos_b[1]) port_pos_a[1] - port_pos_b[1] else port_pos_b[1] - port_pos_a[1];
+        const net_height = @as(f32, @floatFromInt(diff_y));
+
+        sum = sum + net_width * annealing_config.x_weight + net_height * annealing_config.y_weight;
     }
 
-    return wire_cost_weight * sum;
+    return annealing_config.wire_cost_weight * sum;
 }
 
 // depricated, movements now do not cause overlap at all
@@ -353,19 +386,11 @@ fn costOverlap(the_graph: *const Graph, the_placement: *const Placement) f32 {
     return sum;
 }
 
-fn unsignedCast(value: postype) u64 {
-    const padding = @divFloor(max_chipsize, 2);
-    return @intCast(@as(i64, value) + @as(i64, padding));
-}
-
-// places node at position without checking for collisions, used for initial placement.
+// places node at position without checking for collisions, used by initial placement.
 fn place(the_placement: *Placement, to_place: *const glib.GateGraph.Node, new_x: postype, new_y: postype) !void {
     const rect = to_place.body.kind.size();
-    const unsigned_new_x = unsignedCast(new_x);
-    const unsigned_new_y = unsignedCast(new_y);
-
-    for (unsigned_new_x..unsigned_new_x + rect.w) |x| {
-        for (unsigned_new_y..unsigned_new_y + rect.h) |y| {
+    for (new_x..new_x + rect.w) |x| {
+        for (new_y..new_y + rect.h) |y| {
             the_placement.occupancy_grid[x][y] = to_place.id;
         }
     }
@@ -381,19 +406,16 @@ fn tryMove(the_placement: *Placement, to_place: *const glib.GateGraph.Node, last
     // const node = the_graph.getConstNode(to_place);
     const rect = to_place.body.kind.size();
 
-    const unsigned_new_x = unsignedCast(new_x);
-    const unsigned_new_y = unsignedCast(new_y);
-
-    for (unsigned_new_x..unsigned_new_x + rect.w) |x| {
-        for (unsigned_new_y..unsigned_new_y + rect.h) |y| {
+    for (new_x..new_x + rect.w) |x| {
+        for (new_y..new_y + rect.h) |y| {
             if (the_placement.occupancy_grid[x][y] != 0) {
                 return the_placement.occupancy_grid[x][y];
             }
         }
     }
 
-    const unsigned_last_x = unsignedCast(last_pos.x);
-    const unsigned_last_y = unsignedCast(last_pos.y);
+    const unsigned_last_x = last_pos.x;
+    const unsigned_last_y = last_pos.y;
 
     // No collision, so move rectangle
     for (unsigned_last_x..unsigned_last_x + rect.w) |x| {
@@ -402,28 +424,39 @@ fn tryMove(the_placement: *Placement, to_place: *const glib.GateGraph.Node, last
         }
     }
 
-    for (unsigned_new_x..unsigned_new_x + rect.w) |x| {
-        for (unsigned_new_y..unsigned_new_y + rect.h) |y| {
+    for (new_x..new_x + rect.w) |x| {
+        for (new_y..new_y + rect.h) |y| {
             the_placement.occupancy_grid[x][y] = to_place.id;
         }
     }
     return 0;
 }
 
+fn clampU32WithDelta(x: postype, dx: i32, max_pos: postype, min_pos: postype) postype {
+    var wide: i64 = @as(i64, x) + @as(i64, dx);
+
+    if (wide < min_pos) wide = min_pos;
+    if (wide > max_pos) wide = max_pos;
+
+    return @as(postype, @intCast(wide));
+}
+
 // picks a new random position for a given node.
 // the new position will never be further away from the original than window_size
 // Returns 0 if move was succesful and without collisions
 // Returns the nodeid of the collision.
-fn move(the_graph: *const Graph, the_placement: *Placement, to_perturb: glib.NodeId, window_size: i32, random: std.Random, min_spacing: u8) glib.NodeId {
+fn move(the_graph: *const Graph, the_placement: *Placement, to_perturb: glib.NodeId, window_size: u32, random: std.Random, min_spacing: u8, min_pos: postype) glib.NodeId {
     errdefer @panic("Skill issue");
-    var size_to_use = window_size;
+    var size_to_use: i32 = @intCast(window_size);
     if (size_to_use < min_spacing) {
         size_to_use = min_spacing;
     }
     size_to_use = @divFloor(size_to_use, min_spacing);
-    const new_x = random.intRangeLessThan(postype, -size_to_use, size_to_use) * min_spacing;
-    const new_y = random.intRangeLessThan(postype, -size_to_use, size_to_use) * min_spacing;
+    const dx = random.intRangeLessThan(i32, -size_to_use, size_to_use) * min_spacing;
+    const dy = random.intRangeLessThan(i32, -size_to_use, size_to_use) * min_spacing;
     const pos = the_placement.locations.getPtr(to_perturb).?;
+    const new_x: postype = clampU32WithDelta(pos.x, dx, max_chipsize, min_pos);
+    const new_y: postype = clampU32WithDelta(pos.y, dy, max_chipsize, min_pos);
     const orientation = pos.orientation;
     const result = tryMove(the_placement, the_graph.getConstNode(to_perturb).?, pos, new_x, new_y);
     if (result == 0) { // if movement was succesful
@@ -443,8 +476,8 @@ fn swap(the_graph: *const Graph, the_placement: *Placement, node_a_id: glib.Node
     const pos_a = the_placement.locations.getPtr(node_a_id).?;
     const pos_b = the_placement.locations.getPtr(node_b_id).?;
 
-    const unsigned_new_x_a = unsignedCast(pos_b.x);
-    const unsigned_new_y_a = unsignedCast(pos_b.y);
+    const unsigned_new_x_a = pos_b.x;
+    const unsigned_new_y_a = pos_b.y;
 
     // check whether a fits at b position
     for (unsigned_new_x_a..unsigned_new_x_a + rect_a.w) |x| {
@@ -455,8 +488,8 @@ fn swap(the_graph: *const Graph, the_placement: *Placement, node_a_id: glib.Node
         }
     }
 
-    const unsigned_new_x_b = unsignedCast(pos_a.x);
-    const unsigned_new_y_b = unsignedCast(pos_a.y);
+    const unsigned_new_x_b = pos_a.x;
+    const unsigned_new_y_b = pos_a.y;
 
     // check whether b fits at a position
     for (unsigned_new_x_b..unsigned_new_x_b + rect_b.w) |x| {
@@ -518,11 +551,11 @@ fn getRandomNodeID(
 }
 
 // randomly perturbs the placement
-fn perturb(the_graph: *const Graph, the_placement: *Placement, random: std.Random, perturbation_amount: u32, window_size: i32, min_spacing: u8) void {
+fn perturb(the_graph: *const Graph, the_placement: *Placement, random: std.Random, current_window_size: f32, annealing_config: AnnealingConfig) void {
     errdefer @panic("Ran out of memory lol");
-    for (0..perturbation_amount) |_| {
+    for (0..annealing_config.perturbations_amount) |_| {
         const to_perturb = getRandomNodeID(the_placement, random).?;
-        const result = move(the_graph, the_placement, to_perturb, window_size, random, min_spacing);
+        const result = move(the_graph, the_placement, to_perturb, @intFromFloat(@ceil(current_window_size)), random, annealing_config.grid_size, annealing_config.grid_size); // use grid size as the minimum y position, so it stays nicely alligned if we changed it in the future
         if (result != 0) {
             _ = swap(the_graph, the_placement, to_perturb, result);
         }
@@ -553,7 +586,7 @@ fn perturb(the_graph: *const Graph, the_placement: *Placement, random: std.Rando
 pub fn placement_annealing(the_graph: *const Graph, annealing_config: AnnealingConfig) ?*Placement {
     errdefer @panic("Skill issue");
 
-    var current_placement = initialPlacement(the_graph, @as(i32, @intCast(annealing_config.initial_spacing)), @as(i32, @intCast(annealing_config.initial_row_size)));
+    var current_placement = initialPlacement(the_graph, annealing_config.initial_spacing, annealing_config.initial_row_size, annealing_config.grid_size);
     print(the_graph, current_placement, the_graph.gpa);
     var temperature = annealing_config.initial_temperature;
     var current_window_size = annealing_config.initial_window_size;
@@ -578,9 +611,9 @@ pub fn placement_annealing(the_graph: *const Graph, annealing_config: AnnealingC
         for (0..actual_moves_per_temperature) |i| {
             var new_placement = try current_placement.clone(the_graph.gpa);
 
-            perturb(the_graph, new_placement, rand, 2, @as(i32, @intFromFloat(current_window_size)), annealing_config.grid_divisor);
-            const current_cost = cost(the_graph, current_placement, annealing_config.x_weight, annealing_config.y_weight, annealing_config.wire_cost_weight);
-            const new_cost = cost(the_graph, new_placement, annealing_config.x_weight, annealing_config.y_weight, annealing_config.wire_cost_weight);
+            perturb(the_graph, new_placement, rand, current_window_size, annealing_config);
+            const current_cost = cost(the_graph, current_placement, annealing_config);
+            const new_cost = cost(the_graph, new_placement, annealing_config);
             const cost_diff = new_cost - current_cost;
             if (cost_diff < 0) {
                 current_placement.deinit(the_graph.gpa);
