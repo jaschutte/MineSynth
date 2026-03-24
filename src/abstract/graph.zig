@@ -61,7 +61,17 @@ pub const GraphConstructors = struct {
                         0b11 => @panic("Gate output directly connected to input or vice versa"),
                     };
 
-                    _ = graph.addEdge(added_nodes.get(from_ptr).?, from_relation, added_nodes.get(to_ptr).?, to_relation, net_ptr, null);
+                    var writer = std.io.Writer.Allocating.init(gpa);
+                    defer writer.deinit();
+                    try net.literal.writeSymbol(&writer.writer);
+
+                    _ = graph.addEdge(added_nodes.get(from_ptr).?, from_relation, added_nodes.get(to_ptr).?, to_relation, .{
+                        .symbol = writer.written(),
+                        .negated = switch (net.literal.isNegated()) {
+                            true => .negated,
+                            false => .unnegated,
+                        },
+                    }, null);
                 }
             }
         }
@@ -150,7 +160,17 @@ pub fn Graph(comptime NodeBody: type) type {
 
         pub const Edge = struct {
             pub const Body = switch (NodeBody) {
-                GateBody => nl.NetPtr,
+                GateBody => struct {
+                    pub const Negation = enum {
+                        negated,
+                        unnegated,
+                        undefined,
+                    };
+
+                    symbol: []u8,
+                    negated: Negation,
+
+                },
                 else => void,
             };
 

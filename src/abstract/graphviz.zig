@@ -27,10 +27,10 @@ pub fn printNode(string: *std.io.Writer.Allocating, node: *glib.GateGraph.Node) 
 pub fn printEdge(graph: *const glib.GateGraph, string: *std.io.Writer.Allocating, edge: *glib.GateGraph.Edge) void {
     errdefer @panic("Skill issue");
 
-    const net = graph.source.getNet(edge.body);
-    const color = switch (net.literal.isNegated()) {
-        true => "\"#601400\"",
-        false => "\"#006004\"",
+    const color = switch (edge.body.negated) {
+        .negated => "\"#601400\"",
+        .unnegated => "\"#006004\"",
+        .undefined => "\"#000000\"",
     };
     const relation = graph.getConstNode(edge.a).?.edgeRelation(edge.id) orelse @panic("Invalid edge?");
     const order: struct { arrow: *const [2]u8, from: u64, to: u64 } = switch (relation) {
@@ -39,7 +39,7 @@ pub fn printEdge(graph: *const glib.GateGraph, string: *std.io.Writer.Allocating
     };
 
     try string.writer.print("    {} {s} {} [label=\"", .{ order.from, order.arrow, order.to });
-    try net.literal.writeSymbol(&string.writer);
+    try string.writer.print("{s}", .{ edge.body.symbol });
     try string.writer.print("\", color={s}, tooltip=\"{}\"]\n", .{ color, edge.id });
 }
 
