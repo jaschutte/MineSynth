@@ -3,6 +3,7 @@ const glib = @import("abstract/graph.zig");
 const Graph = glib.GateGraph;
 const physical = @import("physical.zig");
 const netlist = @import("netlist.zig");
+const structures = @import("abstract/structures.zig");
 
 // comptime or private variables:
 // since schematic doesnt use negative coordinates, lets not bother with it here
@@ -879,3 +880,8 @@ pub fn printThoseTuples(gpa: std.mem.Allocator, those_tuples: []FancyTuple) void
     std.debug.print("{s}", .{string.written()});
     string.deinit();
 }
+
+// returns new array containing all tuples for the given placement.
+// pub fn toBlocklist(the_graph: *const Graph, the_placement: *Placement, chip_height_coordinate: postype) []const structures.SchemBlock {
+//     errdefer @panic("Download some RAM");
+// }

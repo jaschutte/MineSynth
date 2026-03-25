@@ -156,55 +156,55 @@ const outputBlocks = [_]structures.SchemBlock{
 const orGateBlocks = [_]structures.SchemBlock{
     .{ // in1
         .block = .repeater,
-        .loc = .{ 1, 1, 0 },
-        .rot = .west,
-    },
-    .{
-        .block = .block,
-        .loc = .{ 1, 0, 0 },
+        .loc = .{ 0, 1, 0 },
         .rot = .east,
     },
     .{
+        .block = .block,
+        .loc = .{ 0, 0, 0 },
+        .rot = .center,
+    },
+    .{
         .block = .dust,
-        .loc = .{ 2, 1, 0 },
+        .loc = .{ 1, 1, 0 },
         .rot = .center,
     },
     .{
         .block = .block,
-        .loc = .{ 2, 0, 0 },
-        .rot = .east,
+        .loc = .{ 1, 0, 0 },
+        .rot = .center,
     },
     .{
         .block = .repeater,
-        .loc = .{ 3, 1, 0 },
-        .rot = .east,
+        .loc = .{ 2, 1, 0 },
+        .rot = .west,
     },
     .{
         .block = .block,
-        .loc = .{ 3, 0, 0 },
-        .rot = .east,
+        .loc = .{ 2, 0, 0 },
+        .rot = .center,
     },
 };
 
 const inverterBlocks = [_]structures.SchemBlock{
     .{
         .block = .repeater,
-        .loc = .{ 1, 1, 0 },
+        .loc = .{ 0, 1, 0 },
         .rot = .south,
     },
     .{
         .block = .block,
-        .loc = .{ 1, 0, 0 },
+        .loc = .{ 0, 0, 0 },
         .rot = .east,
     },
     .{
         .block = .block2,
-        .loc = .{ 2, 1, 0 },
+        .loc = .{ 0, 1, 1 },
         .rot = .center,
     },
     .{
         .block = .torch,
-        .loc = .{ 3, 1, 0 },
+        .loc = .{ 0, 1, 2 },
         .rot = .south,
     },
 };
