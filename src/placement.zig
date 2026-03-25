@@ -35,7 +35,7 @@ pub const AnnealingConfig = struct {
     initial_spacing: postype = 6,
     initial_row_size: postype = 15,
     // 2*2 grid segments
-    grid_size: u8 = 2,
+    grid_size: u8 = 1,
     // fix all in-output nodes to the same y axis
     initial_input_y: postype = 0,
     initial_output_y: postype = 70,

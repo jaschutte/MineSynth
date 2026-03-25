@@ -121,7 +121,7 @@ pub fn abs_block_arr_to_schem(a: std.mem.Allocator, blocks: []ms.AbsBlock) void 
     block_arr_to_schem(a, schem_blocks);
 }
 
-pub fn block_arr_to_schem(a: std.mem.Allocator, blocks: []ms.SchemBlock) void {
+pub fn block_arr_to_schem(a: std.mem.Allocator, blocks: []const ms.SchemBlock) void {
     const out = c.nbt_new_tag_compound();
     c.nbt_set_tag_name(out, "Schematic", c.strlen("Schematic"));
 

@@ -118,164 +118,154 @@ pub const GateType = enum {
 
     pub inline fn blockArray(self: GateType) []const structures.SchemBlock {
         return switch (self) {
-            .input => inputBlocks(),
-            .output => outputBlocks(),
-            .inverter => inverterBlocks(),
-            .and_gate => andGateBlocks(),
-            .or_gate => orGateBlocks(),
+            .input => &inputBlocks,
+            .output => &outputBlocks,
+            .inverter => &inverterBlocks,
+            .and_gate => &andGateBlocks,
+            .or_gate => &orGateBlocks,
         };
     }
 };
 
-fn inputBlocks() []structures.SchemBlock {
-    return &[_]structures.SchemBlock{
-        .{
-            .block = .dust,
-            .loc = .{ 0, 0, 0 },
-            .rot = .center,
-        },
-    };
-}
+const inputBlocks = [_]structures.SchemBlock{
+    .{
+        .block = .dust,
+        .loc = .{ 0, 1, 0 },
+        .rot = .center,
+    },
+    .{
+        .block = .block,
+        .loc = .{ 0, 0, 0 },
+        .rot = .center,
+    },
+};
 
-fn outputBlocks() []structures.SchemBlock {
-    return &[_]structures.SchemBlock{
-        .{
-            .block = .dust,
-            .loc = .{ 0, 0, 0 },
-            .rot = .center,
-        },
-    };
-}
+const outputBlocks = [_]structures.SchemBlock{
+    .{
+        .block = .dust,
+        .loc = .{ 0, 1, 0 },
+        .rot = .center,
+    },
+    .{
+        .block = .block,
+        .loc = .{ 0, 0, 0 },
+        .rot = .center,
+    },
+};
 
-fn orGateBlocks() []structures.SchemBlock {
-    return &[_]structures.SchemBlock{
-        .{ // in1
-            .block = .dust,
-            .loc = .{ 0, 0, 0 },
-            .rot = .center,
-        },
-        .{
-            .block = .repeater,
-            .loc = .{ 0, 0, 1 },
-            .rot = .west,
-        },
-        .{
-            .block = .dust,
-            .loc = .{ 0, 0, 2 },
-            .rot = .center,
-        },
-        .{ // output
-            .block = .dust,
-            .loc = .{ 1, 0, 2 },
-            .rot = .center,
-        },
-        .{
-            .block = .repeater,
-            .loc = .{ 0, 0, 3 },
-            .rot = .east,
-        },
-        .{ // in2
-            .block = .dust,
-            .loc = .{ 0, 0, 4 },
-            .rot = .center,
-        },
-    };
-}
+const orGateBlocks = [_]structures.SchemBlock{
+    .{ // in1
+        .block = .repeater,
+        .loc = .{ 1, 1, 0 },
+        .rot = .west,
+    },
+    .{
+        .block = .block,
+        .loc = .{ 1, 0, 0 },
+        .rot = .east,
+    },
+    .{
+        .block = .dust,
+        .loc = .{ 2, 1, 0 },
+        .rot = .center,
+    },
+    .{
+        .block = .block,
+        .loc = .{ 2, 0, 0 },
+        .rot = .east,
+    },
+    .{
+        .block = .repeater,
+        .loc = .{ 3, 1, 0 },
+        .rot = .east,
+    },
+    .{
+        .block = .block,
+        .loc = .{ 3, 0, 0 },
+        .rot = .east,
+    },
+};
 
-fn inverterBlocks() []structures.SchemBlock {
-    return &[_]structures.SchemBlock{
-        .{ // in1
-            .block = .dust,
-            .loc = .{ 0, 0, 0 },
-            .rot = .center,
-        },
-        .{
-            .block = .repeater,
-            .loc = .{ 1, 0, 0 },
-            .rot = .south,
-        },
-        .{
-            .block = .block2,
-            .loc = .{ 2, 0, 0 },
-            .rot = .center,
-        },
-        .{
-            .block = .torch,
-            .loc = .{ 3, 0, 0 },
-            .rot = .south,
-        },
-        .{ // output
-            .block = .dust,
-            .loc = .{ 4, 0, 0 },
-            .rot = .center,
-        },
-    };
-}
+const inverterBlocks = [_]structures.SchemBlock{
+    .{
+        .block = .repeater,
+        .loc = .{ 1, 1, 0 },
+        .rot = .south,
+    },
+    .{
+        .block = .block,
+        .loc = .{ 1, 0, 0 },
+        .rot = .east,
+    },
+    .{
+        .block = .block2,
+        .loc = .{ 2, 1, 0 },
+        .rot = .center,
+    },
+    .{
+        .block = .torch,
+        .loc = .{ 3, 1, 0 },
+        .rot = .south,
+    },
+};
 
-fn andGateBlocks() []structures.SchemBlock {
-    return &[_]structures.SchemBlock{
-        .{ // in1
-            .block = .dust,
-            .loc = .{ 0, 0, 0 },
-            .rot = .center,
-        },
-        .{ // in2
-            .block = .dust,
-            .loc = .{ 2, 0, 0 },
-            .rot = .center,
-        },
-        .{
-            .block = .repeater,
-            .loc = .{ 0, 0, 1 },
-            .rot = .south,
-        },
-        .{
-            .block = .repeater,
-            .loc = .{ 2, 0, 1 },
-            .rot = .south,
-        },
-        .{
-            .block = .block,
-            .loc = .{ 0, 0, 2 },
-            .rot = .center,
-        },
-        .{
-            .block = .block,
-            .loc = .{ 1, 0, 2 },
-            .rot = .center,
-        },
-        .{
-            .block = .block,
-            .loc = .{ 2, 0, 2 },
-            .rot = .center,
-        },
-        .{
-            .block = .torch,
-            .loc = .{ 1, 0, 3 },
-            .rot = .south,
-        },
-        .{ // output
-            .block = .dust,
-            .loc = .{ 1, 0, 4 },
-            .rot = .center,
-        },
-        .{
-            .block = .dust,
-            .loc = .{ 1, 1, 2 },
-            .rot = .center,
-        },
-        .{
-            .block = .torch,
-            .loc = .{ 0, 1, 2 },
-            .rot = .center,
-        },
-        .{
-            .block = .torch,
-            .loc = .{ 2, 1, 2 },
-            .rot = .center,
-        },
-    };
-}
+const andGateBlocks = [_]structures.SchemBlock{
+    .{
+        .block = .repeater,
+        .loc = .{ 0, 1, 1 },
+        .rot = .south,
+    },
+    .{
+        .block = .block,
+        .loc = .{ 0, 0, 1 },
+        .rot = .east,
+    },
+    .{
+        .block = .repeater,
+        .loc = .{ 2, 1, 1 },
+        .rot = .south,
+    },
+    .{
+        .block = .block,
+        .loc = .{ 2, 0, 1 },
+        .rot = .east,
+    },
+    .{
+        .block = .block,
+        .loc = .{ 0, 1, 2 },
+        .rot = .center,
+    },
+    .{
+        .block = .block,
+        .loc = .{ 1, 1, 2 },
+        .rot = .center,
+    },
+    .{
+        .block = .block,
+        .loc = .{ 2, 1, 2 },
+        .rot = .center,
+    },
+    .{
+        .block = .torch,
+        .loc = .{ 1, 1, 3 },
+        .rot = .south,
+    },
+    .{
+        .block = .dust,
+        .loc = .{ 1, 2, 2 },
+        .rot = .center,
+    },
+    .{
+        .block = .torch,
+        .loc = .{ 0, 2, 2 },
+        .rot = .center,
+    },
+    .{
+        .block = .torch,
+        .loc = .{ 2, 2, 2 },
+        .rot = .center,
+    },
+};
 
 pub const Gate = struct {
     inputs: std.ArrayList(NetPtr),
