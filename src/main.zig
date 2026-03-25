@@ -29,9 +29,12 @@ pub fn main() !void {
     glibopt.PreProcessor(glib.GateBody).preprocess(graph);
     sta.AAT(graph);
     graphviz.GraphVisualizer(glib.GateBody).print(gpa, graph);
-    var placement = plc.placement_annealing(graph, .{ .initial_temperature = 1000 }).?;
+    var placement = plc.placement_annealing(graph, .{ .initial_temperature = 30 }).?;
     plc.print(graph, placement, graph.gpa);
     graphviz.printPlacement(graph.gpa, graph, placement);
+    const tuples = plc.getThoseTuples(graph, placement, 0);
+    plc.printThoseTuples(graph.gpa, tuples);
+    graph.gpa.free(tuples);
     placement.deinit(graph.gpa);
     graph.deinit();
 

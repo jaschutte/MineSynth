@@ -2,10 +2,11 @@ const std = @import("std");
 const glib = @import("abstract/graph.zig");
 const Graph = glib.GateGraph;
 const physical = @import("physical.zig");
+const netlist = @import("netlist.zig");
 
 // comptime or private variables:
 // since schematic doesnt use negative coordinates, lets not bother with it here
-pub const postype = u32;
+pub const postype = physical.PosType;
 const use_accurate_input_pos = false;
 const max_chipsize: u32 = 100;
 // used to avoid reading out of index in the grid
@@ -38,6 +39,8 @@ pub const AnnealingConfig = struct {
     // fix all in-output nodes to the same y axis
     initial_input_y: postype = 70,
     initial_output_y: postype = 0,
+    // for convenience:
+    chip_height_coordinate: postype = 0,
 };
 
 pub const Orientation = enum {
@@ -263,7 +266,9 @@ fn isInput(the_placement: *const Placement, node_id: glib.NodeId) bool {
     return the_placement.input_nodes.contains(node_id);
 }
 
-fn getAbsolutePosition(position: *const Position, port_pos_relative: @Vector(3, i32), min_pos: postype) @Vector(2, postype) {
+// computes absolute position from an absolute coordinate and a relative vector.
+// min_pos is to avoid writing in/output ports outside of bounds
+fn getAbsolutePosition(position: *const Position, port_pos_relative: physical.CoordinateRelative, min_pos: postype, chip_height_coordinate: postype) physical.Coordinate {
     // do not allow rotations for now
     // this would cause pain for computewirelength if negative:
     std.debug.assert(@as(i32, @intCast(position.x)) + port_pos_relative[0] >= 0);
@@ -272,7 +277,67 @@ fn getAbsolutePosition(position: *const Position, port_pos_relative: @Vector(3, 
     const new_x = clampU32WithDelta(position.x, port_pos_relative[0], max_chipsize, min_pos);
     const new_y = clampU32WithDelta(position.y, port_pos_relative[2], max_chipsize, min_pos);
 
-    return @Vector(2, postype){ new_x, new_y };
+    return .{ new_x, chip_height_coordinate, new_y };
+}
+
+// returns the 2 nodes that this edge connects as .{from_node, to_node}
+fn getEdgeFromToNodes(the_graph: *const Graph, the_placement: *const Placement, edge: *const glib.GateGraph.Edge) [2]*const glib.GateGraph.Node {
+    const net = edge;
+    const from_node_id = if (net.a_relation == .input) net.b else net.a;
+    const to_node_id = if (net.a_relation == .input) net.a else net.b;
+
+    const from_node = the_graph.getConstNode(from_node_id).?;
+    const to_node = the_graph.getConstNode(to_node_id).?;
+    std.debug.assert(!isInput(the_placement, to_node_id));
+    std.debug.assert(!isOutput(the_placement, from_node_id));
+
+    return .{ from_node, to_node };
+}
+
+// returns 2 coordinates of the ports connected to this edge, the 'from' port (output port of the input node) , and the 'to' port (input port of the output node)
+// min_pos is to avoid writing in/output ports outside of bounds.
+// vector returned as .{port_pos_from, port_pos_to}
+fn getPortAbsolutePositions(the_graph: *const Graph, the_placement: *const Placement, edge: *const glib.GateGraph.Edge, accurate: bool, chip_height_coordinate: postype) ?[2]physical.Coordinate {
+    // do not allow rotations for now
+    const net = edge;
+    const nodes = getEdgeFromToNodes(the_graph, the_placement, edge);
+
+    const from_node = nodes[0];
+    const to_node = nodes[1];
+
+    // search for correct edge index: expensive :(
+    var i: u8 = 0;
+    if (accurate) {
+        // made compile time optional
+        const edges = the_graph.getNodeEdges(to_node.id, .input);
+        defer the_graph.gpa.free(edges);
+
+        while (edges[i] != net.id) {
+            i += 1;
+        }
+    }
+    const port_output = from_node.body.kind.outputPositionsRelative();
+    const port_input = to_node.body.kind.inputPositionsRelative()[i].?;
+
+    const pos_from = the_placement.locations.getPtr(from_node.id) orelse {
+        std.debug.print("node 'from_node_id' {d} not placed\n", .{from_node.id});
+        return null;
+    };
+    const pos_to = the_placement.locations.getPtr(to_node.id) orelse {
+        std.debug.print("node 'to_node_id' {d} not placed\n", .{to_node.id});
+        return null;
+    };
+
+    // if this fails, positions are clamped to 0 and not accurate
+    std.debug.assert(@as(i32, @intCast(pos_to.x)) + port_input[0] >= 0);
+    std.debug.assert(@as(i32, @intCast(pos_to.y)) + port_input[0] >= 0);
+    std.debug.assert(@as(i32, @intCast(pos_from.x)) + port_output[2] >= 0);
+    std.debug.assert(@as(i32, @intCast(pos_from.y)) + port_output[2] >= 0);
+
+    const port_pos_from = getAbsolutePosition(pos_from, port_output, 0, chip_height_coordinate);
+    const port_pos_to = getAbsolutePosition(pos_to, port_input, 0, chip_height_coordinate);
+
+    return .{ port_pos_from, port_pos_to };
 }
 
 // research showed no dependence between intial placement and final result, so lets do it computationally efficiently
@@ -352,60 +417,20 @@ fn cost(the_graph: *const Graph, the_placement: *const Placement, annealing_conf
 
 fn costWireLength(the_graph: *const Graph, the_placement: *const Placement, annealing_config: AnnealingConfig) f32 {
     var sum: f32 = 0;
-    for (the_graph.edges.values()) |net| {
-        var from_node_id = net.a;
-        var to_node_id = net.b;
-        if (net.a_relation == .input) {
-            from_node_id = net.b;
-            to_node_id = net.a;
-        }
-        const from_node = the_graph.getConstNode(from_node_id).?;
-        const to_node = the_graph.getConstNode(to_node_id).?;
-        std.debug.assert(!isInput(the_placement, to_node_id));
-        std.debug.assert(!isOutput(the_placement, from_node_id));
+    var it = the_graph.edges.iterator();
+    while (it.next()) |entry| {
+        const net = entry.value_ptr;
+        const positions = getPortAbsolutePositions(the_graph, the_placement, net, use_accurate_input_pos, annealing_config.chip_height_coordinate).?;
 
-        var i: u8 = 0;
-        if (use_accurate_input_pos) {
-            // made compile time optional
-            const edges = the_graph.getNodeEdges(to_node_id, .input);
-
-            while (edges[i] != net.id) {
-                i += 1;
-            }
-        }
-        const port_output = from_node.body.kind.outputPositionsRelative();
-        const port_input = to_node.body.kind.inputPositionsRelative()[i].?;
-
-        const pos_from = the_placement.locations.getPtr(from_node_id) orelse {
-            std.debug.print("node 'from_node_id' {d} not placed\n", .{from_node_id});
-            continue;
-        };
-        const pos_to = the_placement.locations.getPtr(to_node_id) orelse {
-            std.debug.print("node 'to_node_id' {d} not placed\n", .{to_node_id});
-            continue;
-        };
-
-        // if this fails, positions are clamped to 0 and not accurate
-        std.debug.assert(@as(i32, @intCast(pos_to.x)) + port_input[0] >= 0);
-        std.debug.assert(@as(i32, @intCast(pos_to.y)) + port_input[0] >= 0);
-        std.debug.assert(@as(i32, @intCast(pos_from.x)) + port_output[2] >= 0);
-        std.debug.assert(@as(i32, @intCast(pos_from.y)) + port_output[2] >= 0);
-
-        const port_pos_from = getAbsolutePosition(pos_from, port_output, 0);
-        const port_pos_to = getAbsolutePosition(pos_to, port_input, 0);
+        const port_pos_from = positions[0];
+        const port_pos_to = positions[1];
 
         const diff_x = if (port_pos_to[0] > port_pos_from[0]) port_pos_to[0] - port_pos_from[0] else port_pos_from[0] - port_pos_to[0];
         const net_width = @as(f32, @floatFromInt(diff_x));
-        const diff_y = if (port_pos_to[1] > port_pos_from[1]) port_pos_to[1] - port_pos_from[1] else port_pos_from[1] - port_pos_to[1];
+        const diff_y = if (port_pos_to[2] > port_pos_from[2]) port_pos_to[2] - port_pos_from[2] else port_pos_from[2] - port_pos_to[2];
         const net_height = @as(f32, @floatFromInt(diff_y));
 
         const netcost = net_width * annealing_config.x_weight + net_height * annealing_config.y_weight;
-        // if (isInput(the_placement, from_node_id)) {
-        //     std.debug.print("input net cost: {d}\n", .{netcost});
-        // }
-        // if (isOutput(the_placement, to_node_id)) {
-        //     std.debug.print("output net cost: {d}\n", .{netcost});
-        // }
         sum = sum + netcost;
     }
 
@@ -804,4 +829,53 @@ pub fn placement_annealing(the_graph: *const Graph, annealing_config: AnnealingC
         temperature *= alpha;
     }
     return best_placement;
+}
+
+// (n, x, a, y, b) indicating that we
+// need xaCby in the schematic and that this wire belongs to net n.
+
+const FancyTuple = struct {
+    n: glib.EdgeId,
+    x: physical.Coordinate,
+    a: physical.PowerLevel,
+    y: physical.Coordinate,
+    b: physical.PowerLevel,
+};
+
+// returns new array containing all tuples for the given placement.
+pub fn getThoseTuples(the_graph: *const Graph, the_placement: *Placement, chip_height_coordinate: postype) []FancyTuple {
+    errdefer @panic("Download some RAM");
+    var results = std.ArrayList(FancyTuple).empty;
+
+    var it = the_graph.edges.iterator();
+    while (it.next()) |entry| {
+        const net = entry.value_ptr;
+        const positions = getPortAbsolutePositions(the_graph, the_placement, net, use_accurate_input_pos, chip_height_coordinate).?;
+        const nodes = getEdgeFromToNodes(the_graph, the_placement, net);
+
+        try results.append(the_graph.gpa, .{
+            .n = net.id,
+            .a = netlist.GateType.outputPowerLevel(),
+            .x = positions[0], // this copies by value right ?
+            .b = nodes[1].body.kind.inputPowerLevel(),
+            .y = positions[1],
+        });
+    }
+
+    return try results.toOwnedSlice(the_graph.gpa);
+}
+
+pub fn printThoseTuples(gpa: std.mem.Allocator, those_tuples: []FancyTuple) void {
+    errdefer @panic("Skill issue");
+    var string = std.io.Writer.Allocating.init(gpa);
+    try string.writer.writeAll("Tuples: {\n");
+    for (those_tuples) |dem_tuple| {
+        try string.writer.print("   (n:{d}, a:{d},", .{ dem_tuple.n, dem_tuple.a });
+        try string.writer.print("x:({d},{d},{d}), b:{d}, ", .{ dem_tuple.x[0], dem_tuple.x[1], dem_tuple.x[2], dem_tuple.b });
+        try string.writer.print("y:({d},{d},{d}))\n", .{ dem_tuple.y[0], dem_tuple.y[1], dem_tuple.y[2] });
+    }
+    try string.writer.writeAll("}\n");
+
+    std.debug.print("{s}", .{string.written()});
+    string.deinit();
 }

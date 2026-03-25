@@ -78,30 +78,20 @@ pub const GateType = enum {
         };
     }
 
-    // switch (self) {
-        //     .input => [1]@Vector(3, i32),
-        //     .output => [1]@Vector(3, i32),
-        //     .inverter => [1]@Vector(3, i32),
-        //     .and_gate => [2]@Vector(3, i32),
-        //     .or_gate => [2]@Vector(3, i32),
-        // }
-
-    // TODO: fix multiple inputs
-    // assuming the default orientation (whatever we pick for default)
+    // assuming the default orientation (.north)
     pub inline fn inputPositionsRelative(self: GateType) [2]?@Vector(3, i32) //physical.InputPositionsRelative
     {
         return switch (self) {
-            .input => .{@Vector(3, i32){ 0, 0, 1 },null},
-            .output => .{@Vector(3, i32){ 0, 0, 1 },null},
-            .inverter => .{@Vector(3, i32){ 1, 0, 4 },null},
-            .and_gate => .{@Vector(3, i32){ 1, 0, 4 }, @Vector(3, i32){ 3, 0, 4 } },
-            .or_gate => .{@Vector(3, i32){ 1, 0, 4 }, @Vector(3, i32){ 3, 0, 4 } },
+            .input => .{ @Vector(3, i32){ 0, 0, 1 }, null },
+            .output => .{ @Vector(3, i32){ 0, 0, 1 }, null },
+            .inverter => .{ @Vector(3, i32){ 1, 0, 4 }, null },
+            .and_gate => .{ @Vector(3, i32){ 1, 0, 4 }, @Vector(3, i32){ 3, 0, 4 } },
+            .or_gate => .{ @Vector(3, i32){ 1, 0, 4 }, @Vector(3, i32){ 3, 0, 4 } },
         };
     }
 
-    // assuming the default orientation (whatever we pick for default)
+    // assuming the default orientation (.north)
     pub inline fn outputPositionsRelative(self: GateType) physical.OutputPositionsRelative {
-        // return @Vector(3, i32){ 0, 0, -1 };
         return switch (self) {
             .input => @Vector(3, i32){ 0, 0, 0 },
             .output => @Vector(3, i32){ 0, 0, 0 },
@@ -111,7 +101,19 @@ pub const GateType = enum {
         };
     }
 
-    
+    pub inline fn outputPowerLevel() physical.PowerLevel {
+        return 15;
+    }
+
+    pub inline fn inputPowerLevel(self: GateType) physical.PowerLevel {
+        return switch (self) {
+            .input => 1,
+            .output => 1,
+            .inverter => 1,
+            .and_gate => 1,
+            .or_gate => 1,
+        };
+    }
 };
 
 pub const Gate = struct {
