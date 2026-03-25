@@ -36,11 +36,21 @@ const Parent = struct {
 };
 
 // 3D Manhattan distance towards the target acts as an admissible heuristic.
-fn heuristic(curr: WorldCoord, target: WorldCoord) u32 {
-    const dx = @as(u32, @intCast(@abs(curr[0] - target[0])));
-    const dy = @as(u32, @intCast(@abs(curr[1] - target[1])));
-    const dz = @as(u32, @intCast(@abs(curr[2] - target[2])));
-    return dx + dy + dz;
+fn heuristic(curr: WorldCoord, target: WorldCoord) f32 {
+    // const dx = @as(u32, @intCast(@abs(curr[0] - target[0])));
+    // const dy = @as(u32, @intCast(@abs(curr[1] - target[1])));
+    // const dz = @as(u32, @intCast(@abs(curr[2] - target[2])));
+    const dx = @abs(curr[0] - target[0]);
+    const dy = @abs(curr[1] - target[1]);
+    const dz = @abs(curr[2] - target[2]);
+    const manhattan = dx + dy + dz;
+
+    // Admissible delay injection:
+    // You cannot move more than 15 blocks without incurring at least 1 tick of delay.
+    // Cost scales by 100 per delay tick.
+    const min_unavoidable_delay_cost = (manhattan / 15) * 100;
+
+    return @floatFromInt(manhattan + min_unavoidable_delay_cost);
 }
 
 const SURROUNDING_OFFSETS = blk: {
@@ -95,8 +105,9 @@ fn moveIntersectsPath(new_u: WorldCoord, new_move: Move, start_state: NodeState,
             for (new_fp.blocks[0..new_fp.count]) |b1| {
                 for (past_fp.blocks[0..past_fp.count]) |b2| {
                     if (coordEq(b1, b2)) {
-                        // Allow the new move to share a node with its immediate parent edge
-                        if (is_immediate_parent and coordEq(b1, new_u)) {
+                        // Allow the new move to share a node and its supporting block with its immediate parent edge
+                        const block_below = new_u + WorldCoord{ 0, -1, 0 };
+                        if (is_immediate_parent and (coordEq(b1, new_u) or coordEq(b1, block_below))) {
                             continue;
                         }
                         return true;
@@ -122,8 +133,8 @@ fn coordEq(a: WorldCoord, b: WorldCoord) bool {
 
 const QueueItem = struct {
     state: NodeState,
-    g: u32,
-    f: u32,
+    g: f32,
+    f: f32,
 };
 
 fn queueOrder(context: void, a: QueueItem, b: QueueItem) std.math.Order {
@@ -132,7 +143,7 @@ fn queueOrder(context: void, a: QueueItem, b: QueueItem) std.math.Order {
     if (f_order == .eq) {
         // Tie-breaker: If f is equal, prioritize the node with the higher g-cost
         // because it has a smaller h-cost and is deeper in the search tree (closer to goal).
-        return std.math.order(b.g, a.g);
+        return std.math.order(a.g, b.g).invert();
     }
     return f_order;
 }
@@ -296,9 +307,9 @@ pub fn routeAll(a: std.mem.Allocator, pairs: []RoutePair, forbidden_zone: *ms.Fo
     // Evaluate global collisions and populate v_nets
     try updateViolations(a, nets);
     for (nets) |*net| {
+        std.log.info("Initial route for net from {any} to {any} has delay {d} and violating={any}", .{ net.from, net.to, net.route.?.delay, net.is_violating });
         if (net.is_violating) {
             try v_nets.append(a, net);
-            std.log.info("Initial route for net from {any} to {any} has violating=true", .{ net.from, net.to });
         }
     }
 
@@ -397,7 +408,7 @@ pub fn routeTo(a: std.mem.Allocator, from: WorldCoord, to: WorldCoord, forbidden
     var parents = std.AutoHashMap(NodeState, Parent).init(a);
     defer parents.deinit();
 
-    var distances = std.AutoHashMap(NodeState, u32).init(a);
+    var distances = std.AutoHashMap(NodeState, f32).init(a);
     defer distances.deinit();
 
     const start_state = NodeState{ .coord = from, .signal = 15 };
@@ -427,7 +438,7 @@ pub fn routeTo(a: std.mem.Allocator, from: WorldCoord, to: WorldCoord, forbidden
         const u_state = item.state;
         const u = u_state.coord;
 
-        const best_g = distances.get(u_state) orelse std.math.maxInt(u32);
+        const best_g = distances.get(u_state) orelse std.math.floatMax(f32);
         if (item.g > best_g) continue;
 
         if (coordEq(u, to)) {
@@ -456,7 +467,7 @@ pub fn routeTo(a: std.mem.Allocator, from: WorldCoord, to: WorldCoord, forbidden
             const next_state = NodeState{ .coord = coord, .signal = next_signal };
 
             var move_cost = move.def.weight;
-            if (validity == .violation) move_cost += 100;
+            if (validity == .violation) move_cost += 10000;
             const g_cost = item.g + move_cost;
 
             const existing_g = distances.get(next_state);
