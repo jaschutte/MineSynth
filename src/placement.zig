@@ -25,7 +25,7 @@ pub const AnnealingConfig = struct {
     moves_per_temperature: u32 = 10000,
     // - "we start at a window size of twice the chip size"
     // since chip bounds are currently not taken into acount, we pick 100 for now
-    initial_window_size: f32 = 100,
+    initial_window_size: f32 = 50,
     // - perturbations amount = 1 causes the cost to decrease way more effectively as temp decreases, although runtime increases
     perturbations_amount: u32 = 1,
     // we could prioritize usage of horizontal wiring by punishing large y deviations more
@@ -38,7 +38,7 @@ pub const AnnealingConfig = struct {
     // 2*2 grid segments
     grid_size: u8 = 1,
     // fix all in-output nodes to the same y axis
-    initial_input_y: postype = 6,
+    initial_input_y: postype = 0,
     initial_output_y: postype = 70,
     // for convenience:
     chip_height_coordinate: postype = 0,
@@ -348,14 +348,14 @@ fn initialPlacement(the_graph: *const Graph, annealing_config: AnnealingConfig) 
     errdefer @panic("Ran out of memory lol");
     const placement = try the_graph.gpa.create(Placement);
     placement.init(the_graph.gpa);
-    placement.input_y = annealing_config.initial_input_y;
-    placement.output_y = annealing_config.initial_output_y;
+    placement.input_y = annealing_config.initial_input_y + annealing_config.node_padding;
+    placement.output_y = annealing_config.initial_output_y + annealing_config.node_padding;
 
-    const first_x_pos = annealing_config.grid_size;
+    const first_x_pos = annealing_config.grid_size + annealing_config.node_padding;
 
     // place input nodes:
     var x: postype = first_x_pos;
-    var y: postype = annealing_config.initial_input_y;
+    var y: postype = placement.input_y;
 
     var count: u32 = 0;
 
@@ -369,14 +369,13 @@ fn initialPlacement(the_graph: *const Graph, annealing_config: AnnealingConfig) 
             try placement.input_nodes.put(node_id, {});
             count += 1;
             std.debug.assert(placement.locations.count() == count);
-            std.debug.print("placed {d} at ({d},{d})\n", .{ node_id, x, y });
             x = x + annealing_config.initial_spacing;
         }
     }
 
     // place output nodes:
     x = first_x_pos;
-    y = annealing_config.initial_output_y;
+    y = placement.output_y;
 
     for (the_graph.nodes.keys()) |node_id| {
         // if there are no output edges connected to this node, it is considered an output to the chip
@@ -388,7 +387,6 @@ fn initialPlacement(the_graph: *const Graph, annealing_config: AnnealingConfig) 
             try placement.output_nodes.put(node_id, {});
             count += 1;
             std.debug.assert(placement.locations.count() == count);
-            std.debug.print("placed {d} at ({d},{d})\n", .{ node_id, x, y });
             x = x + annealing_config.initial_spacing;
         }
     }
@@ -405,7 +403,7 @@ fn initialPlacement(the_graph: *const Graph, annealing_config: AnnealingConfig) 
         std.debug.assert(placement.locations.count() == count);
         x = x + annealing_config.initial_spacing;
         if (x >= annealing_config.initial_row_size * annealing_config.initial_spacing) {
-            x = 1 * annealing_config.grid_size;
+            x = first_x_pos;
             y = y + annealing_config.initial_spacing;
         }
     }
@@ -529,7 +527,7 @@ fn clampU32WithDelta(x: postype, dx: i32, max_pos: postype, min_pos: postype) po
 // the new position will never be further away from the original than window_size
 // Returns 0 if move was succesful and without collisions
 // Returns the nodeid of the collision.
-fn randomMove(the_graph: *const Graph, the_placement: *Placement, to_perturb: glib.NodeId, window_size: u32, random: std.Random, min_spacing: u8, min_pos: postype, fixed_y_pos: ?postype, node_padding: u8) glib.NodeId {
+fn randomMove(the_graph: *const Graph, the_placement: *Placement, to_perturb: glib.NodeId, window_size: u32, random: std.Random, min_spacing: u8, fixed_y_pos: ?postype, node_padding: u8) glib.NodeId {
     errdefer @panic("Skill issue");
     var size_to_use: i32 = @intCast(window_size);
     if (size_to_use < min_spacing) {
@@ -540,19 +538,19 @@ fn randomMove(the_graph: *const Graph, the_placement: *Placement, to_perturb: gl
     const pos = the_placement.locations.getPtr(to_perturb).?;
 
     // these normalizations are to keep the average position universally distributed, so it may be omitted for performance just fine.
-    const min_to_use_x: i32 = -@min(@divFloor(pos.x - min_pos, min_spacing), size_to_use);
+    const min_to_use_x: i32 = -@min(@divFloor(pos.x - node_padding, min_spacing), size_to_use);
     const max_to_use_x: i32 = @min(@divFloor(max_chipsize - pos.x, min_spacing), size_to_use);
 
     const dx = random.intRangeLessThan(i32, min_to_use_x, max_to_use_x) * min_spacing;
-    const new_x: postype = clampU32WithDelta(pos.x, dx, max_chipsize, min_pos);
+    const new_x: postype = clampU32WithDelta(pos.x, dx, max_chipsize, node_padding);
 
     var new_y: ?postype = fixed_y_pos;
     if (fixed_y_pos == null) {
-        const min_to_use_y: i32 = -@min(@divFloor(pos.y - min_pos, min_spacing), size_to_use);
+        const min_to_use_y: i32 = -@min(@divFloor(pos.y - node_padding, min_spacing), size_to_use);
         const max_to_use_y: i32 = @min(@divFloor(max_chipsize - pos.y, min_spacing), size_to_use);
 
         const dy = random.intRangeLessThan(i32, min_to_use_y, max_to_use_y) * min_spacing;
-        new_y = clampU32WithDelta(pos.y, dy, max_chipsize, min_pos);
+        new_y = clampU32WithDelta(pos.y, dy, max_chipsize, node_padding);
     }
 
     const result = try tryMove(the_placement, the_graph.getConstNode(to_perturb).?, pos, new_x, new_y.?, node_padding);
@@ -630,7 +628,7 @@ fn swap(the_graph: *const Graph, the_placement: *Placement, node_a_id: glib.Node
 // }
 
 // useInput = true means we move the input axis, if false we use the output axis.
-fn moveInputOrOutputAxis(the_graph: *const Graph, the_placement: *Placement, window_size: u32, random: std.Random, min_spacing: u8, min_pos: postype, useInput: bool, node_padding: u8) glib.NodeId {
+fn moveInputOrOutputAxis(the_graph: *const Graph, the_placement: *Placement, window_size: u32, random: std.Random, min_spacing: u8, useInput: bool, node_padding: u8) glib.NodeId {
     errdefer @panic("Skill issue");
     var size_to_use: i32 = @intCast(window_size);
     if (size_to_use < min_spacing) {
@@ -643,7 +641,7 @@ fn moveInputOrOutputAxis(the_graph: *const Graph, the_placement: *Placement, win
     const min_to_use: i32 = -@min(@divFloor(y_to_use, min_spacing), size_to_use);
 
     const dy = random.intRangeLessThan(i32, min_to_use, size_to_use) * min_spacing;
-    const new_y: postype = clampU32WithDelta(y_to_use, dy, max_chipsize, min_pos);
+    const new_y: postype = clampU32WithDelta(y_to_use, dy, max_chipsize, node_padding);
     var lasytpos: ?postype = null;
 
     const hashmap_to_use = if (useInput) the_placement.input_nodes else the_placement.output_nodes;
@@ -670,11 +668,8 @@ fn moveInputOrOutputAxis(the_graph: *const Graph, the_placement: *Placement, win
         const id: glib.NodeId = entry.key_ptr.*;
         const pos = the_placement.locations.getPtr(id).?;
         const node = the_graph.getConstNode(id).?;
-        const rect = node.body.kind.size();
-        const before = try checkCollision(the_placement, id, rect, pos.x, new_y, node_padding);
         const result = try tryMove(the_placement, node, pos, pos.x, new_y, node_padding);
         // std.debug.print("moved once {d},{d}", .{ before, result });
-        std.debug.assert(before == 0);
         std.debug.assert(result == 0);
     }
 
@@ -705,21 +700,21 @@ fn perturb(the_graph: *const Graph, the_placement: *Placement, random: std.Rando
         const to_perturb = getRandomNodeID(the_placement, random).?;
         if (isOutput(the_placement, to_perturb)) {
             if (random.intRangeLessThan(usize, 0, 10) != 1) {
-                _ = randomMove(the_graph, the_placement, to_perturb, @intFromFloat(@ceil(current_window_size)), random, annealing_config.grid_size, annealing_config.grid_size, the_placement.output_y, annealing_config.node_padding);
+                _ = randomMove(the_graph, the_placement, to_perturb, @intFromFloat(@ceil(current_window_size)), random, annealing_config.grid_size, the_placement.output_y, annealing_config.node_padding);
             } else {
-                _ = moveInputOrOutputAxis(the_graph, the_placement, @intFromFloat(@ceil(current_window_size)), random, annealing_config.grid_size, annealing_config.grid_size, false, annealing_config.node_padding);
+                _ = moveInputOrOutputAxis(the_graph, the_placement, @intFromFloat(@ceil(current_window_size)), random, annealing_config.grid_size, false, annealing_config.node_padding);
             }
         } else if (isInput(the_placement, to_perturb)) {
             // perform moveOutput 1 out of 10 times
             if (random.intRangeLessThan(usize, 0, 10) != 1) {
-                _ = randomMove(the_graph, the_placement, to_perturb, @intFromFloat(@ceil(current_window_size)), random, annealing_config.grid_size, annealing_config.grid_size, the_placement.input_y, annealing_config.node_padding);
+                _ = randomMove(the_graph, the_placement, to_perturb, @intFromFloat(@ceil(current_window_size)), random, annealing_config.grid_size, the_placement.input_y, annealing_config.node_padding);
             } else {
-                _ = moveInputOrOutputAxis(the_graph, the_placement, @intFromFloat(@ceil(current_window_size)), random, annealing_config.grid_size, annealing_config.grid_size, true, annealing_config.node_padding);
+                _ = moveInputOrOutputAxis(the_graph, the_placement, @intFromFloat(@ceil(current_window_size)), random, annealing_config.grid_size, true, annealing_config.node_padding);
             }
 
             // _ = moveRandomFixedY(the_graph, the_placement, to_perturb, @intFromFloat(@ceil(current_window_size)), random, annealing_config.grid_size, annealing_config.grid_size, the_placement.input_y);
         } else {
-            const result = randomMove(the_graph, the_placement, to_perturb, @intFromFloat(@ceil(current_window_size)), random, annealing_config.grid_size, annealing_config.grid_size, null, annealing_config.node_padding); // use grid size as the minimum y position, so it stays nicely alligned if we changed it in the future
+            const result = randomMove(the_graph, the_placement, to_perturb, @intFromFloat(@ceil(current_window_size)), random, annealing_config.grid_size, null, annealing_config.node_padding); // use grid size as the minimum y position, so it stays nicely alligned if we changed it in the future
             if (result != 0) {
                 _ = swap(the_graph, the_placement, to_perturb, result, annealing_config.node_padding);
             }

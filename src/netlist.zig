@@ -212,57 +212,57 @@ const inverterBlocks = [_]structures.SchemBlock{
 const andGateBlocks = [_]structures.SchemBlock{
     .{
         .block = .repeater,
-        .loc = .{ 0, 1, 1 },
+        .loc = .{ 0, 1, 0 },
         .rot = .south,
     },
     .{
         .block = .block,
-        .loc = .{ 0, 0, 1 },
+        .loc = .{ 0, 0, 0 },
         .rot = .east,
     },
     .{
         .block = .repeater,
-        .loc = .{ 2, 1, 1 },
+        .loc = .{ 2, 1, 0 },
         .rot = .south,
     },
     .{
         .block = .block,
-        .loc = .{ 2, 0, 1 },
+        .loc = .{ 2, 0, 0 },
         .rot = .east,
     },
     .{
         .block = .block,
-        .loc = .{ 0, 1, 2 },
+        .loc = .{ 0, 1, 1 },
         .rot = .center,
     },
     .{
         .block = .block,
-        .loc = .{ 1, 1, 2 },
+        .loc = .{ 1, 1, 1 },
         .rot = .center,
     },
     .{
         .block = .block,
-        .loc = .{ 2, 1, 2 },
+        .loc = .{ 2, 1, 1 },
         .rot = .center,
     },
     .{
         .block = .torch,
-        .loc = .{ 1, 1, 3 },
+        .loc = .{ 1, 1, 2 },
         .rot = .south,
     },
     .{
         .block = .dust,
-        .loc = .{ 1, 2, 2 },
+        .loc = .{ 1, 2, 1 },
         .rot = .center,
     },
     .{
         .block = .torch,
-        .loc = .{ 0, 2, 2 },
+        .loc = .{ 0, 2, 1 },
         .rot = .center,
     },
     .{
         .block = .torch,
-        .loc = .{ 2, 2, 2 },
+        .loc = .{ 2, 2, 1 },
         .rot = .center,
     },
 };
