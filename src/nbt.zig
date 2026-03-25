@@ -37,68 +37,68 @@ pub fn repeater_orientation_to_data(ori: ms.Orientation) i8 {
     return (delay - 1) * 4 + orientation_value;
 }
 
-const and_gate = [_]ms.SchemBlock{
-    .{
-        .block = .dust,
-        .loc = .{ 0, 0, 0 },
-        .rot = .center,
-    },
-    .{
-        .block = .dust,
-        .loc = .{ 2, 0, 0 },
-        .rot = .center,
-    },
-    .{
-        .block = .repeater,
-        .loc = .{ 0, 0, 1 },
-        .rot = .south,
-    },
-    .{
-        .block = .repeater,
-        .loc = .{ 2, 0, 1 },
-        .rot = .south,
-    },
-    .{
-        .block = .block,
-        .loc = .{ 0, 0, 2 },
-        .rot = .center,
-    },
-    .{
-        .block = .block,
-        .loc = .{ 1, 0, 2 },
-        .rot = .center,
-    },
-    .{
-        .block = .block,
-        .loc = .{ 2, 0, 2 },
-        .rot = .center,
-    },
-    .{
-        .block = .torch,
-        .loc = .{ 1, 0, 3 },
-        .rot = .south,
-    },
-    .{
-        .block = .dust,
-        .loc = .{ 1, 0, 4 },
-        .rot = .center,
-    },
-    .{
-        .block = .dust,
-        .loc = .{ 1, 1, 2 },
-        .rot = .center,
-    },
-    .{
-        .block = .torch,
-        .loc = .{ 0, 1, 2 },
-        .rot = .center,
-    },
-    .{
-        .block = .torch,
-        .loc = .{ 2, 1, 2 },
-        .rot = .center,
-    },
-};
+// const and_gate = [_]ms.SchemBlock{
+//     .{
+//         .block = .dust,
+//         .loc = .{ 0, 0, 0 },
+//         .rot = .center,
+//     },
+//     .{
+//         .block = .dust,
+//         .loc = .{ 2, 0, 0 },
+//         .rot = .center,
+//     },
+//     .{
+//         .block = .repeater,
+//         .loc = .{ 0, 0, 1 },
+//         .rot = .south,
+//     },
+//     .{
+//         .block = .repeater,
+//         .loc = .{ 2, 0, 1 },
+//         .rot = .south,
+//     },
+//     .{
+//         .block = .block,
+//         .loc = .{ 0, 0, 2 },
+//         .rot = .center,
+//     },
+//     .{
+//         .block = .block,
+//         .loc = .{ 1, 0, 2 },
+//         .rot = .center,
+//     },
+//     .{
+//         .block = .block,
+//         .loc = .{ 2, 0, 2 },
+//         .rot = .center,
+//     },
+//     .{
+//         .block = .torch,
+//         .loc = .{ 1, 0, 3 },
+//         .rot = .south,
+//     },
+//     .{
+//         .block = .dust,
+//         .loc = .{ 1, 0, 4 },
+//         .rot = .center,
+//     },
+//     .{
+//         .block = .dust,
+//         .loc = .{ 1, 1, 2 },
+//         .rot = .center,
+//     },
+//     .{
+//         .block = .torch,
+//         .loc = .{ 0, 1, 2 },
+//         .rot = .center,
+//     },
+//     .{
+//         .block = .torch,
+//         .loc = .{ 2, 1, 2 },
+//         .rot = .center,
+//     },
+// };
 
 pub fn abs_block_arr_to_schem(a: std.mem.Allocator, blocks: []ms.AbsBlock) void {
     var min_coord = @as(ms.WorldCoord, @splat(std.math.maxInt(i32)));
