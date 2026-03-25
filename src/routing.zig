@@ -4,8 +4,33 @@ const nbt = @import("nbt.zig");
 const comp = @import("components/components.zig");
 const ms = @import("abstract/structures.zig");
 
+const Router = @This();
+
+max_iterations: u32 = 20,
+violation_cost_multiplier: f32 = 10.0,
+heuristic_weight: f32 = 2.0,
+delay_cost_multiplier: f32 = 10.0, // cost = this * delay + length
+max_cost: f32 = 1000, // dont explore dumb paths
+
+// typedefs
+const WorldCoord = ms.WorldCoord;
+
+// an A* node is a coord + signal so signal strength can be guaranteed
+const NodeState = struct {
+    coord: WorldCoord,
+    signal: u4,
+};
+
+// parent node and associated metadata
+const Parent = struct {
+    prev: NodeState,
+    def: *const comp.ComponentDef,
+    violating: bool,
+    heading: WorldCoord,
+};
+
+// return value
 const Route = struct {
-    // return value
     route: std.ArrayList(ms.AbsBlock) = .empty,
     footprints: std.ArrayList(WorldCoord) = .empty,
     delay: u32 = 0,
@@ -17,46 +42,17 @@ const Route = struct {
     }
 };
 
-const RouterConfig = struct {
-    max_iterations: u32 = 20,
-    violation_cost_multiplier: f32 = 10.0,
-    heuristic_weight: f32 = 2.0,
-    delay_cost_multiplier: f32 = 10.0, // cost = this * delay + length
-    max_cost: f32 = 1000, // dont explore dumb paths
+pub const RoutePair = struct {
+    from: WorldCoord,
+    to: WorldCoord,
 };
 
-const WorldCoord = ms.WorldCoord;
-
-const NodeState = struct {
-    coord: WorldCoord,
-    signal: u4,
-};
-
-const Parent = struct {
-    prev: NodeState,
-    def: *const comp.ComponentDef,
-    violating: bool,
-    heading: WorldCoord,
-};
-
-// 3D Manhattan distance towards the target acts as an admissible heuristic.
-fn heuristic(curr: WorldCoord, target: WorldCoord, delay_weight: f32) f32 {
-    // const dx = @as(u32, @intCast(@abs(curr[0] - target[0])));
-    // const dy = @as(u32, @intCast(@abs(curr[1] - target[1])));
-    // const dz = @as(u32, @intCast(@abs(curr[2] - target[2])));
-    const dx = @abs(curr[0] - target[0]);
-    // const dy = @abs(curr[1] - target[1]);
-    const dz = @abs(curr[2] - target[2]);
-    const manhattan: f32 = @floatFromInt(dx + dz);
-
-    // Admissible delay injection:
-    // You cannot move more than 15 blocks without incurring at least 1 tick of delay.
-    // Cost scales by 100 per delay tick.
-    const min_unavoidable_delay_cost = (manhattan / 15) * delay_weight;
-
-    return (manhattan + min_unavoidable_delay_cost);
+// Utility functions
+fn coordEq(a: WorldCoord, b: WorldCoord) bool {
+    return a[0] == b[0] and a[1] == b[1] and a[2] == b[2];
 }
 
+// computed at comptime
 const SURROUNDING_OFFSETS = blk: {
     var arr: [27]WorldCoord = undefined;
     var i: usize = 0;
@@ -88,10 +84,6 @@ fn getMoveFootprint(u: WorldCoord, move: Move) MoveFootprint {
 }
 
 fn moveIntersectsPath(new_u: WorldCoord, new_move: Move, start_state: NodeState, parents: *const std.AutoHashMap(NodeState, Parent)) bool {
-
-    //SKIP DUST FOR NOW
-    // if (new_move.def.delay == 0) return false;
-
     const new_fp = getMoveFootprint(new_u, new_move);
     const new_coord = new_u + new_move.dir;
 
@@ -99,10 +91,9 @@ fn moveIntersectsPath(new_u: WorldCoord, new_move: Move, start_state: NodeState,
     var is_immediate_parent = true;
 
     while (true) {
-        // 1. Check for node overlap
+        // make sure it's not the same coord
         if (coordEq(curr.coord, new_coord)) return true;
 
-        // 2. Check for physical edge volume overlap
         if (parents.get(curr)) |p| {
             const prev_u = p.prev.coord;
             const past_move = Move{
@@ -126,11 +117,6 @@ fn moveIntersectsPath(new_u: WorldCoord, new_move: Move, start_state: NodeState,
             for (new_fp.blocks[0..new_fp.count]) |b1| {
                 for (past_fp.blocks[0..past_fp.count]) |b2| {
                     if (coordEq(b1, b2)) {
-                        // Allow the new move to share a node and its supporting block with its immediate parent edge
-                        // const block_below = new_u + WorldCoord{ 0, -1, 0 };
-                        // if (is_immediate_parent and (coordEq(b1, new_u) or coordEq(b1, block_below))) {
-                        //     continue;
-                        // }
                         return true;
                     }
                 }
@@ -144,35 +130,6 @@ fn moveIntersectsPath(new_u: WorldCoord, new_move: Move, start_state: NodeState,
 
     return false;
 }
-
-// any formless volume
-const Volume = ms.OrderedSet(WorldCoord);
-
-fn coordEq(a: WorldCoord, b: WorldCoord) bool {
-    return a[0] == b[0] and a[1] == b[1] and a[2] == b[2];
-}
-
-const QueueItem = struct {
-    state: NodeState,
-    g: f32,
-    f: f32,
-};
-
-fn queueOrder(context: void, a: QueueItem, b: QueueItem) std.math.Order {
-    _ = context;
-    const f_order = std.math.order(a.f, b.f);
-    if (f_order == .eq) {
-        // Tie-breaker: If f is equal, prioritize the node with the higher g-cost
-        // because it has a smaller h-cost and is deeper in the search tree (closer to goal).
-        return std.math.order(a.g, b.g).invert();
-    }
-    return f_order;
-}
-
-const DistanceMetric = struct {
-    distance: u32,
-    signal_strength: u4,
-};
 
 const Move = struct {
     dir: WorldCoord,
@@ -221,8 +178,8 @@ const Net = struct {
 };
 
 // Heuristic for REORDER(): Route nets with the most failures first.
-// Tie-breaker: Route physically longer nets first.
-fn sortNetPtrsDescending(config: RouterConfig, lhs: *Net, rhs: *Net) bool {
+// Tie-breaker: Route longer nets first.
+fn sortNetPtrsDescending(config: Router, lhs: *Net, rhs: *Net) bool {
     if (lhs.failures == rhs.failures) {
         const dist_lhs = heuristic(lhs.from, lhs.to, config.delay_cost_multiplier);
         const dist_rhs = heuristic(rhs.from, rhs.to, config.delay_cost_multiplier);
@@ -252,10 +209,6 @@ fn ripUp(net: *Net, forbidden_zone: *ms.ForbiddenZone, a: std.mem.Allocator) voi
     }
 }
 
-pub const RoutePair = struct {
-    from: WorldCoord,
-    to: WorldCoord,
-};
 const CellInfo = struct {
     first_net: *Net,
 };
@@ -264,16 +217,15 @@ fn updateViolations(a: std.mem.Allocator, nets: []Net) !void {
     var owners = std.AutoHashMap(WorldCoord, CellInfo).init(a);
     defer owners.deinit();
 
-    // 1. Initialize from A*'s baseline violation check (e.g., hitting static geometry)
+    // check basic overlapping geometry calculated during algorithm run
     for (nets) |*net| {
         net.is_violating = if (net.route) |*r| r.violating else false;
     }
 
-    // 2. Cross-check all routed nets for mutual intersections
+    // double check with adjacency
     for (nets) |*net| {
         if (net.route) |*r| {
             for (r.footprints.items) |coord| {
-                // Check direct footprint against the fattened owners map
                 if (owners.getPtr(coord)) |info| {
                     if (info.first_net != net) {
                         info.first_net.is_violating = true;
@@ -281,7 +233,6 @@ fn updateViolations(a: std.mem.Allocator, nets: []Net) !void {
                     }
                 }
 
-                // Fatten the volume for subsequent net checks
                 for (SURROUNDING_OFFSETS) |offset| {
                     const target = coord + offset;
                     // Only insert if empty so we don't overwrite the true first_net
@@ -293,7 +244,6 @@ fn updateViolations(a: std.mem.Allocator, nets: []Net) !void {
         }
     }
 
-    // 3. Sync flags back to the Route structs
     for (nets) |*net| {
         if (net.route) |*r| {
             r.violating = net.is_violating;
@@ -301,7 +251,7 @@ fn updateViolations(a: std.mem.Allocator, nets: []Net) !void {
     }
 }
 
-pub fn routeAll(a: std.mem.Allocator, pairs: []RoutePair, forbidden_zone: *ms.ForbiddenZone, config: RouterConfig) !Route {
+pub fn routeAll(a: std.mem.Allocator, pairs: []RoutePair, forbidden_zone: *ms.ForbiddenZone, config: Router) !Route {
     var nets = try a.alloc(Net, pairs.len);
 
     defer {
@@ -369,7 +319,6 @@ pub fn routeAll(a: std.mem.Allocator, pairs: []RoutePair, forbidden_zone: *ms.Fo
         std.log.warn("routeAll finished with {} unresolved violations after {} iterations.", .{ v_nets.items.len, config.max_iterations });
     }
 
-    // Assemble final aggregate Route
     var final_route = Route{
         .route = .empty,
         .footprints = .empty,
@@ -392,7 +341,38 @@ pub fn routeAll(a: std.mem.Allocator, pairs: []RoutePair, forbidden_zone: *ms.Fo
     return final_route;
 }
 
-pub fn routeToUpdateForbiddenZone(a: std.mem.Allocator, from: WorldCoord, to: WorldCoord, forbidden_zone: *ms.ForbiddenZone, config: RouterConfig) !Route {
+const QueueItem = struct {
+    state: NodeState,
+    g: f32,
+    f: f32,
+};
+
+// 2d manhattan
+// admissible because you cant move 15 blocks without
+// increasing delay by 1
+// does not consider Y
+fn heuristic(curr: WorldCoord, target: WorldCoord, delay_weight: f32) f32 {
+    const dx = @abs(curr[0] - target[0]);
+    const dz = @abs(curr[2] - target[2]);
+    const manhattan: f32 = @floatFromInt(dx + dz);
+
+    const min_unavoidable_delay_cost = (manhattan / 15) * delay_weight;
+
+    return (manhattan + min_unavoidable_delay_cost);
+}
+
+fn queueOrder(context: void, a: QueueItem, b: QueueItem) std.math.Order {
+    _ = context;
+    const f_order = std.math.order(a.f, b.f);
+    if (f_order == .eq) {
+        // Tie-breaker: If f is equal, prioritize the node with the higher g-cost
+        // because it has a smaller h-cost and is deeper in the search tree (closer to goal).
+        return std.math.order(a.g, b.g).invert();
+    }
+    return f_order;
+}
+
+pub fn routeToUpdateForbiddenZone(a: std.mem.Allocator, from: WorldCoord, to: WorldCoord, forbidden_zone: *ms.ForbiddenZone, config: Router) !Route {
     const route = try routeTo(a, from, to, forbidden_zone.*, config);
 
     for (route.footprints.items) |coord| {
@@ -412,7 +392,7 @@ pub fn routeToUpdateForbiddenZone(a: std.mem.Allocator, from: WorldCoord, to: Wo
     return route;
 }
 
-pub fn routeTo(a: std.mem.Allocator, from: WorldCoord, to: WorldCoord, forbidden_zone: ms.ForbiddenZone, config: RouterConfig) !Route {
+pub fn routeTo(a: std.mem.Allocator, from: WorldCoord, to: WorldCoord, forbidden_zone: ms.ForbiddenZone, config: Router) !Route {
     if (from[1] < phys.MIN_Y_LEVEL or from[1] > phys.MAX_Y_LEVEL or
         to[1] < phys.MIN_Y_LEVEL or to[1] > phys.MAX_Y_LEVEL)
     {
@@ -467,7 +447,7 @@ pub fn routeTo(a: std.mem.Allocator, from: WorldCoord, to: WorldCoord, forbidden
             break;
         }
         for (moves) |move| {
-            // Prevent immediate 180-degree foldbacks
+            //prevent immediate 180-degree turnarounds
             if (parents.get(u_state)) |p| {
                 if (move.heading[0] == -p.heading[0] and move.heading[2] == -p.heading[2]) {
                     continue;
@@ -478,7 +458,6 @@ pub fn routeTo(a: std.mem.Allocator, from: WorldCoord, to: WorldCoord, forbidden
             const validity = isMoveValid(u, move, forbidden_zone);
             if (validity == .invalid) continue;
 
-            // Data-driven signal calculation
             var next_signal = u_state.signal;
             if (next_signal < move.def.min_signal) continue;
 
@@ -498,8 +477,7 @@ pub fn routeTo(a: std.mem.Allocator, from: WorldCoord, to: WorldCoord, forbidden
 
             switch (validity) {
                 .violation => |refs| {
-                    // 200 bounds the map flood while still heavily deterring intersections.
-                    // Scaling by refs ensures rip-up/reroute avoids highly contested blocks.
+                    // multiply by how bad the violation is
                     move_cost += config.violation_cost_multiplier * @as(f32, @floatFromInt(refs));
                     is_violating = true;
                 },
