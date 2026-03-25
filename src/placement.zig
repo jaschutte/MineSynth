@@ -37,8 +37,8 @@ pub const AnnealingConfig = struct {
     // 2*2 grid segments
     grid_size: u8 = 2,
     // fix all in-output nodes to the same y axis
-    initial_input_y: postype = 70,
-    initial_output_y: postype = 0,
+    initial_input_y: postype = 0,
+    initial_output_y: postype = 70,
     // for convenience:
     chip_height_coordinate: postype = 0,
 };
