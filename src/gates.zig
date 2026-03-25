@@ -34,7 +34,7 @@ pub fn createGates(a: std.mem.Allocator, graph: *const glib.GateGraph) !void {
     defer node_output_map.deinit();
 
     for (graph.nodes.values()) |*node| {
-        const gate: *nl.Gate = graph.source.getGate(node.body);
+        const gate: *nl.Gate = graph.source.getGate(node.id);
 
         std.log.debug("Placing gate {d} of kind {any} at position {any}", .{ node.id, gate.kind, pos });
         switch (gate.kind) {
@@ -46,7 +46,7 @@ pub fn createGates(a: std.mem.Allocator, graph: *const glib.GateGraph) !void {
                 blocks.appendSlice(a, &and_gate_blocks) catch @panic("oom");
                 // append all coords to forbidden zone to prevent routing through the gate
                 for (and_gate_blocks) |block| {
-                    forbidden_zone.put(block.loc, void{}) catch @panic("oom");
+                    forbidden_zone.put(block.loc, .{ .ftype = .gate }) catch @panic("oom");
                 }
                 node_input_map.put(node.id, pos + ms.WorldCoord{ -2, 0, 0 }) catch @panic("oom");
                 node_output_map.put(node.id, pos + ms.WorldCoord{ 2, 0, 0 }) catch @panic("oom");
@@ -58,7 +58,7 @@ pub fn createGates(a: std.mem.Allocator, graph: *const glib.GateGraph) !void {
                 };
                 blocks.appendSlice(a, &or_gate_blocks) catch @panic("oom");
                 for (or_gate_blocks) |block| {
-                    forbidden_zone.put(block.loc, void{}) catch @panic("oom");
+                    forbidden_zone.put(block.loc, .{ .ftype = .gate }) catch @panic("oom");
                 }
                 node_input_map.put(node.id, pos + ms.WorldCoord{ -2, 0, 0 }) catch @panic("oom");
                 node_output_map.put(node.id, pos + ms.WorldCoord{ 2, 0, 0 }) catch @panic("oom");
@@ -71,7 +71,7 @@ pub fn createGates(a: std.mem.Allocator, graph: *const glib.GateGraph) !void {
                 };
                 blocks.appendSlice(a, &or_gate_blocks) catch @panic("oom");
                 for (or_gate_blocks) |block| {
-                    forbidden_zone.put(block.loc, void{}) catch @panic("oom");
+                    forbidden_zone.put(block.loc, .{ .ftype = .gate }) catch @panic("oom");
                 }
                 node_input_map.put(node.id, pos + ms.WorldCoord{ -2, 0, 0 }) catch @panic("oom");
                 node_output_map.put(node.id, pos + ms.WorldCoord{ 2, 0, 0 }) catch @panic("oom");
@@ -92,9 +92,9 @@ pub fn createGates(a: std.mem.Allocator, graph: *const glib.GateGraph) !void {
                     },
                 };
                 blocks.appendSlice(a, &input_blocks) catch @panic("oom");
-                for (input_blocks) |block| {
-                    forbidden_zone.put(block.loc, void{}) catch @panic("oom");
-                }
+                // for (input_blocks) |block| {
+                //     forbidden_zone.put(block.loc, void{}) catch @panic("oom");
+                // }
                 node_output_map.put(node.id, pos + ms.WorldCoord{ 2, 0, 0 }) catch @panic("oom");
             },
             .output => {
@@ -109,9 +109,9 @@ pub fn createGates(a: std.mem.Allocator, graph: *const glib.GateGraph) !void {
                     .loc = pos + ms.WorldCoord{ 0, 1, 0 },
                 } };
                 blocks.appendSlice(a, &output_blocks) catch @panic("oom");
-                for (output_blocks) |block| {
-                    forbidden_zone.put(block.loc, void{}) catch @panic("oom");
-                }
+                // for (output_blocks) |block| {
+                //     forbidden_zone.put(block.loc, void{}) catch @panic("oom");
+                // }
                 node_input_map.put(node.id, pos + ms.WorldCoord{ -2, 0, 0 }) catch @panic("oom");
             },
         }
@@ -122,6 +122,8 @@ pub fn createGates(a: std.mem.Allocator, graph: *const glib.GateGraph) !void {
         }
     }
 
+    var pairs: std.ArrayList(rt.RoutePair) = .empty;
+
     for (graph.edges.values()) |*edge| {
         const a_output = node_output_map.get(edge.a);
         const b_input = node_input_map.get(edge.b);
@@ -131,6 +133,7 @@ pub fn createGates(a: std.mem.Allocator, graph: *const glib.GateGraph) !void {
         }
         const new_a_output = a_output.?;
         const new_b_input = b_input.?;
+        try pairs.append(a, .{ .from = new_a_output, .to = new_b_input });
         // check if a_output in forbidden zone, if so, move it up by one and add to forbidden zone until we find a free spot
         // var new_a_output = a_output.?;
         // if (forbidden_zone.contains(a_output.?)) {
@@ -147,23 +150,14 @@ pub fn createGates(a: std.mem.Allocator, graph: *const glib.GateGraph) !void {
         //     node_input_map.put(edge.b, new_b_input) catch @panic("oom");
         // }
 
-        std.log.info("Routing between {any} and {any}", .{ new_a_output, new_b_input });
-        var route = rt.routeToUpdateForbiddenZone(a, new_a_output, new_b_input, &forbidden_zone) catch |err| {
-            std.log.err("Failed to route between {any} and {any}: {any}", .{ new_a_output, b_input.?, err });
-            std.log.err("Gate info: {d} of kind {any} at position {any}", .{ edge.a, graph.source.getGate(edge.a).kind, a_output.? });
-            if (err == error.PathNotFound) {
-                std.log.err("No path found between {any} and {any}", .{ new_a_output, new_b_input });
-                continue;
-            }
-            return err;
-        };
-        blocks.appendSlice(a, route.route.items) catch @panic("oom");
-        route.deinit(a);
     }
+    var route = try rt.routeAll(a, pairs.items, &forbidden_zone, .{});
+    defer route.deinit(a);
 
     const result = GateStructure{
         .blocks = blocks,
     };
+    blocks.appendSlice(a, route.route.items) catch @panic("oom");
 
     nbt.abs_block_arr_to_schem(a, blocks.items);
     blocks.deinit(a);

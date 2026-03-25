@@ -4,12 +4,11 @@ const glib = @import("graph.zig");
 
 // https://magjac.com/graphviz-visual-editor/
 
-pub fn printNode(graph: *const glib.GateGraph, string: *std.io.Writer.Allocating, node: *glib.GateGraph.Node) void {
+pub fn printNode(string: *std.io.Writer.Allocating, node: *glib.GateGraph.Node) void {
     errdefer @panic("Skill issue");
 
-    const gate = graph.source.getGate(node.body);
-    const symbol = gate.symbol;
-    const color = switch (gate.kind) {
+    const symbol = node.body.symbol;
+    const color = switch (node.body.kind) {
         .and_gate => "\"#e0a143\"",
         .or_gate => "\"#ead04f\"",
         .inverter => "\"#8fb2c9\"",
@@ -28,26 +27,23 @@ pub fn printNode(graph: *const glib.GateGraph, string: *std.io.Writer.Allocating
 pub fn printEdge(graph: *const glib.GateGraph, string: *std.io.Writer.Allocating, edge: *glib.GateGraph.Edge) void {
     errdefer @panic("Skill issue");
 
-    const net = graph.source.getNet(edge.body);
-    const color = switch (net.literal.isNegated()) {
-        true => "\"#601400\"",
-        false => "\"#006004\"",
+    const color = switch (edge.body.negated) {
+        .negated => "\"#601400\"",
+        .unnegated => "\"#006004\"",
+        .undefined => "\"#000000\"",
     };
-    const non_const_graph: *glib.Graph(nl.GatePtr) = @constCast(graph);
-    const relation = non_const_graph.getNode(edge.a).?.edgeRelation(edge.id);
+    const relation = graph.getConstNode(edge.a).?.edgeRelation(edge.id) orelse @panic("Invalid edge?");
     const order: struct { arrow: *const [2]u8, from: u64, to: u64 } = switch (relation) {
         .input => .{ .arrow = "->", .from = edge.b, .to = edge.a },
         .output => .{ .arrow = "->", .from = edge.a, .to = edge.b },
-        .inout => .{ .arrow = "--", .from = edge.a, .to = edge.b },
-        .none => .{ .arrow = "--", .from = edge.a, .to = edge.b },
     };
 
     try string.writer.print("    {} {s} {} [label=\"", .{ order.from, order.arrow, order.to });
-    try net.literal.writeSymbol(&string.writer);
+    try string.writer.print("{s}", .{edge.body.symbol});
     try string.writer.print("\", color={s}, tooltip=\"{}\"]\n", .{ color, edge.id });
 }
 
-pub fn printGate(gpa: std.mem.Allocator, graph: *const glib.Graph(nl.GatePtr)) void {
+pub fn printGate(gpa: std.mem.Allocator, graph: *const glib.GateGraph) void {
     errdefer @panic("Skill issue");
 
     var string = std.io.Writer.Allocating.init(gpa);
@@ -60,7 +56,7 @@ pub fn printGate(gpa: std.mem.Allocator, graph: *const glib.Graph(nl.GatePtr)) v
     }
 
     for (graph.nodes.values()) |*node| {
-        printNode(graph, &string, node);
+        printNode(&string, node);
     }
 
     try string.writer.writeAll("}\n");
@@ -83,7 +79,7 @@ pub fn printGateDFS(gpa: std.mem.Allocator, graph: *const glib.GateGraph) void {
     var node_queue = std.ArrayList(glib.NodeId).empty;
     defer _ = node_queue.deinit(gpa);
     for (graph.nodes.values()) |*node| {
-        if (graph.source.getGate(node.body).kind == .input) {
+        if (node.body.kind == .input) {
             try node_queue.append(gpa, node.id);
         }
     }
@@ -119,7 +115,7 @@ pub fn printGateDFS(gpa: std.mem.Allocator, graph: *const glib.GateGraph) void {
     }
     for (visited.keys()) |node_id| {
         const node = non_const_graph.getNode(node_id).?;
-        printNode(graph, &string, node);
+        printNode(&string, node);
     }
 
     try string.writer.writeAll("}\n");
@@ -130,12 +126,12 @@ pub fn printGateDFS(gpa: std.mem.Allocator, graph: *const glib.GateGraph) void {
 pub fn GraphVisualizer(comptime NodeBody: type) type {
     return struct {
         pub const print = switch (NodeBody) {
-            nl.GatePtr => printGate,
+            glib.GateBody => printGate,
             else => @compileError("Unsupported graph type"),
         };
 
         pub const printDFS = switch (NodeBody) {
-            nl.GatePtr => printGateDFS,
+            glib.GateBody => printGateDFS,
             else => @compileError("Unsupported graph type"),
         };
     };
