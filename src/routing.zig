@@ -4,23 +4,24 @@ const nbt = @import("nbt.zig");
 const comp = @import("components/components.zig");
 const ms = @import("abstract/structures.zig");
 
-// return value
-route: std.ArrayList(ms.AbsBlock) = .empty,
-footprints: std.ArrayList(WorldCoord) = .empty,
-delay: u32 = 0,
-length: u32 = 0,
-violating: bool, // whether the route violates another route
+const Route = struct {
+    // return value
+    route: std.ArrayList(ms.AbsBlock) = .empty,
+    footprints: std.ArrayList(WorldCoord) = .empty,
+    delay: u32 = 0,
+    length: u32 = 0,
+    violating: bool, // whether the route violates another route
+    pub fn deinit(self: *Route, allocator: std.mem.Allocator) void {
+        self.route.deinit(allocator);
+        self.footprints.deinit(allocator);
+    }
+};
 
-pub fn deinit(self: *Route, allocator: std.mem.Allocator) void {
-    self.route.deinit(allocator);
-    self.footprints.deinit(allocator);
-}
-
-const Route = @This();
-
-// the vias are designed to be 3 blocks tall so
-// please dont make me change this >:(
-pub const LAYER_HEIGHT: u2 = 3;
+const RouterConfig = struct {
+    max_iterations: u32 = 20,
+    violation_cost_multiplier: f32 = 50.0,
+    heuristic_weight: f32 = 3.0,
+};
 
 const WorldCoord = ms.WorldCoord;
 
@@ -279,7 +280,7 @@ fn updateViolations(a: std.mem.Allocator, nets: []Net) !void {
     }
 }
 
-pub fn routeAll(a: std.mem.Allocator, pairs: []RoutePair, forbidden_zone: *ms.ForbiddenZone) !Route {
+pub fn routeAll(a: std.mem.Allocator, pairs: []RoutePair, forbidden_zone: *ms.ForbiddenZone, config: RouterConfig) !Route {
     var nets = try a.alloc(Net, pairs.len);
 
     defer {
@@ -302,7 +303,7 @@ pub fn routeAll(a: std.mem.Allocator, pairs: []RoutePair, forbidden_zone: *ms.Fo
             .is_violating = false,
         };
         std.log.info("Routing net {} from {any} to {any}", .{ i, nets[i].from, nets[i].to });
-        nets[i].route = try routeToUpdateForbiddenZone(a, nets[i].from, nets[i].to, forbidden_zone);
+        nets[i].route = try routeToUpdateForbiddenZone(a, nets[i].from, nets[i].to, forbidden_zone, config);
     }
 
     // Evaluate global collisions and populate v_nets
@@ -314,11 +315,10 @@ pub fn routeAll(a: std.mem.Allocator, pairs: []RoutePair, forbidden_zone: *ms.Fo
         }
     }
 
-    const MAX_ITERS = 20;
     var iters: u32 = 0;
 
     // Iterative rip-up and reroute
-    while (v_nets.items.len > 0 and iters < MAX_ITERS) : (iters += 1) {
+    while (v_nets.items.len > 0 and iters < config.max_iterations) : (iters += 1) {
         std.sort.block(*Net, v_nets.items, {}, sortNetPtrsDescending);
         const num_v_nets_this_pass = v_nets.items.len;
 
@@ -328,7 +328,7 @@ pub fn routeAll(a: std.mem.Allocator, pairs: []RoutePair, forbidden_zone: *ms.Fo
             std.log.info("Re-routing net from {any} to {any} with {} failures", .{ v_nets.items[0].from, v_nets.items[0].to, v_nets.items[0].failures });
             var net = v_nets.orderedRemove(0);
             ripUp(net, forbidden_zone, a);
-            net.route = try routeToUpdateForbiddenZone(a, net.from, net.to, forbidden_zone);
+            net.route = try routeToUpdateForbiddenZone(a, net.from, net.to, forbidden_zone, config);
         }
 
         // Recalculate global collisions after all queued nets have re-routed
@@ -345,7 +345,7 @@ pub fn routeAll(a: std.mem.Allocator, pairs: []RoutePair, forbidden_zone: *ms.Fo
     }
 
     if (v_nets.items.len > 0) {
-        std.log.warn("routeAll finished with {} unresolved violations after {} iterations.", .{ v_nets.items.len, MAX_ITERS });
+        std.log.warn("routeAll finished with {} unresolved violations after {} iterations.", .{ v_nets.items.len, config.max_iterations });
     }
 
     // Assemble final aggregate Route
@@ -371,8 +371,8 @@ pub fn routeAll(a: std.mem.Allocator, pairs: []RoutePair, forbidden_zone: *ms.Fo
     return final_route;
 }
 
-pub fn routeToUpdateForbiddenZone(a: std.mem.Allocator, from: WorldCoord, to: WorldCoord, forbidden_zone: *ms.ForbiddenZone) !Route {
-    const route = try routeTo(a, from, to, forbidden_zone.*);
+pub fn routeToUpdateForbiddenZone(a: std.mem.Allocator, from: WorldCoord, to: WorldCoord, forbidden_zone: *ms.ForbiddenZone, config: RouterConfig) !Route {
+    const route = try routeTo(a, from, to, forbidden_zone.*, config);
 
     for (route.footprints.items) |coord| {
         for (SURROUNDING_OFFSETS) |offset| {
@@ -391,7 +391,7 @@ pub fn routeToUpdateForbiddenZone(a: std.mem.Allocator, from: WorldCoord, to: Wo
     return route;
 }
 
-pub fn routeTo(a: std.mem.Allocator, from: WorldCoord, to: WorldCoord, forbidden_zone: ms.ForbiddenZone) !Route {
+pub fn routeTo(a: std.mem.Allocator, from: WorldCoord, to: WorldCoord, forbidden_zone: ms.ForbiddenZone, config: RouterConfig) !Route {
     if (from[1] < phys.MIN_Y_LEVEL or from[1] > phys.MAX_Y_LEVEL or
         to[1] < phys.MIN_Y_LEVEL or to[1] > phys.MAX_Y_LEVEL)
     {
@@ -470,7 +470,7 @@ pub fn routeTo(a: std.mem.Allocator, from: WorldCoord, to: WorldCoord, forbidden
                 .violation => |refs| {
                     // 200 bounds the map flood while still heavily deterring intersections.
                     // Scaling by refs ensures rip-up/reroute avoids highly contested blocks.
-                    move_cost += 80 * @as(f32, @floatFromInt(refs));
+                    move_cost += config.violation_cost_multiplier * @as(f32, @floatFromInt(refs));
                     is_violating = true;
                 },
                 else => {},
@@ -487,10 +487,11 @@ pub fn routeTo(a: std.mem.Allocator, from: WorldCoord, to: WorldCoord, forbidden
                     .violating = is_violating,
                 }) catch @panic("oom");
 
+                const f_cost = g_cost + heuristic(coord, to) * config.heuristic_weight;
                 queue.add(.{
                     .state = next_state,
                     .g = g_cost,
-                    .f = g_cost + heuristic(coord, to),
+                    .f = f_cost,
                 }) catch @panic("oom");
             }
         }

@@ -58,7 +58,7 @@ pub fn main() !void {
             .to = endpoints[1],
         });
     }
-    var route = try rt.routeAll(gpa, pairs.items, &forbidden_zone);
+    var route = try rt.routeAll(gpa, pairs.items, &forbidden_zone, .{});
 
     defer route.deinit(gpa);
 
