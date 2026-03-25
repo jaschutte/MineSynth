@@ -24,19 +24,20 @@ pub fn main() !void {
     var netlist = try nl.Netlist.fromAiger(gpa, aig);
     defer _ = netlist.deinit();
 
-    nbt.block_arr_to_schem(gpa, nl.GateType.or_gate.blockArray());
-
     var graph = glib.GraphConstructors.fromNetlist(gpa, &netlist);
     graphviz.GraphVisualizer(glib.GateBody).print(gpa, graph);
     glibopt.PreProcessor(glib.GateBody).preprocess(graph);
     sta.AAT(graph);
     graphviz.GraphVisualizer(glib.GateBody).printDFS(gpa, graph);
-    var placement = plc.placement_annealing(graph, .{ .initial_temperature = 30, .moves_per_temperature = 6000 }).?;
+    var placement = plc.placement_annealing(graph, .{ .initial_temperature = 1.2, .moves_per_temperature = 6000 }).?;
     plc.print(graph, placement, graph.gpa);
     graphviz.printPlacement(graph.gpa, graph, placement);
-    const tuples = plc.getThoseTuples(graph, placement, 0);
-    plc.printThoseTuples(graph.gpa, tuples);
-    graph.gpa.free(tuples);
+    // const tuples = plc.getThoseTuples(graph, placement, 0);
+    // plc.printThoseTuples(graph.gpa, tuples);
+    // graph.gpa.free(tuples);
+    const allblocks = plc.toBlocklist(graph, placement, 0);
+    nbt.block_arr_to_schem(gpa, allblocks);
+    graph.gpa.free(allblocks);
     placement.deinit(graph.gpa);
     defer graph.deinit();
 
@@ -77,5 +78,5 @@ pub fn main() !void {
         try master_route.route.appendSlice(gpa, route.route.items);
     }
 
-    nbt.abs_block_arr_to_schem(gpa, master_route.route.items);
+    // nbt.abs_block_arr_to_schem(gpa, master_route.route.items);
 }

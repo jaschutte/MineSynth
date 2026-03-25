@@ -55,12 +55,12 @@ pub const GateType = enum {
                 .h = 1,
             },
             .inverter => physical.Size{
-                .w = 2,
-                .h = 4,
+                .w = 1,
+                .h = 3,
             },
             .and_gate => physical.Size{
-                .w = 4,
-                .h = 4,
+                .w = 3,
+                .h = 3,
             },
             .or_gate => physical.Size{
                 .w = 3,

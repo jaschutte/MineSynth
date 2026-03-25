@@ -38,10 +38,12 @@ pub const AnnealingConfig = struct {
     // 2*2 grid segments
     grid_size: u8 = 1,
     // fix all in-output nodes to the same y axis
-    initial_input_y: postype = 0,
+    initial_input_y: postype = 6,
     initial_output_y: postype = 70,
     // for convenience:
     chip_height_coordinate: postype = 0,
+    // to avoid unroutability:
+    node_padding: u8 = 1,
 };
 
 pub const Orientation = enum {
@@ -350,7 +352,6 @@ fn initialPlacement(the_graph: *const Graph, annealing_config: AnnealingConfig) 
     placement.output_y = annealing_config.initial_output_y;
 
     const first_x_pos = annealing_config.grid_size;
-    const first_y_pos = annealing_config.grid_size;
 
     // place input nodes:
     var x: postype = first_x_pos;
@@ -364,7 +365,7 @@ fn initialPlacement(the_graph: *const Graph, annealing_config: AnnealingConfig) 
         defer the_graph.gpa.free(nodes);
 
         if (nodes.len == 0) {
-            try place(placement, the_graph.getConstNode(node_id).?, x, y, .North);
+            try place(placement, the_graph.getConstNode(node_id).?, x, y, .North, annealing_config.node_padding);
             try placement.input_nodes.put(node_id, {});
             count += 1;
             std.debug.assert(placement.locations.count() == count);
@@ -383,7 +384,7 @@ fn initialPlacement(the_graph: *const Graph, annealing_config: AnnealingConfig) 
         defer the_graph.gpa.free(nodes);
 
         if (nodes.len == 0) {
-            try place(placement, the_graph.getConstNode(node_id).?, x, y, .North);
+            try place(placement, the_graph.getConstNode(node_id).?, x, y, .North, annealing_config.node_padding);
             try placement.output_nodes.put(node_id, {});
             count += 1;
             std.debug.assert(placement.locations.count() == count);
@@ -393,13 +394,13 @@ fn initialPlacement(the_graph: *const Graph, annealing_config: AnnealingConfig) 
     }
 
     x = first_x_pos;
-    y = first_y_pos;
+    y = annealing_config.initial_input_y + annealing_config.initial_spacing;
 
     for (the_graph.nodes.keys()) |node_id| {
         if (isOutput(placement, node_id) or isInput(placement, node_id)) {
             continue;
         }
-        try place(placement, the_graph.getConstNode(node_id).?, x, y, .North);
+        try place(placement, the_graph.getConstNode(node_id).?, x, y, .North, annealing_config.node_padding);
         count += 1;
         std.debug.assert(placement.locations.count() == count);
         x = x + annealing_config.initial_spacing;
@@ -472,10 +473,10 @@ fn costOverlap(the_graph: *const Graph, the_placement: *const Placement) f32 {
 }
 
 // places node at position without checking for collisions, used by initial placement.
-fn place(the_placement: *Placement, to_place: *const glib.GateGraph.Node, new_x: postype, new_y: postype, orientation: Orientation) !void {
+fn place(the_placement: *Placement, to_place: *const glib.GateGraph.Node, new_x: postype, new_y: postype, orientation: Orientation, node_padding: u8) !void {
     const rect = to_place.body.kind.size();
-    for (new_x..new_x + rect.w) |x| {
-        for (new_y..new_y + rect.h) |y| {
+    for (new_x - node_padding..new_x + rect.w) |x| {
+        for (new_y - node_padding..new_y + rect.h) |y| {
             the_placement.occupancy_grid[x][y] = to_place.id;
         }
     }
@@ -486,27 +487,27 @@ fn place(the_placement: *Placement, to_place: *const glib.GateGraph.Node, new_x:
 // tries to move a node to a new position, checking for collisions.
 // Returns 0 if move was succesful and without collisions
 // Returns the nodeid of the collision.
-fn tryMove(the_placement: *Placement, to_place: *const glib.GateGraph.Node, last_pos: *const Position, new_x: postype, new_y: postype) !glib.NodeId {
+fn tryMove(the_placement: *Placement, to_place: *const glib.GateGraph.Node, last_pos: *const Position, new_x: postype, new_y: postype, node_padding: u8) !glib.NodeId {
     // const node = the_graph.getConstNode(to_place);
     const rect = to_place.body.kind.size();
 
-    const collision_result = try checkCollision(the_placement, to_place.id, rect, new_x, new_y);
+    const collision_result = try checkCollision(the_placement, to_place.id, rect, new_x, new_y, node_padding);
     if (collision_result != 0) return collision_result;
 
     // No collision, so move rectangle
-    for (last_pos.x..last_pos.x + rect.w) |x| {
-        for (last_pos.y..last_pos.y + rect.h) |y| {
+    for (last_pos.x - node_padding..last_pos.x + rect.w) |x| {
+        for (last_pos.y - node_padding..last_pos.y + rect.h) |y| {
             the_placement.occupancy_grid[x][y] = 0;
         }
     }
 
-    try place(the_placement, to_place, new_x, new_y, last_pos.orientation);
+    try place(the_placement, to_place, new_x, new_y, last_pos.orientation, node_padding);
     return 0;
 }
 
-fn checkCollision(the_placement: *const Placement, node_id: glib.NodeId, size: physical.Size, new_x: postype, new_y: postype) !glib.NodeId {
-    for (new_x..new_x + size.w) |x| {
-        for (new_y..new_y + size.h) |y| {
+fn checkCollision(the_placement: *const Placement, node_id: glib.NodeId, size: physical.Size, new_x: postype, new_y: postype, node_padding: u8) !glib.NodeId {
+    for (new_x - node_padding..new_x + size.w) |x| {
+        for (new_y - node_padding..new_y + size.h) |y| {
             if (the_placement.occupancy_grid[x][y] != 0 and the_placement.occupancy_grid[x][y] != node_id) {
                 return the_placement.occupancy_grid[x][y];
             }
@@ -528,7 +529,7 @@ fn clampU32WithDelta(x: postype, dx: i32, max_pos: postype, min_pos: postype) po
 // the new position will never be further away from the original than window_size
 // Returns 0 if move was succesful and without collisions
 // Returns the nodeid of the collision.
-fn randomMove(the_graph: *const Graph, the_placement: *Placement, to_perturb: glib.NodeId, window_size: u32, random: std.Random, min_spacing: u8, min_pos: postype, fixed_y_pos: ?postype) glib.NodeId {
+fn randomMove(the_graph: *const Graph, the_placement: *Placement, to_perturb: glib.NodeId, window_size: u32, random: std.Random, min_spacing: u8, min_pos: postype, fixed_y_pos: ?postype, node_padding: u8) glib.NodeId {
     errdefer @panic("Skill issue");
     var size_to_use: i32 = @intCast(window_size);
     if (size_to_use < min_spacing) {
@@ -554,7 +555,7 @@ fn randomMove(the_graph: *const Graph, the_placement: *Placement, to_perturb: gl
         new_y = clampU32WithDelta(pos.y, dy, max_chipsize, min_pos);
     }
 
-    const result = try tryMove(the_placement, the_graph.getConstNode(to_perturb).?, pos, new_x, new_y.?);
+    const result = try tryMove(the_placement, the_graph.getConstNode(to_perturb).?, pos, new_x, new_y.?, node_padding);
     if (fixed_y_pos != null) {
         std.debug.assert(fixed_y_pos == the_placement.locations.getPtr(to_perturb).?.y);
     }
@@ -563,7 +564,7 @@ fn randomMove(the_graph: *const Graph, the_placement: *Placement, to_perturb: gl
 
 // attempts to swap the 2 nodes given
 // if both fit at the new locations without collisions, it performs the swap and returns true.
-fn swap(the_graph: *const Graph, the_placement: *Placement, node_a_id: glib.NodeId, node_b_id: glib.NodeId) bool {
+fn swap(the_graph: *const Graph, the_placement: *Placement, node_a_id: glib.NodeId, node_b_id: glib.NodeId, node_padding: u8) bool {
     errdefer @panic("Skill issue");
     if (isInput(the_placement, node_a_id) or isOutput(the_placement, node_a_id)) {
         return false;
@@ -583,8 +584,8 @@ fn swap(the_graph: *const Graph, the_placement: *Placement, node_a_id: glib.Node
     const unsigned_new_y_a = pos_b.y;
 
     // check whether a fits at b position
-    for (unsigned_new_x_a..unsigned_new_x_a + rect_a.w) |x| {
-        for (unsigned_new_y_a..unsigned_new_y_a + rect_a.h) |y| {
+    for (unsigned_new_x_a - node_padding..unsigned_new_x_a + rect_a.w) |x| {
+        for (unsigned_new_y_a - node_padding..unsigned_new_y_a + rect_a.h) |y| {
             if (the_placement.occupancy_grid[x][y] != 0 and the_placement.occupancy_grid[x][y] != node_b_id) {
                 return false;
             }
@@ -595,8 +596,8 @@ fn swap(the_graph: *const Graph, the_placement: *Placement, node_a_id: glib.Node
     const unsigned_new_y_b = pos_a.y;
 
     // check whether b fits at a position
-    for (unsigned_new_x_b..unsigned_new_x_b + rect_b.w) |x| {
-        for (unsigned_new_y_b..unsigned_new_y_b + rect_b.h) |y| {
+    for (unsigned_new_x_b - node_padding..unsigned_new_x_b + rect_b.w) |x| {
+        for (unsigned_new_y_b - node_padding..unsigned_new_y_b + rect_b.h) |y| {
             if (the_placement.occupancy_grid[x][y] != 0 and the_placement.occupancy_grid[x][y] != node_a_id) {
                 return false;
             }
@@ -605,21 +606,21 @@ fn swap(the_graph: *const Graph, the_placement: *Placement, node_a_id: glib.Node
 
     // both fit, so proceed the swap:
     // set both old positions to 0:
-    for (unsigned_new_x_b..unsigned_new_x_b + rect_a.w) |x| {
-        for (unsigned_new_y_b..unsigned_new_y_b + rect_a.h) |y| {
+    for (unsigned_new_x_b - node_padding..unsigned_new_x_b + rect_a.w) |x| {
+        for (unsigned_new_y_b - node_padding..unsigned_new_y_b + rect_a.h) |y| {
             the_placement.occupancy_grid[x][y] = 0;
         }
     }
-    for (unsigned_new_x_a..unsigned_new_x_a + rect_b.w) |x| {
-        for (unsigned_new_y_a..unsigned_new_y_a + rect_b.h) |y| {
+    for (unsigned_new_x_a - node_padding..unsigned_new_x_a + rect_b.w) |x| {
+        for (unsigned_new_y_a - node_padding..unsigned_new_y_a + rect_b.h) |y| {
             the_placement.occupancy_grid[x][y] = 0;
         }
     }
 
     // set a to b position
-    try place(the_placement, node_a, unsigned_new_x_a, unsigned_new_y_a, pos_a.orientation);
+    try place(the_placement, node_a, unsigned_new_x_a, unsigned_new_y_a, pos_a.orientation, node_padding);
     // set b to a position
-    try place(the_placement, node_b, unsigned_new_x_b, unsigned_new_y_b, pos_b.orientation);
+    try place(the_placement, node_b, unsigned_new_x_b, unsigned_new_y_b, pos_b.orientation, node_padding);
 
     return true;
 }
@@ -629,7 +630,7 @@ fn swap(the_graph: *const Graph, the_placement: *Placement, node_a_id: glib.Node
 // }
 
 // useInput = true means we move the input axis, if false we use the output axis.
-fn moveInputOrOutputAxis(the_graph: *const Graph, the_placement: *Placement, window_size: u32, random: std.Random, min_spacing: u8, min_pos: postype, useInput: bool) glib.NodeId {
+fn moveInputOrOutputAxis(the_graph: *const Graph, the_placement: *Placement, window_size: u32, random: std.Random, min_spacing: u8, min_pos: postype, useInput: bool, node_padding: u8) glib.NodeId {
     errdefer @panic("Skill issue");
     var size_to_use: i32 = @intCast(window_size);
     if (size_to_use < min_spacing) {
@@ -659,7 +660,7 @@ fn moveInputOrOutputAxis(the_graph: *const Graph, the_placement: *Placement, win
         // ensure all in/output nodes are kept on the same y axis
         std.debug.assert(lasytpos == pos.y);
 
-        const collision_result = try checkCollision(the_placement, id, rect, pos.x, new_y);
+        const collision_result = try checkCollision(the_placement, id, rect, pos.x, new_y, node_padding);
         if (collision_result != 0) return collision_result;
     }
 
@@ -670,8 +671,8 @@ fn moveInputOrOutputAxis(the_graph: *const Graph, the_placement: *Placement, win
         const pos = the_placement.locations.getPtr(id).?;
         const node = the_graph.getConstNode(id).?;
         const rect = node.body.kind.size();
-        const before = try checkCollision(the_placement, id, rect, pos.x, new_y);
-        const result = try tryMove(the_placement, node, pos, pos.x, new_y);
+        const before = try checkCollision(the_placement, id, rect, pos.x, new_y, node_padding);
+        const result = try tryMove(the_placement, node, pos, pos.x, new_y, node_padding);
         // std.debug.print("moved once {d},{d}", .{ before, result });
         std.debug.assert(before == 0);
         std.debug.assert(result == 0);
@@ -704,23 +705,23 @@ fn perturb(the_graph: *const Graph, the_placement: *Placement, random: std.Rando
         const to_perturb = getRandomNodeID(the_placement, random).?;
         if (isOutput(the_placement, to_perturb)) {
             if (random.intRangeLessThan(usize, 0, 10) != 1) {
-                _ = randomMove(the_graph, the_placement, to_perturb, @intFromFloat(@ceil(current_window_size)), random, annealing_config.grid_size, annealing_config.grid_size, the_placement.output_y);
+                _ = randomMove(the_graph, the_placement, to_perturb, @intFromFloat(@ceil(current_window_size)), random, annealing_config.grid_size, annealing_config.grid_size, the_placement.output_y, annealing_config.node_padding);
             } else {
-                _ = moveInputOrOutputAxis(the_graph, the_placement, @intFromFloat(@ceil(current_window_size)), random, annealing_config.grid_size, annealing_config.grid_size, false);
+                _ = moveInputOrOutputAxis(the_graph, the_placement, @intFromFloat(@ceil(current_window_size)), random, annealing_config.grid_size, annealing_config.grid_size, false, annealing_config.node_padding);
             }
         } else if (isInput(the_placement, to_perturb)) {
             // perform moveOutput 1 out of 10 times
             if (random.intRangeLessThan(usize, 0, 10) != 1) {
-                _ = randomMove(the_graph, the_placement, to_perturb, @intFromFloat(@ceil(current_window_size)), random, annealing_config.grid_size, annealing_config.grid_size, the_placement.input_y);
+                _ = randomMove(the_graph, the_placement, to_perturb, @intFromFloat(@ceil(current_window_size)), random, annealing_config.grid_size, annealing_config.grid_size, the_placement.input_y, annealing_config.node_padding);
             } else {
-                _ = moveInputOrOutputAxis(the_graph, the_placement, @intFromFloat(@ceil(current_window_size)), random, annealing_config.grid_size, annealing_config.grid_size, true);
+                _ = moveInputOrOutputAxis(the_graph, the_placement, @intFromFloat(@ceil(current_window_size)), random, annealing_config.grid_size, annealing_config.grid_size, true, annealing_config.node_padding);
             }
 
             // _ = moveRandomFixedY(the_graph, the_placement, to_perturb, @intFromFloat(@ceil(current_window_size)), random, annealing_config.grid_size, annealing_config.grid_size, the_placement.input_y);
         } else {
-            const result = randomMove(the_graph, the_placement, to_perturb, @intFromFloat(@ceil(current_window_size)), random, annealing_config.grid_size, annealing_config.grid_size, null); // use grid size as the minimum y position, so it stays nicely alligned if we changed it in the future
+            const result = randomMove(the_graph, the_placement, to_perturb, @intFromFloat(@ceil(current_window_size)), random, annealing_config.grid_size, annealing_config.grid_size, null, annealing_config.node_padding); // use grid size as the minimum y position, so it stays nicely alligned if we changed it in the future
             if (result != 0) {
-                _ = swap(the_graph, the_placement, to_perturb, result);
+                _ = swap(the_graph, the_placement, to_perturb, result, annealing_config.node_padding);
             }
         }
         // TODO: add mirror or other perturbations
@@ -881,7 +882,22 @@ pub fn printThoseTuples(gpa: std.mem.Allocator, those_tuples: []FancyTuple) void
     string.deinit();
 }
 
-// returns new array containing all tuples for the given placement.
-// pub fn toBlocklist(the_graph: *const Graph, the_placement: *Placement, chip_height_coordinate: postype) []const structures.SchemBlock {
-//     errdefer @panic("Download some RAM");
-// }
+// returns new array containing all blocks in the placement.
+pub fn toBlocklist(the_graph: *const Graph, the_placement: *Placement, chip_height_coordinate: postype) []const structures.SchemBlock {
+    errdefer @panic("Download some RAM");
+    var results = std.ArrayList(structures.SchemBlock).empty;
+
+    var it = the_placement.locations.iterator();
+    while (it.next()) |entry| {
+        const pos = entry.value_ptr;
+        const node_id: glib.NodeId = entry.key_ptr.*;
+        const node = the_graph.getConstNode(node_id).?;
+        const blocks = node.body.kind.blockArray();
+        for (blocks) |block| {
+            const new_pos = @Vector(3, structures.SchemCoordNum){ @as(structures.SchemCoordNum, @truncate(pos.x)) + block.loc[0], @as(structures.SchemCoordNum, @truncate(chip_height_coordinate)) + block.loc[1], @as(structures.SchemCoordNum, @truncate(pos.y)) + block.loc[2] };
+            try results.append(the_graph.gpa, .{ .block = block.block, .loc = new_pos, .rot = block.rot });
+        }
+    }
+
+    return try results.toOwnedSlice(the_graph.gpa);
+}
