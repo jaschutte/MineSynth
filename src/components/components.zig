@@ -18,10 +18,8 @@ pub const ComponentDef = struct {
     length: u32,
     min_signal: u4,
     signal_behavior: SignalBehavior,
-    footprint: []const WorldCoord,
     build_blocks: []const BuildBlock,
 };
-
 pub const components = [_]ComponentDef{
     .{
         .name = "dust",
@@ -31,10 +29,6 @@ pub const components = [_]ComponentDef{
         .length = 1,
         .min_signal = 1,
         .signal_behavior = .decay,
-        .footprint = &[_]WorldCoord{
-            .{ 0, 0, 0 },
-            .{ 0, -1, 0 },
-        },
         .build_blocks = &[_]BuildBlock{
             .{ .offset = .{ 0, 0, 0 }, .cat = .dust },
             .{ .offset = .{ 0, -1, 0 }, .cat = .block },
@@ -43,16 +37,11 @@ pub const components = [_]ComponentDef{
     .{
         .name = "repeater",
         .base_dir = .{ 3, 0, 0 },
-        .weight = 103,
+        .weight = 23,
         .delay = 1,
         .length = 3,
         .min_signal = 1,
         .signal_behavior = .via,
-        .footprint = &[_]WorldCoord{
-            .{ 0, 0, 0 }, .{ 0, -1, 0 },
-            .{ 1, 0, 0 }, .{ 1, -1, 0 },
-            .{ 2, 0, 0 }, .{ 2, -1, 0 },
-        },
         .build_blocks = &[_]BuildBlock{
             .{ .offset = .{ 0, 0, 0 }, .cat = .dust },
             .{ .offset = .{ 0, -1, 0 }, .cat = .block },
@@ -65,16 +54,11 @@ pub const components = [_]ComponentDef{
     .{
         .name = "via_up",
         .base_dir = .{ 2, 3, 0 },
-        .weight = 205,
+        .weight = 45,
         .delay = 2,
         .length = 5,
         .min_signal = 2,
         .signal_behavior = .via,
-        .footprint = &[_]WorldCoord{
-            .{ 0, 0, 0 }, .{ 0, 0, 1 },  .{ 0, 0, -1 }, .{ 0, -1, 0 },
-            .{ 1, 0, 0 }, .{ 1, -1, 0 }, .{ 2, 0, 0 },  .{ 3, 1, 0 },
-            .{ 2, 1, 0 }, .{ 3, 0, 0 },
-        },
         .build_blocks = &[_]BuildBlock{
             .{ .offset = .{ 0, 0, 0 }, .cat = .dust },
             .{ .offset = .{ 0, 0, 1 }, .cat = .air },
@@ -91,16 +75,11 @@ pub const components = [_]ComponentDef{
     .{
         .name = "via_down",
         .base_dir = .{ 2, -3, 0 },
-        .weight = 205,
+        .weight = 45,
         .delay = 2,
         .length = 5,
         .min_signal = 2,
         .signal_behavior = .via,
-        .footprint = &[_]WorldCoord{
-            .{ 0, 0, 0 },  .{ 0, 0, 1 },  .{ 0, 0, -1 }, .{ 0, -1, 0 },
-            .{ 2, -2, 0 }, .{ 2, -1, 0 }, .{ 2, 0, 0 },  .{ 1, 0, 0 },
-            .{ 1, -2, 0 }, .{ 1, -3, 0 }, .{ 1, -4, 0 },
-        },
         .build_blocks = &[_]BuildBlock{
             .{ .offset = .{ 0, 0, 0 }, .cat = .dust },
             .{ .offset = .{ 0, 0, 1 }, .cat = .air },
@@ -123,15 +102,10 @@ pub const components = [_]ComponentDef{
         .length = 1,
         .min_signal = 1,
         .signal_behavior = .decay,
-        .footprint = &[_]WorldCoord{
-            .{ 1, 1, 0 },
-            .{ 1, 0, 0 },
-            .{ 0, 1, 0 },
-        },
         .build_blocks = &[_]BuildBlock{
             .{ .offset = .{ 0, 1, 0 }, .cat = .dust },
             .{ .offset = .{ 0, 0, 0 }, .cat = .block },
-            .{ .offset = .{ -1, 0, 0 }, .cat = .air },
+            .{ .offset = .{ -1, 1, 0 }, .cat = .air },
         },
     },
     .{
@@ -142,11 +116,6 @@ pub const components = [_]ComponentDef{
         .length = 1,
         .min_signal = 1,
         .signal_behavior = .decay,
-        .footprint = &[_]WorldCoord{
-            .{ 1, -1, 0 },
-            .{ 1, -2, 0 },
-            .{ 1, 0, 0 },
-        },
         .build_blocks = &[_]BuildBlock{
             .{ .offset = .{ 0, 0, 0 }, .cat = .air },
             .{ .offset = .{ 0, -1, 0 }, .cat = .dust },

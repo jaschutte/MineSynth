@@ -48,7 +48,7 @@ fn heuristic(curr: WorldCoord, target: WorldCoord) f32 {
     // Admissible delay injection:
     // You cannot move more than 15 blocks without incurring at least 1 tick of delay.
     // Cost scales by 100 per delay tick.
-    const min_unavoidable_delay_cost = (manhattan / 15) * 100;
+    const min_unavoidable_delay_cost = (manhattan / 15) * 20;
 
     return @floatFromInt(manhattan + min_unavoidable_delay_cost);
 }
@@ -75,8 +75,8 @@ const MoveFootprint = struct {
 
 fn getMoveFootprint(u: WorldCoord, move: Move) MoveFootprint {
     var fp: MoveFootprint = .{ .blocks = undefined, .count = 0 };
-    for (move.def.footprint) |base| {
-        fp.blocks[fp.count] = u + rotateCoord(base, move.dir);
+    for (move.def.build_blocks) |bb| {
+        fp.blocks[fp.count] = u + rotateCoord(bb.offset, move.dir);
         fp.count += 1;
     }
     return fp;
@@ -158,36 +158,36 @@ const Move = struct {
     def: *const comp.ComponentDef,
 };
 
+const MoveValidity = union(enum) {
+    valid,
+    invalid,
+    violation: u32,
+};
+
 fn check_validity(coord: WorldCoord, forbidden_zone: ms.ForbiddenZone) MoveValidity {
-    const zone_conflict = forbidden_zone.get(coord);
-    // return zone_conflict != null and zone_conflict.?.ftype == .gate;
-    if (zone_conflict != null and zone_conflict.?.ftype == .gate) {
-        return .invalid;
-    }
-    if (zone_conflict != null and zone_conflict.?.ftype == .wire) {
-        return .violation;
+    if (forbidden_zone.get(coord)) |conflict| {
+        if (conflict.ftype == .gate) return .invalid;
+        if (conflict.ftype == .wire) return .{ .violation = conflict.ref_count };
     }
     return .valid;
 }
-
-const MoveValidity = enum {
-    valid,
-    invalid,
-    violation,
-};
 
 fn isMoveValid(u: WorldCoord, move: Move, forbidden_zone: ms.ForbiddenZone) MoveValidity {
     const target_coord = u + move.dir;
     if (target_coord[1] > phys.MAX_Y_LEVEL or target_coord[1] < phys.MIN_Y_LEVEL) return .invalid;
 
-    var verdict: MoveValidity = .valid;
-    for (move.def.footprint) |base| {
-        const rotated = rotateCoord(base, move.dir);
-        const check = check_validity(u + rotated, forbidden_zone);
-        if (check == .invalid) return .invalid;
-        if (check == .violation) verdict = .violation;
+    var total_refs: u32 = 0;
+    for (move.def.build_blocks) |bb| {
+        const rotated = rotateCoord(bb.offset, move.dir);
+        switch (check_validity(u + rotated, forbidden_zone)) {
+            .invalid => return .invalid,
+            .valid => {},
+            .violation => |refs| total_refs += refs,
+        }
     }
-    return verdict;
+
+    if (total_refs > 0) return .{ .violation = total_refs };
+    return .valid;
 }
 
 const Net = struct {
@@ -301,6 +301,7 @@ pub fn routeAll(a: std.mem.Allocator, pairs: []RoutePair, forbidden_zone: *ms.Fo
             .failures = 0,
             .is_violating = false,
         };
+        std.log.info("Routing net {} from {any} to {any}", .{ i, nets[i].from, nets[i].to });
         nets[i].route = try routeToUpdateForbiddenZone(a, nets[i].from, nets[i].to, forbidden_zone);
     }
 
@@ -397,10 +398,6 @@ pub fn routeTo(a: std.mem.Allocator, from: WorldCoord, to: WorldCoord, forbidden
         return error.OutOfBounds;
     }
 
-    if (@as(u32, @intCast(from[1])) % LAYER_HEIGHT != 0 or @as(u32, @intCast(to[1])) % LAYER_HEIGHT != 0) {
-        return error.InvalidToOrFromYLevel;
-    }
-
     var queue = std.PriorityQueue(QueueItem, void, queueOrder).init(a, {});
     defer queue.deinit();
 
@@ -467,7 +464,18 @@ pub fn routeTo(a: std.mem.Allocator, from: WorldCoord, to: WorldCoord, forbidden
             const next_state = NodeState{ .coord = coord, .signal = next_signal };
 
             var move_cost = move.def.weight;
-            if (validity == .violation) move_cost += 10000;
+            var is_violating = false;
+
+            switch (validity) {
+                .violation => |refs| {
+                    // 200 bounds the map flood while still heavily deterring intersections.
+                    // Scaling by refs ensures rip-up/reroute avoids highly contested blocks.
+                    move_cost += 80 * @as(f32, @floatFromInt(refs));
+                    is_violating = true;
+                },
+                else => {},
+            }
+
             const g_cost = item.g + move_cost;
 
             const existing_g = distances.get(next_state);
@@ -476,7 +484,7 @@ pub fn routeTo(a: std.mem.Allocator, from: WorldCoord, to: WorldCoord, forbidden
                 parents.put(next_state, .{
                     .prev = u_state,
                     .def = move.def,
-                    .violating = validity == .violation,
+                    .violating = is_violating,
                 }) catch @panic("oom");
 
                 queue.add(.{
@@ -504,7 +512,6 @@ fn buildRouteBlocks(a: std.mem.Allocator, from: WorldCoord, final_state: NodeSta
     var violating = false;
 
     // initialize
-    // add from to the footprint to ensure the starting point is included in the forbidden zone
     try footprints.append(a, from);
 
     var curr_state = final_state;
@@ -528,11 +535,8 @@ fn buildRouteBlocks(a: std.mem.Allocator, from: WorldCoord, final_state: NodeSta
                 .loc = vec + rotated_coord,
                 .rot = rotated_rot,
             });
-        }
 
-        // Track the mathematical footprint of the component
-        for (p.def.footprint) |base| {
-            const rotated_coord = rotateCoord(base, move_dir);
+            // Track the footprint using the build_blocks offset
             try footprints.append(a, vec + rotated_coord);
         }
 
