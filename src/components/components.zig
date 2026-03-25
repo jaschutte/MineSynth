@@ -13,7 +13,6 @@ pub const BuildBlock = struct {
 pub const ComponentDef = struct {
     name: []const u8,
     base_dir: WorldCoord,
-    weight: f32,
     delay: u32,
     length: u32,
     min_signal: u4,
@@ -24,7 +23,6 @@ pub const components = [_]ComponentDef{
     .{
         .name = "dust",
         .base_dir = .{ 1, 0, 0 },
-        .weight = 1,
         .delay = 0,
         .length = 1,
         .min_signal = 1,
@@ -37,7 +35,6 @@ pub const components = [_]ComponentDef{
     .{
         .name = "repeater",
         .base_dir = .{ 3, 0, 0 },
-        .weight = 23,
         .delay = 1,
         .length = 3,
         .min_signal = 1,
@@ -54,9 +51,8 @@ pub const components = [_]ComponentDef{
     .{
         .name = "staircase_up",
         .base_dir = .{ 1, 1, 0 },
-        .weight = 2,
         .delay = 0,
-        .length = 1,
+        .length = 2,
         .min_signal = 1,
         .signal_behavior = .decay,
         .build_blocks = &[_]BuildBlock{
@@ -68,9 +64,8 @@ pub const components = [_]ComponentDef{
     .{
         .name = "staircase_down",
         .base_dir = .{ 1, -1, 0 },
-        .weight = 2,
         .delay = 0,
-        .length = 1,
+        .length = 2,
         .min_signal = 1,
         .signal_behavior = .decay,
         .build_blocks = &[_]BuildBlock{

@@ -19,8 +19,10 @@ const Route = struct {
 
 const RouterConfig = struct {
     max_iterations: u32 = 20,
-    violation_cost_multiplier: f32 = 30.0,
-    heuristic_weight: f32 = 3.0,
+    violation_cost_multiplier: f32 = 10.0,
+    heuristic_weight: f32 = 2.0,
+    delay_cost_multiplier: f32 = 10.0, // cost = this * delay + length
+    max_cost: f32 = 1000, // dont explore dumb paths
 };
 
 const WorldCoord = ms.WorldCoord;
@@ -34,24 +36,25 @@ const Parent = struct {
     prev: NodeState,
     def: *const comp.ComponentDef,
     violating: bool,
+    heading: WorldCoord,
 };
 
 // 3D Manhattan distance towards the target acts as an admissible heuristic.
-fn heuristic(curr: WorldCoord, target: WorldCoord) f32 {
+fn heuristic(curr: WorldCoord, target: WorldCoord, delay_weight: f32) f32 {
     // const dx = @as(u32, @intCast(@abs(curr[0] - target[0])));
     // const dy = @as(u32, @intCast(@abs(curr[1] - target[1])));
     // const dz = @as(u32, @intCast(@abs(curr[2] - target[2])));
     const dx = @abs(curr[0] - target[0]);
-    const dy = @abs(curr[1] - target[1]);
+    // const dy = @abs(curr[1] - target[1]);
     const dz = @abs(curr[2] - target[2]);
-    const manhattan = dx + dy + dz;
+    const manhattan: f32 = @floatFromInt(dx + dz);
 
     // Admissible delay injection:
     // You cannot move more than 15 blocks without incurring at least 1 tick of delay.
     // Cost scales by 100 per delay tick.
-    const min_unavoidable_delay_cost = (manhattan / 15) * 20;
+    const min_unavoidable_delay_cost = (manhattan / 15) * delay_weight;
 
-    return @floatFromInt(manhattan + min_unavoidable_delay_cost);
+    return (manhattan + min_unavoidable_delay_cost);
 }
 
 const SURROUNDING_OFFSETS = blk: {
@@ -78,13 +81,17 @@ const MoveFootprint = struct {
 fn getMoveFootprint(u: WorldCoord, move: Move) MoveFootprint {
     var fp: MoveFootprint = .{ .blocks = undefined, .count = 0 };
     for (move.def.build_blocks) |bb| {
-        fp.blocks[fp.count] = u + rotateCoord(bb.offset, move.dir);
+        fp.blocks[fp.count] = u + rotateCoord(bb.offset, move.heading);
         fp.count += 1;
     }
     return fp;
 }
 
 fn moveIntersectsPath(new_u: WorldCoord, new_move: Move, start_state: NodeState, parents: *const std.AutoHashMap(NodeState, Parent)) bool {
+
+    //SKIP DUST FOR NOW
+    // if (new_move.def.delay == 0) return false;
+
     const new_fp = getMoveFootprint(new_u, new_move);
     const new_coord = new_u + new_move.dir;
 
@@ -100,11 +107,12 @@ fn moveIntersectsPath(new_u: WorldCoord, new_move: Move, start_state: NodeState,
             const prev_u = p.prev.coord;
             const past_move = Move{
                 .dir = curr.coord - prev_u,
+                .heading = p.heading,
                 .def = p.def,
             };
-            const dx = @abs(curr.coord[0] - new_coord[0]);
-            const dy = @abs(curr.coord[1] - new_coord[1]);
-            const dz = @abs(curr.coord[2] - new_coord[2]);
+            const dx = @abs(prev_u[0] - new_u[0]);
+            const dy = @abs(prev_u[1] - new_u[1]);
+            const dz = @abs(prev_u[2] - new_u[2]);
             const manhattan = dx + dy + dz;
 
             if (manhattan > MAX_COMPONENT_RADIUS * 2) {
@@ -119,10 +127,10 @@ fn moveIntersectsPath(new_u: WorldCoord, new_move: Move, start_state: NodeState,
                 for (past_fp.blocks[0..past_fp.count]) |b2| {
                     if (coordEq(b1, b2)) {
                         // Allow the new move to share a node and its supporting block with its immediate parent edge
-                        const block_below = new_u + WorldCoord{ 0, -1, 0 };
-                        if (is_immediate_parent and (coordEq(b1, new_u) or coordEq(b1, block_below))) {
-                            continue;
-                        }
+                        // const block_below = new_u + WorldCoord{ 0, -1, 0 };
+                        // if (is_immediate_parent and (coordEq(b1, new_u) or coordEq(b1, block_below))) {
+                        //     continue;
+                        // }
                         return true;
                     }
                 }
@@ -168,6 +176,7 @@ const DistanceMetric = struct {
 
 const Move = struct {
     dir: WorldCoord,
+    heading: WorldCoord,
     def: *const comp.ComponentDef,
 };
 
@@ -191,7 +200,7 @@ fn isMoveValid(u: WorldCoord, move: Move, forbidden_zone: ms.ForbiddenZone) Move
 
     var total_refs: u32 = 0;
     for (move.def.build_blocks) |bb| {
-        const rotated = rotateCoord(bb.offset, move.dir);
+        const rotated = rotateCoord(bb.offset, move.heading); // Use heading
         switch (check_validity(u + rotated, forbidden_zone)) {
             .invalid => return .invalid,
             .valid => {},
@@ -213,10 +222,10 @@ const Net = struct {
 
 // Heuristic for REORDER(): Route nets with the most failures first.
 // Tie-breaker: Route physically longer nets first.
-fn sortNetPtrsDescending(_: void, lhs: *Net, rhs: *Net) bool {
+fn sortNetPtrsDescending(config: RouterConfig, lhs: *Net, rhs: *Net) bool {
     if (lhs.failures == rhs.failures) {
-        const dist_lhs = heuristic(lhs.from, lhs.to);
-        const dist_rhs = heuristic(rhs.from, rhs.to);
+        const dist_lhs = heuristic(lhs.from, lhs.to, config.delay_cost_multiplier);
+        const dist_rhs = heuristic(rhs.from, rhs.to, config.delay_cost_multiplier);
         return dist_lhs > dist_rhs;
     }
     return lhs.failures > rhs.failures;
@@ -331,7 +340,7 @@ pub fn routeAll(a: std.mem.Allocator, pairs: []RoutePair, forbidden_zone: *ms.Fo
 
     // Iterative rip-up and reroute
     while (v_nets.items.len > 0 and iters < config.max_iterations) : (iters += 1) {
-        std.sort.block(*Net, v_nets.items, {}, sortNetPtrsDescending);
+        std.sort.block(*Net, v_nets.items, config, sortNetPtrsDescending);
         const num_v_nets_this_pass = v_nets.items.len;
 
         std.log.info("Iteration {}: Routing {} violating nets", .{ iters, num_v_nets_this_pass });
@@ -422,7 +431,7 @@ pub fn routeTo(a: std.mem.Allocator, from: WorldCoord, to: WorldCoord, forbidden
 
     const start_state = NodeState{ .coord = from, .signal = 15 };
     try distances.put(start_state, 0);
-    try queue.add(.{ .state = start_state, .g = 0, .f = heuristic(from, to) });
+    try queue.add(.{ .state = start_state, .g = 0, .f = heuristic(from, to, config.delay_cost_multiplier) });
 
     // Edge weights must be > 0. Scaled to reflect relative pathing delays/material costs.
     const moves = comptime blk: {
@@ -432,6 +441,7 @@ pub fn routeTo(a: std.mem.Allocator, from: WorldCoord, to: WorldCoord, forbidden
             for ([_]WorldCoord{ .{ 1, 0, 0 }, .{ 0, 0, 1 }, .{ -1, 0, 0 }, .{ 0, 0, -1 } }) |cdir| {
                 m[idx] = .{
                     .dir = rotateCoord(def.base_dir, cdir),
+                    .heading = cdir,
                     .def = def,
                 };
                 idx += 1;
@@ -457,6 +467,12 @@ pub fn routeTo(a: std.mem.Allocator, from: WorldCoord, to: WorldCoord, forbidden
             break;
         }
         for (moves) |move| {
+            // Prevent immediate 180-degree foldbacks
+            if (parents.get(u_state)) |p| {
+                if (move.heading[0] == -p.heading[0] and move.heading[2] == -p.heading[2]) {
+                    continue;
+                }
+            }
             const coord = u + move.dir;
             if (moveIntersectsPath(u, move, u_state, &parents)) continue;
             const validity = isMoveValid(u, move, forbidden_zone);
@@ -477,7 +493,7 @@ pub fn routeTo(a: std.mem.Allocator, from: WorldCoord, to: WorldCoord, forbidden
 
             const next_state = NodeState{ .coord = coord, .signal = next_signal };
 
-            var move_cost = move.def.weight;
+            var move_cost = @as(f32, @floatFromInt(move.def.delay)) * config.delay_cost_multiplier + @as(f32, @floatFromInt(move.def.length));
             var is_violating = false;
 
             switch (validity) {
@@ -491,6 +507,7 @@ pub fn routeTo(a: std.mem.Allocator, from: WorldCoord, to: WorldCoord, forbidden
             }
 
             const g_cost = item.g + move_cost;
+            if (g_cost > config.max_cost) continue;
 
             const existing_g = distances.get(next_state);
             if (existing_g == null or g_cost < existing_g.?) {
@@ -499,9 +516,10 @@ pub fn routeTo(a: std.mem.Allocator, from: WorldCoord, to: WorldCoord, forbidden
                     .prev = u_state,
                     .def = move.def,
                     .violating = is_violating,
+                    .heading = move.heading,
                 }) catch @panic("oom");
 
-                const f_cost = g_cost + heuristic(coord, to) * config.heuristic_weight;
+                const f_cost = g_cost + heuristic(coord, to, config.delay_cost_multiplier) * config.heuristic_weight;
                 queue.add(.{
                     .state = next_state,
                     .g = g_cost,
@@ -540,7 +558,7 @@ fn buildRouteBlocks(a: std.mem.Allocator, from: WorldCoord, final_state: NodeSta
         vec = curr_state.coord;
 
         if (p.violating) violating = true;
-        const move_dir = prev_vec - vec;
+        const move_dir = p.heading;
 
         for (p.def.build_blocks) |block_def| {
             const rotated_coord = rotateCoord(block_def.offset, move_dir);
