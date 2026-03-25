@@ -19,7 +19,7 @@ const Route = struct {
 
 const RouterConfig = struct {
     max_iterations: u32 = 20,
-    violation_cost_multiplier: f32 = 50.0,
+    violation_cost_multiplier: f32 = 30.0,
     heuristic_weight: f32 = 3.0,
 };
 
@@ -69,6 +69,7 @@ const SURROUNDING_OFFSETS = blk: {
 };
 
 const MaxMoveBlocks = 12;
+const MAX_COMPONENT_RADIUS = 5;
 const MoveFootprint = struct {
     blocks: [MaxMoveBlocks]WorldCoord,
     count: usize,
@@ -101,6 +102,17 @@ fn moveIntersectsPath(new_u: WorldCoord, new_move: Move, start_state: NodeState,
                 .dir = curr.coord - prev_u,
                 .def = p.def,
             };
+            const dx = @abs(curr.coord[0] - new_coord[0]);
+            const dy = @abs(curr.coord[1] - new_coord[1]);
+            const dz = @abs(curr.coord[2] - new_coord[2]);
+            const manhattan = dx + dy + dz;
+
+            if (manhattan > MAX_COMPONENT_RADIUS * 2) {
+                // Too far to possibly intersect, skip footprint calculation
+                curr = p.prev;
+                is_immediate_parent = false;
+                continue;
+            }
             const past_fp = getMoveFootprint(prev_u, past_move);
 
             for (new_fp.blocks[0..new_fp.count]) |b1| {
@@ -430,7 +442,9 @@ pub fn routeTo(a: std.mem.Allocator, from: WorldCoord, to: WorldCoord, forbidden
 
     var final_state: ?NodeState = null;
 
+    var counter: usize = 0;
     while (queue.count() > 0) {
+        counter += 1;
         const item = queue.removeOrNull().?;
         const u_state = item.state;
         const u = u_state.coord;
@@ -496,6 +510,7 @@ pub fn routeTo(a: std.mem.Allocator, from: WorldCoord, to: WorldCoord, forbidden
             }
         }
     }
+    std.log.info("A* completed with {d} iterations and final path cost of {any} if path found.", .{ counter, distances.get(final_state.?) });
 
     if (final_state == null) {
         std.log.err("Could not find a path to .{any}", .{to});
