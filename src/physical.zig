@@ -9,9 +9,6 @@ pub const InputPositionsRelative = [2]?CoordinateRelative;
 pub const OutputPositionsRelative = CoordinateRelative;
 pub const PowerLevel = u8;
 
-pub const MIN_Y_LEVEL = 0;
-pub const MAX_Y_LEVEL = 3 * 10; // 10 layers
-
 pub const Size = struct {
     const Self = @This();
 

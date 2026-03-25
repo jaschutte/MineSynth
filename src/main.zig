@@ -25,10 +25,10 @@ pub fn main() !void {
     defer _ = netlist.deinit();
 
     var graph = glib.GraphConstructors.fromNetlist(gpa, &netlist);
-    graphviz.GraphVisualizer(glib.GateBody).printDFS(gpa, graph);
+    graphviz.GraphVisualizer(glib.GateBody).print(gpa, graph);
     glibopt.PreProcessor(glib.GateBody).preprocess(graph);
     sta.AAT(graph);
-    graphviz.GraphVisualizer(glib.GateBody).print(gpa, graph);
+    graphviz.GraphVisualizer(glib.GateBody).printDFS(gpa, graph);
     var placement = plc.placement_annealing(graph, .{ .initial_temperature = 30, .moves_per_temperature = 10000 }).?;
     plc.print(graph, placement, graph.gpa);
     graphviz.printPlacement(graph.gpa, graph, placement);

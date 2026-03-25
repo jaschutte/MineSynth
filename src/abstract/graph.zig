@@ -30,7 +30,7 @@ pub const GraphConstructors = struct {
                 if (added_nodes.contains(gate_ptr)) continue;
 
                 const gate = netlist.getGate(gate_ptr);
-                const node_id = graph.addNode(.{ .kind = gate.kind, .symbol = gate.symbol }, .none);
+                const node_id = graph.addNode(.{ .kind = gate.kind, .symbol = try gpa.dupe(u8, gate.symbol) }, .none);
                 try added_nodes.put(gate_ptr, node_id);
             }
 
@@ -61,7 +61,17 @@ pub const GraphConstructors = struct {
                         0b11 => @panic("Gate output directly connected to input or vice versa"),
                     };
 
-                    _ = graph.addEdge(added_nodes.get(from_ptr).?, from_relation, added_nodes.get(to_ptr).?, to_relation, net_ptr, null);
+                    var writer = std.io.Writer.Allocating.init(gpa);
+                    defer writer.deinit();
+                    try net.literal.writeSymbol(&writer.writer);
+
+                    _ = graph.addEdge(added_nodes.get(from_ptr).?, from_relation, added_nodes.get(to_ptr).?, to_relation, .{
+                        .symbol = try writer.toOwnedSlice(),
+                        .negated = switch (net.literal.isNegated()) {
+                            true => .negated,
+                            false => .unnegated,
+                        },
+                    }, null);
                 }
             }
         }
@@ -118,6 +128,17 @@ pub fn Graph(comptime NodeBody: type) type {
                 else => @compileError("NodeBody does not support retrieving the gate"),
             };
 
+            pub fn relatedNodes(self: *const Node, relation: Edge.Relation) []NodeId {
+                const graph = self.owner.?;
+                // Abusing the fact EdgeId and NodeIds are both 64 bits
+                var edges = graph.getNodeEdges(self.id, relation);
+                for (0.., edges) |index, edge_id| {
+                    const opposite_id = graph.getEdge(edge_id).?.oppositeNode(self.id).?;
+                    edges[index] = opposite_id;
+                }
+                return edges;
+            }
+
             pub const getSize = switch (NodeBody) {
                 GateBody => struct {
                     fn size(self: *const Node) physical.Size {
@@ -135,13 +156,29 @@ pub fn Graph(comptime NodeBody: type) type {
                 }.area,
                 else => @compileError("NodeBody does not support retrieving its area"),
             };
+
+            pub fn deinit(self: *const Node, gpa: std.mem.Allocator) void {
+                switch (NodeBody) {
+                    GateBody => {
+                        gpa.free(self.body.symbol);
+                    },
+                    else => {},
+                }
+            }
         };
 
         pub const Edge = struct {
-            const Self = @This();
-
             pub const Body = switch (NodeBody) {
-                GateBody => nl.NetPtr,
+                GateBody => struct {
+                    pub const Negation = enum {
+                        negated,
+                        unnegated,
+                        undefined,
+                    };
+
+                    symbol: []const u8,
+                    negated: Negation,
+                },
                 else => void,
             };
 
@@ -159,6 +196,25 @@ pub fn Graph(comptime NodeBody: type) type {
             b_relation: Relation,
             // Only null when the node is detached from any graph
             owner: ?*Graph(NodeBody),
+
+            pub fn oppositeNode(self: *const Edge, this: NodeId) ?NodeId {
+                if (self.a == this) {
+                    return self.b;
+                } else if (self.b == this) {
+                    return self.a;
+                } else {
+                    return null;
+                }
+            }
+
+            pub fn deinit(self: *const Edge, gpa: std.mem.Allocator) void {
+                switch (NodeBody) {
+                    GateBody => {
+                        gpa.free(self.body.symbol);
+                    },
+                    else => {},
+                }
+            }
         };
 
         gpa: std.mem.Allocator,
@@ -243,6 +299,7 @@ pub fn Graph(comptime NodeBody: type) type {
         pub fn removeEdge(self: *Self, edge_id: EdgeId) void {
             errdefer @panic("Ran out of memory when removing edge");
 
+            self.edges.getPtr(edge_id).?.deinit(self.gpa);
             _ = self.edges.swapRemove(edge_id);
 
             for (self.node2edges.values()) |*node_edges| {
@@ -266,9 +323,10 @@ pub fn Graph(comptime NodeBody: type) type {
             var cloned = try self.node2edges.getPtr(node_id).?.clone(self.gpa);
             defer _ = cloned.deinit(self.gpa);
             for (cloned.items) |edge_id| {
-                try self.removeEdge(edge_id);
+                self.removeEdge(edge_id);
             }
 
+            self.nodes.getPtr(node_id).?.deinit(self.gpa);
             _ = self.nodes.swapRemove(node_id);
             self.node2edges.getPtr(node_id).?.deinit(self.gpa);
             _ = self.node2edges.swapRemove(node_id);
@@ -277,6 +335,13 @@ pub fn Graph(comptime NodeBody: type) type {
         pub fn deinit(self: *Self) void {
             for (self.node2edges.values()) |*node_edges| {
                 node_edges.deinit(self.gpa);
+            }
+
+            for (self.nodes.values()) |*node| {
+                node.deinit(self.gpa);
+            }
+            for (self.edges.values()) |*edge| {
+                edge.deinit(self.gpa);
             }
 
             self.nodes.deinit();
