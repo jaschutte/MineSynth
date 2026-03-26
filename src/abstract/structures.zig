@@ -16,6 +16,7 @@ pub const BlockCat = enum {
     torch,
     block,
     block2,
+    block3,
 };
 
 pub const Orientation = enum {

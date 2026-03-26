@@ -323,7 +323,7 @@ fn getAbsolutePosition(position: *const Position, port_pos_relative: physical.Co
     const new_x = clampU32WithDelta(position.x, port_pos_relative[0], max_chipsize, min_pos);
     const new_y = clampU32WithDelta(position.y, port_pos_relative[2], max_chipsize, min_pos);
 
-    return .{ new_x, chip_height_coordinate, new_y };
+    return .{ new_x, chip_height_coordinate + @as(u32, @intCast(port_pos_relative[1])), new_y };
 }
 
 // returns the 2 nodes that this edge connects as .{from_node, to_node}
@@ -893,7 +893,7 @@ pub fn getThoseTuples(the_graph: *const Graph, the_placement: *Placement, chip_h
     var it = the_graph.edges.iterator();
     while (it.next()) |entry| {
         const net = entry.value_ptr;
-        const positions = getPortAbsolutePositions(the_graph, the_placement, net, use_accurate_input_pos, chip_height_coordinate).?;
+        const positions = getPortAbsolutePositions(the_graph, the_placement, net, true, chip_height_coordinate).?;
         const nodes = getEdgeFromToNodes(the_graph, the_placement, net);
 
         try results.append(the_graph.gpa, .{
