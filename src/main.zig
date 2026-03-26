@@ -31,7 +31,7 @@ pub fn main() !void {
     graphviz.GraphVisualizer(glib.GateBody).printDFS(gpa, graph);
     var placement = plc.placement_annealing(graph, .{ .initial_temperature = 3, .moves_per_temperature = 8000, .initial_window_size = 80, .alpha = 0.5, .node_padding = 5 }).?;
     plc.print(graph, placement, graph.gpa);
-    // graphviz.printPlacement(graph.gpa, graph, placement);
+    graphviz.printPlacement(graph.gpa, graph, placement);
     const tuples = plc.getThoseTuples(graph, placement, 0);
     defer gpa.free(tuples);
     // plc.printThoseTuples(graph.gpa, tuples);

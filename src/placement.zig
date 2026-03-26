@@ -899,7 +899,7 @@ pub fn getThoseTuples(the_graph: *const Graph, the_placement: *Placement, chip_h
 
         try results.append(the_graph.gpa, .{
             .n = net.id,
-            .a = netlist.GateType.outputPowerLevel(),
+            .a = nodes[0].body.kind.outputPowerLevel(),
             .x = positions[0], // this copies by value right ?
             .b = nodes[1].body.kind.inputPowerLevel(),
             .y = positions[1],
