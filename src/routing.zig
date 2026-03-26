@@ -7,11 +7,11 @@ const ms = @import("abstract/structures.zig");
 const Router = @This();
 
 max_iterations: u32 = 10,
-violation_cost_multiplier: u32 = 30.0,
+violation_cost_multiplier: u32 = 10.0,
 heuristic_weight: f32 = 1.0,
 delay_cost_multiplier: u32 = 1.0, // cost = this * delay + length
-max_cost: u32 = 1000, // dont explore dumb paths
-max_astar_iterations: u32 = 10000,
+max_length: u32 = 1000, // dont explore dumb paths
+max_astar_iterations: u32 = 999999999,
 
 // typedefs
 const WorldCoord = ms.WorldCoord;
@@ -20,6 +20,7 @@ const WorldCoord = ms.WorldCoord;
 const NodeState = struct {
     coord: WorldCoord,
     signal: u5,
+    heading: WorldCoord,
 };
 
 // parent node and associated metadata
@@ -69,7 +70,7 @@ const SURROUNDING_OFFSETS = blk: {
 };
 
 const MaxMoveBlocks = 12;
-const MAX_COMPONENT_RADIUS = 5;
+const MAX_COMPONENT_RADIUS = 2;
 const MoveFootprint = struct {
     blocks: [MaxMoveBlocks]WorldCoord,
     count: usize,
@@ -468,6 +469,8 @@ const QueueItem = struct {
     state: NodeState,
     g: u32,
     f: u32,
+    length: u32,
+    delay: u32,
 };
 
 // 2d manhattan
@@ -550,6 +553,11 @@ pub fn routeTo(a: std.mem.Allocator, from: WorldCoord, from_signal: u5, to: Worl
         return error.OutOfBounds;
     }
 
+    const dx = @abs(from[0] - to[0]);
+    const dy = @abs(from[1] - to[1]);
+    const dz = @abs(from[2] - to[2]);
+    const manhattan = dx + dy + dz;
+
     const host_entry = forbidden_zone.get(from);
     const host_route_id = if (host_entry) |e| e.route_id else null;
 
@@ -563,9 +571,9 @@ pub fn routeTo(a: std.mem.Allocator, from: WorldCoord, from_signal: u5, to: Worl
     var distances = std.AutoHashMap(NodeState, u32).init(a);
     defer distances.deinit();
 
-    const start_state = NodeState{ .coord = from, .signal = from_signal };
+    const start_state = NodeState{ .coord = from, .signal = from_signal, .heading = .{ 0, 0, 0 } };
     try distances.put(start_state, 0);
-    try queue.add(.{ .state = start_state, .g = 0, .f = heuristic(from, to, config.delay_cost_multiplier) });
+    try queue.add(.{ .state = start_state, .g = 0, .f = heuristic(from, to, config.delay_cost_multiplier), .length = 0, .delay = 0 });
 
     // Edge weights must be > 0. Scaled to reflect relative pathing delays/material costs.
     const moves = comptime blk: {
@@ -630,27 +638,32 @@ pub fn routeTo(a: std.mem.Allocator, from: WorldCoord, from_signal: u5, to: Worl
                 .via => next_signal = 14,
             }
 
-            const next_state = NodeState{ .coord = coord, .signal = next_signal };
+            const next_state = NodeState{ .coord = coord, .signal = next_signal, .heading = move.heading };
 
             var move_cost = move.def.delay * config.delay_cost_multiplier + move.def.length;
             var is_violating = false;
 
             switch (validity) {
                 .violation => |refs| {
+                    _ = refs; // autofix
                     // multiply by how bad the violation is
-                    move_cost += config.violation_cost_multiplier * refs;
+                    move_cost *= config.violation_cost_multiplier;
                     is_violating = true;
                 },
                 else => {},
             }
 
             const g_cost = item.g + move_cost;
-            if (g_cost > config.max_cost) continue;
+            const g_length = item.length + move.def.length;
+            const g_delay = item.delay + move.def.delay;
+            if (g_length > config.max_length) continue;
+            // or if bigger than manhattan squared
+            if (g_length > (manhattan * manhattan)) continue;
 
             var dominated = false;
             var s_check: u5 = next_signal;
             while (s_check <= 15) : (s_check += 1) {
-                if (distances.get(.{ .coord = coord, .signal = s_check })) |better_g| {
+                if (distances.get(.{ .coord = coord, .signal = s_check, .heading = move.heading })) |better_g| {
                     if (better_g <= g_cost) {
                         dominated = true;
                         break;
@@ -672,6 +685,8 @@ pub fn routeTo(a: std.mem.Allocator, from: WorldCoord, from_signal: u5, to: Worl
                     .state = next_state,
                     .g = g_cost,
                     .f = f_cost,
+                    .length = g_length,
+                    .delay = g_delay,
                 }) catch @panic("oom");
             }
         }
@@ -726,6 +741,7 @@ fn buildRouteBlocks(a: std.mem.Allocator, start_state: NodeState, final_state: N
             try footprints.append(a, .{
                 .coord = vec + rotated_coord,
                 .signal = p.prev.signal, // Use the signal entering this component
+                .heading = move_dir,
             });
         }
 
@@ -738,7 +754,7 @@ fn buildRouteBlocks(a: std.mem.Allocator, start_state: NodeState, final_state: N
     try abs_blocks.append(a, .{ .block = .block, .loc = final_state.coord + WorldCoord{ 0, -1, 0 }, .rot = .center });
 
     try footprints.append(a, final_state);
-    try footprints.append(a, .{ .coord = final_state.coord + WorldCoord{ 0, -1, 0 }, .signal = final_state.signal });
+    try footprints.append(a, .{ .coord = final_state.coord + WorldCoord{ 0, -1, 0 }, .signal = final_state.signal, .heading = final_state.heading });
 
     return .{
         .route = abs_blocks,
