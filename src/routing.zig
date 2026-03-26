@@ -7,11 +7,11 @@ const ms = @import("abstract/structures.zig");
 const Router = @This();
 
 max_iterations: u32 = 10,
-violation_cost_multiplier: u32 = 10.0,
+violation_cost_multiplier: u32 = 30.0,
 heuristic_weight: f32 = 1.0,
 delay_cost_multiplier: u32 = 1.0, // cost = this * delay + length
 max_cost: u32 = 1000, // dont explore dumb paths
-max_astar_iterations: u32 = 40000,
+max_astar_iterations: u32 = 10000,
 
 // typedefs
 const WorldCoord = ms.WorldCoord;
@@ -454,6 +454,10 @@ pub fn routeAll(a: std.mem.Allocator, pairs: []RoutePair, forbidden_zone: *ms.Fo
             try final_route.footprints.appendSlice(a, r.footprints.items);
             final_route.delay += r.delay;
             final_route.length += r.length;
+        } else {
+            try final_route.route.append(a, .{ .block = .block3, .rot = .center, .loc = net.to });
+            // and from
+            try final_route.route.append(a, .{ .block = .block3, .rot = .center, .loc = net.from });
         }
     }
 
@@ -673,6 +677,7 @@ pub fn routeTo(a: std.mem.Allocator, from: WorldCoord, from_signal: u5, to: Worl
         }
     }
     if (final_state == null) {
+        std.log.info("A* completed with {d} iterations. Path not found.", .{counter});
         std.log.err("Could not find a path to .{any}", .{to});
         return error.PathNotFound;
     }

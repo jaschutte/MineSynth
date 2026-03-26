@@ -29,7 +29,7 @@ pub fn main() !void {
     glibopt.PreProcessor(glib.GateBody).preprocess(graph);
     sta.AAT(graph);
     graphviz.GraphVisualizer(glib.GateBody).printDFS(gpa, graph);
-    var placement = plc.placement_annealing(graph, .{ .initial_temperature = 3, .moves_per_temperature = 8000, .initial_window_size = 80, .alpha = 0.5 }).?;
+    var placement = plc.placement_annealing(graph, .{ .initial_temperature = 3, .moves_per_temperature = 8000, .initial_window_size = 80, .alpha = 0.5, .node_padding = 5 }).?;
     plc.print(graph, placement, graph.gpa);
     // graphviz.printPlacement(graph.gpa, graph, placement);
     const tuples = plc.getThoseTuples(graph, placement, 0);
@@ -46,6 +46,19 @@ pub fn main() !void {
 
     var allBlocks: std.ArrayList(ms.AbsBlock) = .empty;
     defer allBlocks.deinit(gpa);
+
+    var iter = forbidden_zone.iterator();
+    while (iter.next()) |entry| {
+        const coord = entry.key_ptr.*;
+        const info = entry.value_ptr.*;
+        _ = info; // autofix
+        try allBlocks.append(gpa, ms.AbsBlock{
+            .block = .block2,
+            .rot = .center,
+            .loc = .{ @as(ms.WorldCoordNum, coord[0]), @as(ms.WorldCoordNum, coord[1]), @as(ms.WorldCoordNum, coord[2]) },
+        });
+    }
+
     for (placementBlocks) |block| {
         try allBlocks.append(gpa, ms.AbsBlock{
             .block = block.block,
@@ -69,6 +82,8 @@ pub fn main() !void {
     };
     defer route.deinit(gpa);
     try allBlocks.appendSlice(gpa, route.route.items);
+
+    // visualize forbidden zone
 
     nbt.abs_block_arr_to_schem(gpa, allBlocks.items);
 }

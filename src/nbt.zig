@@ -12,6 +12,7 @@ pub fn blockcat_to_id(cat: ms.BlockCat) i8 {
         .torch => 76,
         .block => 42,
         .block2 => 41,
+        .block3 => 57,
     };
 }
 
@@ -186,12 +187,9 @@ pub fn block_arr_to_schem(a: std.mem.Allocator, blocks: []const ms.SchemBlock) v
         const idx: u64 = (@as(u64, block.loc[1] * length) + block.loc[2]) * width + block.loc[0];
         blocks_byte_arr[idx] = blockcat_to_id(block.block);
         data_byte_arr[idx] = switch (block.block) {
-            .air => 0,
-            .dust => 0,
             .repeater => repeater_orientation_to_data(block.rot),
             .torch => torch_orientation_to_data(block.rot),
-            .block => 0,
-            .block2 => 0,
+            else => 0,
         };
 
         // _ = block;
