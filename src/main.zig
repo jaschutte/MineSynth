@@ -29,7 +29,7 @@ pub fn main() !void {
     glibopt.PreProcessor(glib.GateBody).preprocess(graph);
     sta.AAT(graph);
     graphviz.GraphVisualizer(glib.GateBody).printDFS(gpa, graph);
-    var placement = plc.placement_annealing(graph, .{ .initial_temperature = 30, .moves_per_temperature = 8000, .initial_window_size = 100, .alpha = 0.9, .node_padding = 1 }).?;
+    var placement = plc.placement_annealing(graph, .{ .initial_temperature = 30, .moves_per_temperature = 8000, .initial_window_size = 100, .alpha = 0.9, .node_padding = 3 }).?;
     plc.print(graph, placement, gpa);
     graphviz.printPlacement(gpa, graph, placement);
     const tuples = plc.getThoseTuples(graph, placement, 0);
