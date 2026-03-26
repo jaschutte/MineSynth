@@ -131,6 +131,7 @@ pub fn block_arr_to_schem(a: std.mem.Allocator, blocks: []const ms.SchemBlock) v
     var width: ms.SchemCoordNum = 1;
     var height: ms.SchemCoordNum = 1;
     for (blocks) |block| {
+        std.debug.assert(block.loc[1] <= 255);
         if (block.loc[0] + 1 > width) width = block.loc[0] + 1;
         if (block.loc[1] + 1 > height) height = block.loc[1] + 1;
         if (block.loc[2] + 1 > length) length = block.loc[2] + 1;
@@ -172,6 +173,7 @@ pub fn block_arr_to_schem(a: std.mem.Allocator, blocks: []const ms.SchemBlock) v
 
     // blocks and block data
 
+    std.log.info("nbt conversion: width: {d}, height: {d}, length: {d}", .{ width, height, length });
     const volume: u64 = length * @as(u64, height * width);
     std.log.debug("nbt conversion dims: {d}x{d}x{d}, volume: {d}", .{ length, width, height, volume });
     var blocks_byte_arr = a.alloc(i8, volume) catch @panic("oom");

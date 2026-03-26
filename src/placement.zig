@@ -19,6 +19,7 @@ pub const AnnealingConfig = struct {
     // around 30 seems fine
     initial_temperature: f32 = 30,
     minimum_temperature: f32 = 1,
+    alpha: f32 = 0.95,
     // - "The authors of [28] experimentally determined that designs with ~200 cells require
     // 100 iterations per cell, or roughly 2 *10^4 runs per temperature step."
     // so, for us it would be around 10^4 runs.
@@ -813,7 +814,7 @@ pub fn placement_annealing(the_graph: *const Graph, annealing_config: AnnealingC
     // should be in (0,1)
     // should be a lower value at the start and end of the simulation, and a higher value in the middle, during refining.
     // it is constant for now.
-    const alpha = 0.95;
+    const alpha = annealing_config.alpha;
     const actual_moves_per_temperature = @divFloor(annealing_config.moves_per_temperature, annealing_config.perturbations_amount);
 
     var lastCost: f32 = cost(the_graph, current_placement, annealing_config);

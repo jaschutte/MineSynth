@@ -41,10 +41,14 @@ pub const AbsBlock = struct {
 pub const ForbiddenZoneType = enum {
     gate,
     wire,
+    wire_padding,
 };
 pub const ForbiddenZoneInfo = struct {
     ftype: ForbiddenZoneType,
     ref_count: u32 = 1,
+    route_id: usize = 99999,
+    source_coord: WorldCoord = .{ 0, 0, 0 },
+    foreign_ref_count: u32 = 0,
 };
 
 pub const ForbiddenZone = std.AutoHashMap(WorldCoord, ForbiddenZoneInfo);

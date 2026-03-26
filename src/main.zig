@@ -15,7 +15,7 @@ pub fn main() !void {
     const gpa = real_gpa.allocator();
     defer _ = real_gpa.deinit();
 
-    const content = try std.fs.cwd().readFileAlloc(gpa, "aiger-examples/serial-adder.aag", std.math.maxInt(usize));
+    const content = try std.fs.cwd().readFileAlloc(gpa, "aiger-examples/half-adder.aag", std.math.maxInt(usize));
     defer _ = gpa.free(content);
 
     const aig = try aiger.Aiger.parseAag(gpa, content);
@@ -29,24 +29,30 @@ pub fn main() !void {
     glibopt.PreProcessor(glib.GateBody).preprocess(graph);
     sta.AAT(graph);
     graphviz.GraphVisualizer(glib.GateBody).printDFS(gpa, graph);
-    var placement = plc.placement_annealing(graph, .{
-        .initial_temperature = 30,
-        .moves_per_temperature = 2000,
-        .initial_window_size = 80,
-        .node_padding = 1,
-    }).?;
+    var placement = plc.placement_annealing(graph, .{ .initial_temperature = 3, .moves_per_temperature = 8000, .initial_window_size = 80, .alpha = 0.5 }).?;
     plc.print(graph, placement, graph.gpa);
     // graphviz.printPlacement(graph.gpa, graph, placement);
     const tuples = plc.getThoseTuples(graph, placement, 0);
+    defer gpa.free(tuples);
     // plc.printThoseTuples(graph.gpa, tuples);
     // graph.gpa.free(tuples);
-    const allblocks = placement.toBlocklist(graph, 0);
-    nbt.block_arr_to_schem(gpa, allblocks);
-    graph.gpa.free(allblocks);
+    const placementBlocks = placement.toBlocklist(graph, 0);
+    defer graph.gpa.free(placementBlocks);
+    // nbt.block_arr_to_schem(gpa, placementBlocks);
     var forbidden_zone = placement.toForbiddenzone(graph, 0);
     defer forbidden_zone.deinit();
     placement.deinit(graph.gpa);
     defer graph.deinit();
+
+    var allBlocks: std.ArrayList(ms.AbsBlock) = .empty;
+    defer allBlocks.deinit(gpa);
+    for (placementBlocks) |block| {
+        try allBlocks.append(gpa, ms.AbsBlock{
+            .block = block.block,
+            .rot = block.rot,
+            .loc = block.loc,
+        });
+    }
 
     var pairs: std.ArrayList(rt.RoutePair) = .empty;
     defer pairs.deinit(gpa);
@@ -57,33 +63,12 @@ pub fn main() !void {
         });
     }
 
-    // const test_endpoints = [_][2][3]i32{
-    //     .{ .{ 0, 0, 0 }, .{ 0, 0, 10 } },
-    //     .{ .{ 4, 0, 0 }, .{ 4, 0, 10 } },
-    //     .{ .{ 0, 0, 12 }, .{ 5, 0, 12 } },
-    //     .{ .{ 0, 0, -2 }, .{ 5, 0, -2 } },
-    //     .{ .{ -5, 0, 5 }, .{ 4, 0, 5 } }, // the violator
-    //     .{ .{ -20, 0, 0 }, .{ 40, 0, 0 } },
-    //     .{ .{ 10, 0, -20 }, .{ 10, 0, 20 } },
-    //     .{ .{ -20, 0, 10 }, .{ 40, 0, 10 } },
-    //     .{ .{ 30, 0, -30 }, .{ -10, 0, 30 } },
-    //     .{ .{ -40, 0, -10 }, .{ 20, 0, -10 } },
-    //     .{ .{ 0, 0, -40 }, .{ 0, 0, 40 } },
-    //     .{ .{ 50, 0, -50 }, .{ -20, 0, 20 } },
-    //     .{ .{ -50, 0, 40 }, .{ 30, 0, 50 } },
-    // };
-
-    // var pairs: std.ArrayList(rt.RoutePair) = .empty;
-    // defer pairs.deinit(gpa);
-    // for (test_endpoints) |endpoints| {
-    //     try pairs.append(gpa, rt.RoutePair{
-    //         .from = endpoints[0],
-    //         .to = endpoints[1],
-    //     });
-    // }
-    var route = try rt.routeAll(gpa, pairs.items, &forbidden_zone, .{});
-
+    var route = rt.routeAll(gpa, pairs.items, &forbidden_zone, .{}) catch |err| {
+        std.debug.print("Routing failed: {}\n", .{err});
+        return;
+    };
     defer route.deinit(gpa);
+    try allBlocks.appendSlice(gpa, route.route.items);
 
-    nbt.abs_block_arr_to_schem(gpa, route.route.items);
+    nbt.abs_block_arr_to_schem(gpa, allBlocks.items);
 }
