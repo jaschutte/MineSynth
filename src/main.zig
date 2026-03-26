@@ -30,7 +30,12 @@ pub fn main() !void {
     glibopt.PreProcessor(glib.GateBody).preprocess(graph);
     sta.AAT(graph);
     graphviz.GraphVisualizer(glib.GateBody).printDFS(gpa, graph);
-    var placement = plc.placement_annealing(graph, .{ .initial_temperature = 3, .moves_per_temperature = 8000, .initial_window_size = 80, .alpha = 0.5, .node_padding = 5 }).?;
+
+    // get random generator:
+    var seed: u32 = undefined;
+    try std.posix.getrandom(std.mem.asBytes(&seed));
+
+    var placement = plc.placement_annealing(graph, seed, .{ .initial_temperature = 3, .moves_per_temperature = 8000, .initial_window_size = 80, .alpha = 0.5, .node_padding = 5 }).?;
     plc.print(graph, placement, graph.gpa);
     graphviz.printPlacement(graph.gpa, graph, placement);
     const tuples = plc.getThoseTuples(graph, placement, 0);
@@ -76,7 +81,7 @@ pub fn main() !void {
         });
     }
 
-    var route = rt.routeAll(gpa, pairs.items, &forbidden_zone, .{}) catch |err| {
+    var route = rt.routeAll(gpa, seed, pairs.items, &forbidden_zone, .{}) catch |err| {
         std.debug.print("Routing failed: {}\n", .{err});
         return;
     };

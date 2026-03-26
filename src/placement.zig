@@ -790,7 +790,7 @@ fn perturb(the_graph: *const Graph, the_placement: *Placement, random: std.Rando
 // P =new_P
 // T=α∙T
 
-pub fn placement_annealing(the_graph: *const Graph, annealing_config: AnnealingConfig) ?*Placement {
+pub fn placement_annealing(the_graph: *const Graph, seed: u32, annealing_config: AnnealingConfig) ?*Placement {
     errdefer @panic("Skill issue");
 
     var current_placement = initialPlacement(the_graph, annealing_config);
@@ -802,12 +802,6 @@ pub fn placement_annealing(the_graph: *const Graph, annealing_config: AnnealingC
     var best_placement = try current_placement.clone(the_graph.gpa);
     var best_cost: f32 = std.math.floatMax(f32);
 
-    // get random generator:
-    var seed: u32 = undefined;
-    std.posix.getrandom(std.mem.asBytes(&seed)) catch |err| {
-        std.debug.print("Failed to get random seed: {}\n", .{err});
-        return null;
-    };
     var prng = std.Random.DefaultPrng.init(seed);
     const rand = prng.random();
 
