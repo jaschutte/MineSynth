@@ -121,7 +121,7 @@ pub const GateType = enum {
         };
     }
 
-    pub inline fn blockArray(self: GateType) []const structures.SchemBlock {
+    pub inline fn blockArray(self: GateType) []const structures.AbsBlock {
         return switch (self) {
             .input => &inputBlocks,
             .output => &outputBlocks,
@@ -175,7 +175,7 @@ fn computeForbiddenZone(
     return result;
 }
 
-const inputBlocks = [_]structures.SchemBlock{
+const inputBlocks = [_]structures.AbsBlock{
     .{
         .block = .dust,
         .loc = .{ 0, 1, 0 },
@@ -186,11 +186,16 @@ const inputBlocks = [_]structures.SchemBlock{
         .loc = .{ 0, 0, 0 },
         .rot = .center,
     },
+    .{
+        .block = .block2,
+        .loc = .{ 0, -1, 0 },
+        .rot = .center,
+    },
 };
 
 const inputForbiddenCords = [_]structures.WorldCoord{};
 
-const outputBlocks = [_]structures.SchemBlock{
+const outputBlocks = [_]structures.AbsBlock{
     .{
         .block = .dust,
         .loc = .{ 0, 1, 0 },
@@ -205,7 +210,7 @@ const outputBlocks = [_]structures.SchemBlock{
 
 const outputForbiddenCords = [_]structures.WorldCoord{};
 
-const inverterBlocks = [_]structures.SchemBlock{
+const inverterBlocks = [_]structures.AbsBlock{
     .{
         .block = .repeater,
         .loc = .{ 0, 1, 0 },
@@ -237,7 +242,7 @@ const inverterForbiddenCords = [_]structures.WorldCoord{
     .{ 1, 1, 2 }, // right of powered block
 };
 
-const andGateBlocks = [_]structures.SchemBlock{
+const andGateBlocks = [_]structures.AbsBlock{
     .{
         .block = .repeater,
         .loc = .{ 0, 1, 0 },
@@ -304,7 +309,7 @@ const andGateForbiddenCoords = [_]structures.WorldCoord{
     .{ 3, 1, 0 }, // right of repeater
 };
 
-const orGateBlocks = [_]structures.SchemBlock{
+const orGateBlocks = [_]structures.AbsBlock{
     .{ // in1
         .block = .repeater,
         .loc = .{ 0, 1, 0 },

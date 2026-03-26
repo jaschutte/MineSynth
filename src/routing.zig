@@ -6,12 +6,12 @@ const ms = @import("abstract/structures.zig");
 
 const Router = @This();
 
-max_iterations: u32 = 10,
-violation_cost_multiplier: u32 = 30.0,
+max_iterations: u32 = 20,
+violation_cost_multiplier: u32 = 10.0,
 heuristic_weight: f32 = 1.0,
 delay_cost_multiplier: u32 = 1.0, // cost = this * delay + length
-max_cost: u32 = 1000, // dont explore dumb paths
-max_astar_iterations: u32 = 10000,
+max_length: u32 = 1000, // dont explore dumb paths
+max_astar_iterations: u32 = 999999999,
 
 // typedefs
 const WorldCoord = ms.WorldCoord;
@@ -20,6 +20,7 @@ const WorldCoord = ms.WorldCoord;
 const NodeState = struct {
     coord: WorldCoord,
     signal: u5,
+    heading: WorldCoord,
 };
 
 // parent node and associated metadata
@@ -69,7 +70,7 @@ const SURROUNDING_OFFSETS = blk: {
 };
 
 const MaxMoveBlocks = 12;
-const MAX_COMPONENT_RADIUS = 5;
+const MAX_COMPONENT_RADIUS = 2;
 const MoveFootprint = struct {
     blocks: [MaxMoveBlocks]WorldCoord,
     count: usize,
@@ -191,17 +192,14 @@ const Net = struct {
     route: ?Route,
     failures: u32,
     is_violating: bool = false,
+    sort_weight: u32 = 0,
 };
 
 // Heuristic for REORDER(): Route nets with the most failures first.
 // Tie-breaker: Route longer nets first.
 fn sortNetPtrsDescending(config: Router, lhs: *Net, rhs: *Net) bool {
-    if (lhs.failures == rhs.failures) {
-        const dist_lhs = heuristic(lhs.from, lhs.to, config.delay_cost_multiplier);
-        const dist_rhs = heuristic(rhs.from, rhs.to, config.delay_cost_multiplier);
-        return dist_lhs > dist_rhs;
-    }
-    return lhs.failures > rhs.failures;
+    _ = config; // autofix
+    return lhs.sort_weight > rhs.sort_weight;
 }
 
 fn ripUp(net: *Net, forbidden_zone: *ms.ForbiddenZone, a: std.mem.Allocator) void {
@@ -231,8 +229,8 @@ fn ripUp(net: *Net, forbidden_zone: *ms.ForbiddenZone, a: std.mem.Allocator) voi
 }
 
 const CellInfo = struct {
-    nets: [4]*Net,
-    is_center: [4]bool,
+    nets: [16]*Net,
+    is_center: [16]bool,
     count: usize,
 };
 
@@ -251,9 +249,11 @@ fn updateViolations(a: std.mem.Allocator, nets: []Net) !void {
 
     // Pass 1: Build the complete ownership map
     for (nets) |*net| {
-        net.is_violating = if (net.route) |*r| r.violating else false;
+        // net.is_violating = if (net.route) |*r| r.violating else false;
+        net.is_violating = false;
 
         if (net.route) |*r| {
+            r.violating = false;
             for (r.footprints.items) |fp| {
                 for (SURROUNDING_OFFSETS) |offset| {
                     const target = fp.coord + offset;
@@ -363,7 +363,7 @@ fn optimizeBranchPoint(current_net: *Net, routed_nets: []Net, config: Router) vo
     }
 }
 
-pub fn routeAll(a: std.mem.Allocator, pairs: []RoutePair, forbidden_zone: *ms.ForbiddenZone, config: Router) !Route {
+pub fn routeAll(a: std.mem.Allocator, seed: u32, pairs: []RoutePair, forbidden_zone: *ms.ForbiddenZone, config: Router) !Route {
     var nets = try a.alloc(Net, pairs.len);
 
     defer {
@@ -399,15 +399,29 @@ pub fn routeAll(a: std.mem.Allocator, pairs: []RoutePair, forbidden_zone: *ms.Fo
         if (net.route) |r| {
             std.log.info("Initial route for net from {any} to {any} has delay {d} and violating={any}", .{ net.from, net.to, r.delay, net.is_violating });
         }
-        if (net.is_violating) {
+        if (net.is_violating or net.route == null) {
             try v_nets.append(a, net);
         }
     }
 
     var iters: u32 = 0;
+    var prng = std.Random.DefaultPrng.init(seed);
+    const random = prng.random();
 
     // Iterative rip-up and reroute
     while (v_nets.items.len > 0 and iters < config.max_iterations) : (iters += 1) {
+        // Calculate randomized sort weight
+        for (v_nets.items) |net| {
+            // Base weight prioritizes failures, distance breaks ties, and jitter breaks deadlocks.
+            // A jitter larger than the multiplier (1500 > 1000) allows nets with N-1 failures
+            // to occasionally route before nets with N failures.
+            const base_weight = net.failures * 1000;
+            const dist = heuristic(net.from, net.to, config.delay_cost_multiplier) * 100;
+            const random_jitter = random.intRangeLessThan(u32, 0, 200);
+
+            net.sort_weight = base_weight + dist + random_jitter;
+        }
+
         std.sort.block(*Net, v_nets.items, config, sortNetPtrsDescending);
         const num_v_nets_this_pass = v_nets.items.len;
 
@@ -427,7 +441,7 @@ pub fn routeAll(a: std.mem.Allocator, pairs: []RoutePair, forbidden_zone: *ms.Fo
         // Rebuild v_nets queue based on the updated global intersection map
         v_nets.clearRetainingCapacity();
         for (nets) |*net| {
-            if (net.is_violating) {
+            if (net.is_violating or net.route == null) {
                 net.failures += 1;
                 try v_nets.append(a, net);
             }
@@ -468,6 +482,8 @@ const QueueItem = struct {
     state: NodeState,
     g: u32,
     f: u32,
+    length: u32,
+    delay: u32,
 };
 
 // 2d manhattan
@@ -514,13 +530,10 @@ pub fn routeToUpdateForbiddenZone(a: std.mem.Allocator, from: WorldCoord, from_s
                         existing.foreign_ref_count += 1;
                     }
 
-                    // Upgrade padding to a hard wire if requested
                     if (target_ftype == .wire and existing.ftype == .wire_padding) {
                         existing.ftype = .wire;
 
-                        // Transfer ownership to the route that placed the hard wire
                         if (existing.route_id != route_id) {
-                            // The old owner (and any other nets) are now foreign to the new owner
                             existing.foreign_ref_count = existing.ref_count - 1;
 
                             existing.route_id = route_id;
@@ -550,6 +563,11 @@ pub fn routeTo(a: std.mem.Allocator, from: WorldCoord, from_signal: u5, to: Worl
         return error.OutOfBounds;
     }
 
+    const dx = @abs(from[0] - to[0]);
+    const dy = @abs(from[1] - to[1]);
+    const dz = @abs(from[2] - to[2]);
+    const manhattan = dx + dy + dz;
+
     const host_entry = forbidden_zone.get(from);
     const host_route_id = if (host_entry) |e| e.route_id else null;
 
@@ -563,9 +581,9 @@ pub fn routeTo(a: std.mem.Allocator, from: WorldCoord, from_signal: u5, to: Worl
     var distances = std.AutoHashMap(NodeState, u32).init(a);
     defer distances.deinit();
 
-    const start_state = NodeState{ .coord = from, .signal = from_signal };
+    const start_state = NodeState{ .coord = from, .signal = from_signal, .heading = .{ 0, 0, 0 } };
     try distances.put(start_state, 0);
-    try queue.add(.{ .state = start_state, .g = 0, .f = heuristic(from, to, config.delay_cost_multiplier) });
+    try queue.add(.{ .state = start_state, .g = 0, .f = heuristic(from, to, config.delay_cost_multiplier), .length = 0, .delay = 0 });
 
     // Edge weights must be > 0. Scaled to reflect relative pathing delays/material costs.
     const moves = comptime blk: {
@@ -587,6 +605,7 @@ pub fn routeTo(a: std.mem.Allocator, from: WorldCoord, from_signal: u5, to: Worl
     var final_state: ?NodeState = null;
 
     var counter: usize = 0;
+    var is_violating = false;
     while (queue.count() > 0 and counter < config.max_astar_iterations) {
         counter += 1;
         const item = queue.removeOrNull().?;
@@ -630,27 +649,33 @@ pub fn routeTo(a: std.mem.Allocator, from: WorldCoord, from_signal: u5, to: Worl
                 .via => next_signal = 14,
             }
 
-            const next_state = NodeState{ .coord = coord, .signal = next_signal };
+            const next_state = NodeState{ .coord = coord, .signal = next_signal, .heading = move.heading };
 
             var move_cost = move.def.delay * config.delay_cost_multiplier + move.def.length;
-            var is_violating = false;
 
             switch (validity) {
                 .violation => |refs| {
+                    _ = refs; // autofix
                     // multiply by how bad the violation is
-                    move_cost += config.violation_cost_multiplier * refs;
+                    move_cost *= config.violation_cost_multiplier;
                     is_violating = true;
                 },
-                else => {},
+                else => {
+                    is_violating = false;
+                },
             }
 
             const g_cost = item.g + move_cost;
-            if (g_cost > config.max_cost) continue;
+            const g_length = item.length + move.def.length;
+            const g_delay = item.delay + move.def.delay;
+            if (g_length > config.max_length) continue;
+            // or if bigger than manhattan squared
+            if (g_length > @max(manhattan * manhattan, 1000)) continue;
 
             var dominated = false;
             var s_check: u5 = next_signal;
             while (s_check <= 15) : (s_check += 1) {
-                if (distances.get(.{ .coord = coord, .signal = s_check })) |better_g| {
+                if (distances.get(.{ .coord = coord, .signal = s_check, .heading = move.heading })) |better_g| {
                     if (better_g <= g_cost) {
                         dominated = true;
                         break;
@@ -672,6 +697,8 @@ pub fn routeTo(a: std.mem.Allocator, from: WorldCoord, from_signal: u5, to: Worl
                     .state = next_state,
                     .g = g_cost,
                     .f = f_cost,
+                    .length = g_length,
+                    .delay = g_delay,
                 }) catch @panic("oom");
             }
         }
@@ -686,7 +713,7 @@ pub fn routeTo(a: std.mem.Allocator, from: WorldCoord, from_signal: u5, to: Worl
         return error.PathNotFound;
     }
 
-    std.log.info("A* completed with {d} iterations and final path cost of {any} if path found.", .{ counter, distances.get(final_state.?) });
+    std.log.info("A* completed with {d} iterations and final path cost of {any}, violating={}", .{ counter, distances.get(final_state.?), is_violating });
     return try buildRouteBlocks(a, start_state, final_state.?, parents);
 }
 
@@ -726,6 +753,7 @@ fn buildRouteBlocks(a: std.mem.Allocator, start_state: NodeState, final_state: N
             try footprints.append(a, .{
                 .coord = vec + rotated_coord,
                 .signal = p.prev.signal, // Use the signal entering this component
+                .heading = move_dir,
             });
         }
 
@@ -738,7 +766,7 @@ fn buildRouteBlocks(a: std.mem.Allocator, start_state: NodeState, final_state: N
     try abs_blocks.append(a, .{ .block = .block, .loc = final_state.coord + WorldCoord{ 0, -1, 0 }, .rot = .center });
 
     try footprints.append(a, final_state);
-    try footprints.append(a, .{ .coord = final_state.coord + WorldCoord{ 0, -1, 0 }, .signal = final_state.signal });
+    try footprints.append(a, .{ .coord = final_state.coord + WorldCoord{ 0, -1, 0 }, .signal = final_state.signal, .heading = final_state.heading });
 
     return .{
         .route = abs_blocks,

@@ -92,9 +92,9 @@ pub const Placement = struct {
     }
 
     // returns new array containing all blocks in the placement.
-    pub fn toBlocklist(Self: *const Placement, the_graph: *const Graph, chip_height_coordinate: postype) []const structures.SchemBlock {
+    pub fn toBlocklist(Self: *const Placement, the_graph: *const Graph, chip_height_coordinate: postype) []const structures.AbsBlock {
         errdefer @panic("Download some RAM");
-        var results = std.ArrayList(structures.SchemBlock).empty;
+        var results = std.ArrayList(structures.AbsBlock).empty;
 
         var it = Self.locations.iterator();
         while (it.next()) |entry| {
@@ -103,7 +103,7 @@ pub const Placement = struct {
             const node = the_graph.getConstNode(node_id).?;
             const blocks = node.body.kind.blockArray();
             for (blocks) |block| {
-                const new_pos = @Vector(3, structures.SchemCoordNum){ @as(structures.SchemCoordNum, @truncate(pos.x)) + block.loc[0], @as(structures.SchemCoordNum, @truncate(chip_height_coordinate)) + block.loc[1], @as(structures.SchemCoordNum, @truncate(pos.y)) + block.loc[2] };
+                const new_pos = @Vector(3, structures.WorldCoordNum){ @as(structures.WorldCoordNum, @intCast(pos.x)) + block.loc[0], @as(structures.WorldCoordNum, @intCast(chip_height_coordinate)) + block.loc[1], @as(structures.WorldCoordNum, @intCast(pos.y)) + block.loc[2] };
                 try results.append(the_graph.gpa, .{ .block = block.block, .loc = new_pos, .rot = block.rot });
             }
         }
@@ -918,7 +918,7 @@ fn perturb(the_graph: *const Graph, the_placement: *Placement, random: std.Rando
 // P =new_P
 // T=α∙T
 
-pub fn placement_annealing(the_graph: *const Graph, annealing_config: AnnealingConfig) ?*Placement {
+pub fn placement_annealing(the_graph: *const Graph, seed: u32, annealing_config: AnnealingConfig) ?*Placement {
     errdefer @panic("Skill issue");
 
     var current_placement = initialPlacement(the_graph, annealing_config);
@@ -930,12 +930,6 @@ pub fn placement_annealing(the_graph: *const Graph, annealing_config: AnnealingC
     var best_placement = try current_placement.clone(the_graph.gpa);
     var best_cost: f32 = std.math.floatMax(f32);
 
-    // get random generator:
-    var seed: u32 = undefined;
-    std.posix.getrandom(std.mem.asBytes(&seed)) catch |err| {
-        std.debug.print("Failed to get random seed: {}\n", .{err});
-        return null;
-    };
     var prng = std.Random.DefaultPrng.init(seed);
     const rand = prng.random();
 
