@@ -438,7 +438,7 @@ fn initialPlacement(the_graph: *const Graph, annealing_config: AnnealingConfig) 
     }
 
     x = first_x_pos;
-    y = annealing_config.initial_input_y + annealing_config.initial_spacing;
+    y = placement.input_y + spacing;
 
     for (the_graph.nodes.keys()) |node_id| {
         if (isOutput(placement, node_id) or isInput(placement, node_id)) {
@@ -448,7 +448,7 @@ fn initialPlacement(the_graph: *const Graph, annealing_config: AnnealingConfig) 
         count += 1;
         std.debug.assert(placement.locations.count() == count);
         x = x + spacing;
-        if (x >= annealing_config.initial_row_size * annealing_config.initial_spacing) {
+        if (x >= annealing_config.initial_row_size * spacing) {
             x = first_x_pos;
             y = y + spacing;
         }

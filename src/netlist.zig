@@ -83,7 +83,7 @@ pub const GateType = enum {
     pub inline fn inputPositionsRelative(self: GateType) physical.InputPositionsRelative {
         return switch (self) {
             .input => .{ .{ 0, 1, 0 }, null },
-            .output => .{ .{ 0, 1, -1 }, null },
+            .output => .{ .{ 0, 1, 0 }, null },
             .inverter => .{ .{ 0, 1, -1 }, null },
             .and_gate => .{ .{ 0, 1, -1 }, .{ 2, 1, -1 } },
             .or_gate => .{ .{ -1, 1, 0 }, .{ 3, 1, 0 } },
@@ -93,11 +93,11 @@ pub const GateType = enum {
     // assuming the default orientation (.north)
     pub inline fn outputPositionsRelative(self: GateType) physical.OutputPositionsRelative {
         return switch (self) {
-            .input => .{ 0, 1, 1 },
+            .input => .{ 0, 1, 0 },
             .output => .{ 0, 1, 0 },
             .inverter => .{ 0, 1, 3 },
             .and_gate => .{ 1, 1, 3 },
-            .or_gate => .{ 1, 1, 0 },
+            .or_gate => .{ 1, 1, 1 },
         };
     }
 
@@ -130,10 +130,9 @@ pub const GateType = enum {
         return switch (self) {
             .input => &computeForbiddenZone(&inputForbiddenCords, @Vector(3, u32){ size(.input).w, 2, size(.input).h }),
             .output => &computeForbiddenZone(&outputForbiddenCords, @Vector(3, u32){ size(.output).w, 2, size(.output).h }),
-            .inverter => &computeForbiddenZone(&inverterForbiddenCords, @Vector(3, u32){ size(.inverter).w, 4, size(.inverter).h }),
+            .inverter => &computeForbiddenZone(&inverterForbiddenCords, @Vector(3, u32){ size(.inverter).w, 3, size(.inverter).h }),
             .and_gate => &computeForbiddenZone(&andGateForbiddenCoords, @Vector(3, u32){ size(.and_gate).w, 4, size(.and_gate).h }),
             .or_gate => &computeForbiddenZone(&orGateForbiddenCoords, @Vector(3, u32){ size(.or_gate).w, 2, size(.or_gate).h }),
-            // .or_gate => &orGateForbiddenCoords,
         };
     }
 };
@@ -223,13 +222,12 @@ const inverterBlocks = [_]structures.SchemBlock{
 };
 
 const inverterForbiddenCords = [_]structures.WorldCoord{
+    .{ -1, 1, 0 }, // left of repeater
     .{ -1, 1, 1 }, // left of torch
     .{ -1, 1, 2 }, // left of powered block
+    .{ 1, 1, 0 }, // right of repeater
     .{ 1, 1, 1 }, // right of torch
     .{ 1, 1, 2 }, // right of powered block
-    .{ 0, 0, 2 }, // below torch
-    .{ 0, 0, 1 }, // below powered block
-    .{ 0, 2, 2 }, // above torch
 };
 
 const andGateBlocks = [_]structures.SchemBlock{
@@ -292,9 +290,11 @@ const andGateBlocks = [_]structures.SchemBlock{
 
 const andGateForbiddenCoords = [_]structures.WorldCoord{
     .{ -1, 1, 1 }, // left of powered block
-    .{ -1, 0, 1 }, // left of torch
-    .{ -1, 1, 3 }, // right of powered block
-    .{ -1, 1, 3 }, // right of torch
+    .{ -1, 2, 1 }, // left of torch
+    .{ -1, 1, 0 }, // left of repeater
+    .{ 3, 1, 1 }, // right of powered block
+    .{ 3, 2, 1 }, // right of torch
+    .{ 3, 1, 0 }, // right of repeater
 };
 
 const orGateBlocks = [_]structures.SchemBlock{
@@ -308,16 +308,16 @@ const orGateBlocks = [_]structures.SchemBlock{
         .loc = .{ 0, 0, 0 },
         .rot = .center,
     },
-    // .{
-    //     .block = .dust,
-    //     .loc = .{ 1, 1, 0 },
-    //     .rot = .center,
-    // },
-    // .{
-    //     .block = .block,
-    //     .loc = .{ 1, 0, 0 },
-    //     .rot = .center,
-    // },
+    .{
+        .block = .dust,
+        .loc = .{ 1, 1, 0 },
+        .rot = .center,
+    },
+    .{
+        .block = .block,
+        .loc = .{ 1, 0, 0 },
+        .rot = .center,
+    },
     .{
         .block = .repeater,
         .loc = .{ 2, 1, 0 },
