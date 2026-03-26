@@ -36,6 +36,7 @@ pub fn main() !void {
     try std.posix.getrandom(std.mem.asBytes(&seed));
 
     var placement = plc.placement_annealing(graph, seed, .{ .initial_temperature = 3, .moves_per_temperature = 8000, .initial_window_size = 80, .alpha = 0.5, .node_padding = 5 }).?;
+    defer placement.deinit(gpa);
     plc.print(graph, placement, graph.gpa);
     graphviz.printPlacement(graph.gpa, graph, placement);
     const tuples = plc.getThoseTuples(graph, placement, 0);
@@ -47,8 +48,6 @@ pub fn main() !void {
     // nbt.block_arr_to_schem(gpa, placementBlocks);
     var forbidden_zone = placement.toForbiddenzone(graph, 0);
     defer forbidden_zone.deinit();
-    placement.deinit(graph.gpa);
-    defer placement.deinit(gpa);
 
     var allBlocks: std.ArrayList(ms.AbsBlock) = .empty;
     defer allBlocks.deinit(gpa);

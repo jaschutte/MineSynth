@@ -6,8 +6,8 @@ const ms = @import("abstract/structures.zig");
 
 const Router = @This();
 
-max_iterations: u32 = 20,
-violation_cost_multiplier: u32 = 10.0,
+max_iterations: u32 = 100,
+violation_cost_multiplier: u32 = 20.0,
 heuristic_weight: f32 = 1.0,
 delay_cost_multiplier: u32 = 1.0, // cost = this * delay + length
 max_length: u32 = 1000, // dont explore dumb paths
@@ -294,9 +294,10 @@ fn updateViolations(a: std.mem.Allocator, nets: []Net) !void {
 
                             const net_is_branch = isHost(net, existing_net);
                             const existing_is_branch = isHost(existing_net, net);
+                            const shares_origin = coordEq(net.original_from, existing_net.original_from);
 
-                            if (net_is_branch or existing_is_branch) {
-                                // Find net's center status in the cell
+                            if (net_is_branch or existing_is_branch or shares_origin) {
+                                // Find net's center
                                 var net_is_center = false;
                                 for (info.nets[0..info.count], 0..) |n, j| {
                                     if (n == net) {
@@ -310,19 +311,20 @@ fn updateViolations(a: std.mem.Allocator, nets: []Net) !void {
                                     // Exemption: core-to-padding or padding-to-padding overlaps allowed anywhere
                                     is_violation = false;
                                 } else {
-                                    // Exemption: core-to-core overlaps allowed ONLY at the exact branch origin
-                                    const bp = if (net_is_branch) net.from else existing_net.from;
-                                    const support_coord = bp + WorldCoord{ 0, -1, 0 };
+                                    // Exemption: core-to-core overlaps allowed ONLY at branch origins or shared original roots
+                                    const bp1 = net.from;
+                                    const bp2 = existing_net.from;
+                                    const orig = net.original_from;
 
-                                    if (coordEq(fp.coord, bp) or coordEq(fp.coord, support_coord)) {
+                                    const is_valid_overlap =
+                                        coordEq(fp.coord, bp1) or coordEq(fp.coord, bp1 + WorldCoord{ 0, -1, 0 }) or
+                                        coordEq(fp.coord, bp2) or coordEq(fp.coord, bp2 + WorldCoord{ 0, -1, 0 }) or
+                                        coordEq(fp.coord, orig) or coordEq(fp.coord, orig + WorldCoord{ 0, -1, 0 });
+
+                                    if (is_valid_overlap) {
                                         is_violation = false;
                                     }
                                 }
-                            }
-
-                            if (is_violation) {
-                                existing_net.is_violating = true;
-                                net.is_violating = true;
                             }
                         }
                     }
@@ -348,7 +350,7 @@ fn optimizeBranchPoint(current_net: *Net, routed_nets: []Net, config: Router) vo
                 const dist = heuristic(fp.coord, current_net.to, config.delay_cost_multiplier);
                 if (dist < best_dist) {
                     best_dist = dist;
-                    best_fp = fp; // Capture the full NodeState
+                    best_fp = fp;
                 }
             }
         }
@@ -376,7 +378,7 @@ pub fn routeAll(a: std.mem.Allocator, seed: u32, pairs: []RoutePair, forbidden_z
     var v_nets: std.ArrayList(*Net) = .empty;
     defer v_nets.deinit(a);
 
-    // Initial routing pass
+    // initial
     for (pairs, 0..) |pair, i| {
         nets[i] = .{
             .id = i,
@@ -412,9 +414,6 @@ pub fn routeAll(a: std.mem.Allocator, seed: u32, pairs: []RoutePair, forbidden_z
     while (v_nets.items.len > 0 and iters < config.max_iterations) : (iters += 1) {
         // Calculate randomized sort weight
         for (v_nets.items) |net| {
-            // Base weight prioritizes failures, distance breaks ties, and jitter breaks deadlocks.
-            // A jitter larger than the multiplier (1500 > 1000) allows nets with N-1 failures
-            // to occasionally route before nets with N failures.
             const base_weight = net.failures * 1000;
             const dist = heuristic(net.from, net.to, config.delay_cost_multiplier) * 100;
             const random_jitter = random.intRangeLessThan(u32, 0, 200);
@@ -435,10 +434,8 @@ pub fn routeAll(a: std.mem.Allocator, seed: u32, pairs: []RoutePair, forbidden_z
             net.route = routeToUpdateForbiddenZone(a, net.from, net.from_signal, net.to, forbidden_zone, config, net.id) catch null;
         }
 
-        // Recalculate global collisions after all queued nets have re-routed
         try updateViolations(a, nets);
 
-        // Rebuild v_nets queue based on the updated global intersection map
         v_nets.clearRetainingCapacity();
         for (nets) |*net| {
             if (net.is_violating or net.route == null) {
@@ -496,7 +493,6 @@ fn heuristic(curr: WorldCoord, target: WorldCoord, delay_weight: u32) u32 {
     const dz = @abs(curr[2] - target[2]);
     const manhattan_f: u32 = (dx + dy + dz);
 
-    // Float division prevents massive heuristic cliffs
     const min_unavoidable_delay_cost = (manhattan_f / 30) * delay_weight;
 
     return manhattan_f + min_unavoidable_delay_cost;
@@ -506,8 +502,6 @@ fn queueOrder(context: void, a: QueueItem, b: QueueItem) std.math.Order {
     _ = context;
     const f_order = std.math.order(a.f, b.f);
     if (f_order == .eq) {
-        // Tie-breaker: If f is equal, prioritize the node with the higher g-cost
-        // because it has a smaller h-cost and is deeper in the search tree (closer to goal).
         return std.math.order(a.g, b.g).invert();
     }
     return f_order;
@@ -574,7 +568,6 @@ pub fn routeTo(a: std.mem.Allocator, from: WorldCoord, from_signal: u5, to: Worl
     var queue = std.PriorityQueue(QueueItem, void, queueOrder).init(a, {});
     defer queue.deinit();
 
-    // Dictionaries now key on NodeState (Coord + Signal Strength)
     var parents = std.AutoHashMap(NodeState, Parent).init(a);
     defer parents.deinit();
 
@@ -585,7 +578,6 @@ pub fn routeTo(a: std.mem.Allocator, from: WorldCoord, from_signal: u5, to: Worl
     try distances.put(start_state, 0);
     try queue.add(.{ .state = start_state, .g = 0, .f = heuristic(from, to, config.delay_cost_multiplier), .length = 0, .delay = 0 });
 
-    // Edge weights must be > 0. Scaled to reflect relative pathing delays/material costs.
     const moves = comptime blk: {
         var m: [comp.components.len * 4]Move = undefined;
         var idx = 0;
@@ -749,10 +741,9 @@ fn buildRouteBlocks(a: std.mem.Allocator, start_state: NodeState, final_state: N
                 .rot = rotated_rot,
             });
 
-            // Track the footprint using the build_blocks offset
             try footprints.append(a, .{
                 .coord = vec + rotated_coord,
-                .signal = p.prev.signal, // Use the signal entering this component
+                .signal = p.prev.signal,
                 .heading = move_dir,
             });
         }
