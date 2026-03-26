@@ -6,6 +6,7 @@ pub const ms = @import("abstract/structures.zig");
 
 pub fn blockcat_to_id(cat: ms.BlockCat) i8 {
     return switch (cat) {
+        .air => 0,
         .dust => 55,
         .repeater => 94,
         .torch => 76,
@@ -171,7 +172,7 @@ pub fn block_arr_to_schem(a: std.mem.Allocator, blocks: []const ms.SchemBlock) v
 
     // blocks and block data
 
-    const volume: u64 = length * height * width;
+    const volume: u64 = length * @as(u64, height * width);
     std.log.debug("nbt conversion dims: {d}x{d}x{d}, volume: {d}", .{ length, width, height, volume });
     var blocks_byte_arr = a.alloc(i8, volume) catch @panic("oom");
     @memset(blocks_byte_arr, 0);
@@ -180,9 +181,10 @@ pub fn block_arr_to_schem(a: std.mem.Allocator, blocks: []const ms.SchemBlock) v
     @memset(data_byte_arr, 0);
     defer a.free(data_byte_arr);
     for (blocks) |block| {
-        const idx = (block.loc[1] * length + block.loc[2]) * width + block.loc[0];
+        const idx: u64 = (@as(u64, block.loc[1] * length) + block.loc[2]) * width + block.loc[0];
         blocks_byte_arr[idx] = blockcat_to_id(block.block);
         data_byte_arr[idx] = switch (block.block) {
+            .air => 0,
             .dust => 0,
             .repeater => repeater_orientation_to_data(block.rot),
             .torch => torch_orientation_to_data(block.rot),
