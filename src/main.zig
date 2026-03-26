@@ -15,7 +15,7 @@ pub fn main() !void {
     const gpa = real_gpa.allocator();
     defer _ = real_gpa.deinit();
 
-    const content = try std.fs.cwd().readFileAlloc(gpa, "aiger-examples/half-adder.aag", std.math.maxInt(usize));
+    const content = try std.fs.cwd().readFileAlloc(gpa, "aiger-examples/serial-adder.aag", std.math.maxInt(usize));
     defer _ = gpa.free(content);
 
     const aig = try aiger.Aiger.parseAag(gpa, content);
@@ -40,14 +40,15 @@ pub fn main() !void {
     graphviz.printPlacement(graph.gpa, graph, placement);
     const tuples = plc.getThoseTuples(graph, placement, 0);
     defer gpa.free(tuples);
-    // plc.printThoseTuples(graph.gpa, tuples);
-    // graph.gpa.free(tuples);
+    // plc.printThoseTuples(gpa, tuples);
+    // gpa.free(tuples);
     const placementBlocks = placement.toBlocklist(graph, 0);
-    defer graph.gpa.free(placementBlocks);
+    defer gpa.free(placementBlocks);
     // nbt.block_arr_to_schem(gpa, placementBlocks);
     var forbidden_zone = placement.toForbiddenzone(graph, 0);
     defer forbidden_zone.deinit();
     placement.deinit(graph.gpa);
+    defer placement.deinit(gpa);
 
     var allBlocks: std.ArrayList(ms.AbsBlock) = .empty;
     defer allBlocks.deinit(gpa);
