@@ -12,7 +12,7 @@ pub const BasicBlock = enum {
 };
 
 // A position in the grid is just three usizes
-pub const Pos = [3]usize;
+pub const Pos = @Vector(3, usize);
 
 // A port can be an input or output port
 pub const PortDirection = enum { input, output };
@@ -23,7 +23,10 @@ pub const Port = struct {
 };
 
 // A net consists of a list of ports
-pub const Net = []Port;
+pub const Net = struct {
+    inputs: []Port,
+    outputs: []Port,
+};
 
 // Type of gate
 pub const InstanceKind = enum { and_gate, or_gate, inverter, input, output };
@@ -47,18 +50,18 @@ pub const Netlist = struct {
     instances: []Instance,
 };
 
+pub const PortPos = struct { pos: Pos, pow: u8 };
+
 // Describes a schematic as in the report
 // The size is implicit from the grid value.
 // All our cells have a port-independent end-to-end delay, so the
 // delay is just a single value.
-pub fn Schematic(comptime Block: type) type {
-    return struct {
-        inputs: []Pos, // Positions of the inputs
-        outputs: []Pos, // Positions of the outputs
-        grid: [][][]Block, // Grid of blocks, indexed with grid[x][y][z]
-        delay: usize, // End-to-end delay of the schematic
-    };
-}
+pub const Schematic = struct {
+    inputs: []PortPos, // Positions of the inputs
+    outputs: []PortPos, // Positions of the outputs
+    grid: [][][]BasicBlock, // Grid of blocks, indexed with grid[x][y][z]
+    delay: usize, // End-to-end delay of the Schematic
+};
 
 // Describes a placement of the instances of a netlist.
 // Together with a netlist D, Placement[i] indicates the chosen
