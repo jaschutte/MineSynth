@@ -132,7 +132,8 @@ pub const GateType = enum {
             .output => &computeForbiddenZone(&outputForbiddenCords, @Vector(3, u32){ size(.output).w, 2, size(.output).h }),
             .inverter => &computeForbiddenZone(&inverterForbiddenCords, @Vector(3, u32){ size(.inverter).w, 4, size(.inverter).h }),
             .and_gate => &computeForbiddenZone(&andGateForbiddenCoords, @Vector(3, u32){ size(.and_gate).w, 4, size(.and_gate).h }),
-            .or_gate => &orGateForbiddenCoords,
+            .or_gate => &computeForbiddenZone(&orGateForbiddenCoords, @Vector(3, u32){ size(.or_gate).w, 2, size(.or_gate).h }),
+            // .or_gate => &orGateForbiddenCoords,
         };
     }
 };
