@@ -25,6 +25,7 @@ pub fn main() !void {
     defer _ = netlist.deinit();
 
     var graph = glib.GraphConstructors.fromNetlist(gpa, &netlist);
+    defer graph.deinit();
     graphviz.GraphVisualizer(glib.GateBody).print(gpa, graph);
     glibopt.PreProcessor(glib.GateBody).preprocess(graph);
     sta.AAT(graph);
@@ -42,22 +43,21 @@ pub fn main() !void {
     var forbidden_zone = placement.toForbiddenzone(graph, 0);
     defer forbidden_zone.deinit();
     placement.deinit(graph.gpa);
-    defer graph.deinit();
 
     var allBlocks: std.ArrayList(ms.AbsBlock) = .empty;
     defer allBlocks.deinit(gpa);
 
-    var iter = forbidden_zone.iterator();
-    while (iter.next()) |entry| {
-        const coord = entry.key_ptr.*;
-        const info = entry.value_ptr.*;
-        _ = info; // autofix
-        try allBlocks.append(gpa, ms.AbsBlock{
-            .block = .block2,
-            .rot = .center,
-            .loc = .{ @as(ms.WorldCoordNum, coord[0]), @as(ms.WorldCoordNum, coord[1]), @as(ms.WorldCoordNum, coord[2]) },
-        });
-    }
+    // var iter = forbidden_zone.iterator();
+    // while (iter.next()) |entry| {
+    //     const coord = entry.key_ptr.*;
+    //     const info = entry.value_ptr.*;
+    //     _ = info; // autofix
+    //     try allBlocks.append(gpa, ms.AbsBlock{
+    //         .block = .block2,
+    //         .rot = .center,
+    //         .loc = .{ @as(ms.WorldCoordNum, coord[0]), @as(ms.WorldCoordNum, coord[1]), @as(ms.WorldCoordNum, coord[2]) },
+    //     });
+    // }
 
     for (placementBlocks) |block| {
         try allBlocks.append(gpa, ms.AbsBlock{

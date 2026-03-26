@@ -252,9 +252,11 @@ fn updateViolations(a: std.mem.Allocator, nets: []Net) !void {
 
     // Pass 1: Build the complete ownership map
     for (nets) |*net| {
-        net.is_violating = if (net.route) |*r| r.violating else false;
+        // net.is_violating = if (net.route) |*r| r.violating else false;
+        net.is_violating = false;
 
         if (net.route) |*r| {
+            r.violating = false;
             for (r.footprints.items) |fp| {
                 for (SURROUNDING_OFFSETS) |offset| {
                     const target = fp.coord + offset;
