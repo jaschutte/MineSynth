@@ -677,8 +677,12 @@ pub fn routeTo(a: std.mem.Allocator, from: WorldCoord, from_signal: u5, to: Worl
         }
     }
     if (final_state == null) {
-        std.log.info("A* completed with {d} iterations. Path not found.", .{counter});
-        std.log.err("Could not find a path to .{any}", .{to});
+        std.log.err("A* completed with {d} iterations. Path not found.", .{counter});
+        if (counter >= config.max_astar_iterations) {
+            std.log.err("A* reached maximum iteration limit of {d}.", .{config.max_astar_iterations});
+        } else {
+            std.log.err("A* explored all reachable states but did not find the target.", .{});
+        }
         return error.PathNotFound;
     }
 
