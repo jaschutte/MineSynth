@@ -10,8 +10,15 @@ pub const BuildBlock = struct {
     rot: ms.Orientation = .center,
 };
 
+pub const ComponentType = enum {
+    dust,
+    repeater,
+    staircase_up,
+    staircase_down,
+};
+
 pub const ComponentDef = struct {
-    name: []const u8,
+    cat: ComponentType,
     base_dir: WorldCoord,
     delay: u32,
     length: u32,
@@ -21,7 +28,7 @@ pub const ComponentDef = struct {
 };
 pub const components = [_]ComponentDef{
     .{
-        .name = "dust",
+        .cat = .dust,
         .base_dir = .{ 1, 0, 0 },
         .delay = 0,
         .length = 1,
@@ -33,7 +40,7 @@ pub const components = [_]ComponentDef{
         },
     },
     .{
-        .name = "repeater",
+        .cat = .repeater,
         .base_dir = .{ 3, 0, 0 },
         .delay = 1,
         .length = 3,
@@ -49,7 +56,7 @@ pub const components = [_]ComponentDef{
         },
     },
     .{
-        .name = "staircase_up",
+        .cat = .staircase_up,
         .base_dir = .{ 1, 1, 0 },
         .delay = 0,
         .length = 2,
@@ -62,7 +69,7 @@ pub const components = [_]ComponentDef{
         },
     },
     .{
-        .name = "staircase_down",
+        .cat = .staircase_down,
         .base_dir = .{ 1, -1, 0 },
         .delay = 0,
         .length = 2,

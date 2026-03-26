@@ -15,28 +15,28 @@ pub fn main() !void {
     const gpa = real_gpa.allocator();
     defer _ = real_gpa.deinit();
 
-    const content = try std.fs.cwd().readFileAlloc(gpa, "aiger-examples/serial-adder.aag", std.math.maxInt(usize));
-    defer _ = gpa.free(content);
+    // const content = try std.fs.cwd().readFileAlloc(gpa, "aiger-examples/serial-adder.aag", std.math.maxInt(usize));
+    // defer _ = gpa.free(content);
 
-    const aig = try aiger.Aiger.parseAag(gpa, content);
-    defer _ = aig.deinit();
+    // const aig = try aiger.Aiger.parseAag(gpa, content);
+    // defer _ = aig.deinit();
 
-    var netlist = try nl.Netlist.fromAiger(gpa, aig);
-    defer _ = netlist.deinit();
+    // var netlist = try nl.Netlist.fromAiger(gpa, aig);
+    // defer _ = netlist.deinit();
 
-    var graph = glib.GraphConstructors.fromNetlist(gpa, &netlist);
-    graphviz.GraphVisualizer(glib.GateBody).print(gpa, graph);
-    glibopt.PreProcessor(glib.GateBody).preprocess(graph);
-    sta.AAT(graph);
-    graphviz.GraphVisualizer(glib.GateBody).printDFS(gpa, graph);
-    var placement = plc.placement_annealing(graph, .{ .initial_temperature = 30, .moves_per_temperature = 10000 }).?;
-    plc.print(graph, placement, graph.gpa);
-    graphviz.printPlacement(graph.gpa, graph, placement);
-    const tuples = plc.getThoseTuples(graph, placement, 0);
-    // plc.printThoseTuples(graph.gpa, tuples);
-    graph.gpa.free(tuples);
-    placement.deinit(graph.gpa);
-    defer graph.deinit();
+    // var graph = glib.GraphConstructors.fromNetlist(gpa, &netlist);
+    // graphviz.GraphVisualizer(glib.GateBody).print(gpa, graph);
+    // glibopt.PreProcessor(glib.GateBody).preprocess(graph);
+    // sta.AAT(graph);
+    // graphviz.GraphVisualizer(glib.GateBody).printDFS(gpa, graph);
+    // var placement = plc.placement_annealing(graph, .{ .initial_temperature = 30, .moves_per_temperature = 10000 }).?;
+    // plc.print(graph, placement, graph.gpa);
+    // graphviz.printPlacement(graph.gpa, graph, placement);
+    // const tuples = plc.getThoseTuples(graph, placement, 0);
+    // // plc.printThoseTuples(graph.gpa, tuples);
+    // graph.gpa.free(tuples);
+    // placement.deinit(graph.gpa);
+    // defer graph.deinit();
 
     var forbidden_zone = ms.ForbiddenZone.init(gpa);
     defer forbidden_zone.deinit();
@@ -46,15 +46,16 @@ pub fn main() !void {
         .{ .{ 4, 0, 0 }, .{ 4, 0, 10 } },
         .{ .{ 0, 0, 12 }, .{ 5, 0, 12 } },
         .{ .{ 0, 0, -2 }, .{ 5, 0, -2 } },
-        .{ .{ -5, 0, 5 }, .{ 4, 0, 5 } }, // the violator
-        .{ .{ -20, 0, 0 }, .{ 40, 0, 0 } },
-        .{ .{ 10, 0, -20 }, .{ 10, 0, 20 } },
-        .{ .{ -20, 0, 10 }, .{ 40, 0, 10 } },
-        .{ .{ 30, 0, -30 }, .{ -10, 0, 30 } },
-        .{ .{ -40, 0, -10 }, .{ 20, 0, -10 } },
-        .{ .{ 0, 0, -40 }, .{ 0, 0, 40 } },
-        .{ .{ 50, 0, -50 }, .{ -20, 0, 20 } },
-        .{ .{ -50, 0, 40 }, .{ 30, 0, 50 } },
+        .{ .{ 0, 0, 0 }, .{ 5, 0, 5 } },
+        // .{ .{ -5, 0, 5 }, .{ 4, 0, 5 } }, // the violator
+        // .{ .{ -20, 0, 0 }, .{ 40, 0, 0 } },
+        // .{ .{ 10, 0, -20 }, .{ 10, 0, 20 } },
+        // .{ .{ -20, 0, 10 }, .{ 40, 0, 10 } },
+        // .{ .{ 30, 0, -30 }, .{ -10, 0, 30 } },
+        // .{ .{ -40, 0, -10 }, .{ 20, 0, -10 } },
+        // .{ .{ 0, 0, -40 }, .{ 0, 0, 40 } },
+        // .{ .{ 50, 0, -50 }, .{ -20, 0, 20 } },
+        // .{ .{ -50, 0, 40 }, .{ 30, 0, 50 } },
     };
 
     var pairs: std.ArrayList(rt.RoutePair) = .empty;
