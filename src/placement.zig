@@ -9,7 +9,7 @@ const structures = @import("abstract/structures.zig");
 // since schematic doesnt use negative coordinates, lets not bother with it here
 pub const postype = physical.PosType;
 const use_accurate_input_pos = false;
-const max_chipsize: u32 = 100;
+const max_chipsize: u32 = 200;
 // used to avoid reading out of index in the grid
 const max_cell_size: u32 = 6;
 
@@ -39,7 +39,7 @@ pub const AnnealingConfig = struct {
     grid_size: u8 = 1,
     // fix all in-output nodes to the same y axis
     initial_input_y: postype = 0,
-    initial_output_y: postype = 70,
+    initial_output_y: postype = 150,
     // for convenience:
     chip_height_coordinate: postype = 0,
     // to avoid unroutability:
@@ -88,6 +88,48 @@ pub const Placement = struct {
         self.input_nodes.deinit();
         self.output_nodes.deinit();
         allocator.destroy(self);
+    }
+
+    // returns new array containing all blocks in the placement.
+    pub fn toBlocklist(Self: *const Placement, the_graph: *const Graph, chip_height_coordinate: postype) []const structures.SchemBlock {
+        errdefer @panic("Download some RAM");
+        var results = std.ArrayList(structures.SchemBlock).empty;
+
+        var it = Self.locations.iterator();
+        while (it.next()) |entry| {
+            const pos = entry.value_ptr;
+            const node_id: glib.NodeId = entry.key_ptr.*;
+            const node = the_graph.getConstNode(node_id).?;
+            const blocks = node.body.kind.blockArray();
+            for (blocks) |block| {
+                const new_pos = @Vector(3, structures.SchemCoordNum){ @as(structures.SchemCoordNum, @truncate(pos.x)) + block.loc[0], @as(structures.SchemCoordNum, @truncate(chip_height_coordinate)) + block.loc[1], @as(structures.SchemCoordNum, @truncate(pos.y)) + block.loc[2] };
+                try results.append(the_graph.gpa, .{ .block = block.block, .loc = new_pos, .rot = block.rot });
+            }
+        }
+
+        return try results.toOwnedSlice(the_graph.gpa);
+    }
+
+    // returns new forbidden zone containing all coordinates to avoid during placement
+    pub fn toForbiddenzone(Self: *const Placement, the_graph: *const Graph, chip_height_coordinate: postype) structures.ForbiddenZone {
+        errdefer @panic("Download some RAM");
+        var forbidden_zone = structures.ForbiddenZone.init(the_graph.gpa);
+
+        var it = Self.locations.iterator();
+        while (it.next()) |entry| {
+            const pos = entry.value_ptr;
+            const node_id: glib.NodeId = entry.key_ptr.*;
+            const node = the_graph.getConstNode(node_id).?;
+            const coords = node.body.kind.forbiddenCoordsRelative();
+            for (coords) |coord| {
+                const new_pos = structures.WorldCoord{ @as(structures.WorldCoordNum, @intCast(pos.x)) + coord[0], @as(structures.WorldCoordNum, @intCast(chip_height_coordinate)) + coord[1], @as(structures.WorldCoordNum, @intCast(pos.y)) + coord[2] };
+                try forbidden_zone.put(new_pos, .{
+                    .ftype = .gate,
+                });
+            }
+        }
+
+        return forbidden_zone;
     }
 };
 
@@ -352,6 +394,9 @@ fn initialPlacement(the_graph: *const Graph, annealing_config: AnnealingConfig) 
     placement.output_y = annealing_config.initial_output_y + annealing_config.node_padding;
 
     const first_x_pos = annealing_config.grid_size + annealing_config.node_padding;
+    const max_gate_width = 3;
+
+    const spacing = if (annealing_config.initial_spacing < max_gate_width + annealing_config.node_padding) max_gate_width + annealing_config.node_padding else annealing_config.initial_spacing;
 
     // place input nodes:
     var x: postype = first_x_pos;
@@ -369,7 +414,7 @@ fn initialPlacement(the_graph: *const Graph, annealing_config: AnnealingConfig) 
             try placement.input_nodes.put(node_id, {});
             count += 1;
             std.debug.assert(placement.locations.count() == count);
-            x = x + annealing_config.initial_spacing;
+            x = x + spacing;
         }
     }
 
@@ -387,7 +432,7 @@ fn initialPlacement(the_graph: *const Graph, annealing_config: AnnealingConfig) 
             try placement.output_nodes.put(node_id, {});
             count += 1;
             std.debug.assert(placement.locations.count() == count);
-            x = x + annealing_config.initial_spacing;
+            x = x + spacing;
         }
     }
 
@@ -401,10 +446,10 @@ fn initialPlacement(the_graph: *const Graph, annealing_config: AnnealingConfig) 
         try place(placement, the_graph.getConstNode(node_id).?, x, y, .North, annealing_config.node_padding);
         count += 1;
         std.debug.assert(placement.locations.count() == count);
-        x = x + annealing_config.initial_spacing;
+        x = x + spacing;
         if (x >= annealing_config.initial_row_size * annealing_config.initial_spacing) {
             x = first_x_pos;
-            y = y + annealing_config.initial_spacing;
+            y = y + spacing;
         }
     }
     return placement;
@@ -875,24 +920,4 @@ pub fn printThoseTuples(gpa: std.mem.Allocator, those_tuples: []FancyTuple) void
 
     std.debug.print("{s}", .{string.written()});
     string.deinit();
-}
-
-// returns new array containing all blocks in the placement.
-pub fn toBlocklist(the_graph: *const Graph, the_placement: *Placement, chip_height_coordinate: postype) []const structures.SchemBlock {
-    errdefer @panic("Download some RAM");
-    var results = std.ArrayList(structures.SchemBlock).empty;
-
-    var it = the_placement.locations.iterator();
-    while (it.next()) |entry| {
-        const pos = entry.value_ptr;
-        const node_id: glib.NodeId = entry.key_ptr.*;
-        const node = the_graph.getConstNode(node_id).?;
-        const blocks = node.body.kind.blockArray();
-        for (blocks) |block| {
-            const new_pos = @Vector(3, structures.SchemCoordNum){ @as(structures.SchemCoordNum, @truncate(pos.x)) + block.loc[0], @as(structures.SchemCoordNum, @truncate(chip_height_coordinate)) + block.loc[1], @as(structures.SchemCoordNum, @truncate(pos.y)) + block.loc[2] };
-            try results.append(the_graph.gpa, .{ .block = block.block, .loc = new_pos, .rot = block.rot });
-        }
-    }
-
-    return try results.toOwnedSlice(the_graph.gpa);
 }

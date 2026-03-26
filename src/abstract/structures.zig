@@ -6,7 +6,8 @@ const dbg = builtin.mode == std.builtin.OptimizeMode.Debug;
 
 pub const SchemCoordNum = u16;
 pub const SchemCoord = @Vector(3, SchemCoordNum);
-pub const WorldCoord = @Vector(3, i32);
+pub const WorldCoordNum = i32;
+pub const WorldCoord = @Vector(3, WorldCoordNum);
 
 pub const BlockCat = enum {
     air,

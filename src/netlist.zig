@@ -80,25 +80,24 @@ pub const GateType = enum {
     }
 
     // assuming the default orientation (.north)
-    pub inline fn inputPositionsRelative(self: GateType) [2]?@Vector(3, i32) //physical.InputPositionsRelative
-    {
+    pub inline fn inputPositionsRelative(self: GateType) physical.InputPositionsRelative {
         return switch (self) {
-            .input => .{ @Vector(3, i32){ 0, 0, 1 }, null },
-            .output => .{ @Vector(3, i32){ 0, 0, 0 }, null },
-            .inverter => .{ @Vector(3, i32){ 1, 0, 0 }, null },
-            .and_gate => .{ @Vector(3, i32){ 1, 0, 0 }, @Vector(3, i32){ 3, 0, 0 } },
-            .or_gate => .{ @Vector(3, i32){ 1, 0, 0 }, @Vector(3, i32){ 3, 0, 0 } },
+            .input => .{ .{ 0, 1, 0 }, null },
+            .output => .{ .{ 0, 1, -1 }, null },
+            .inverter => .{ .{ 0, 1, -1 }, null },
+            .and_gate => .{ .{ 0, 1, -1 }, .{ 2, 1, -1 } },
+            .or_gate => .{ .{ -1, 1, 0 }, .{ 3, 1, 0 } },
         };
     }
 
     // assuming the default orientation (.north)
     pub inline fn outputPositionsRelative(self: GateType) physical.OutputPositionsRelative {
         return switch (self) {
-            .input => @Vector(3, i32){ 0, 0, 0 },
-            .output => @Vector(3, i32){ 0, 0, -1 },
-            .inverter => @Vector(3, i32){ 1, 0, 4 },
-            .and_gate => @Vector(3, i32){ 2, 0, 4 },
-            .or_gate => @Vector(3, i32){ 1, 0, 4 },
+            .input => .{ 0, 1, 1 },
+            .output => .{ 0, 1, 0 },
+            .inverter => .{ 0, 1, 3 },
+            .and_gate => .{ 1, 1, 3 },
+            .or_gate => .{ 1, 1, 0 },
         };
     }
 
@@ -125,7 +124,49 @@ pub const GateType = enum {
             .or_gate => &orGateBlocks,
         };
     }
+
+    // requires negative offsets, so we use worldcoord but it is still a relative position
+    pub inline fn forbiddenCoordsRelative(self: GateType) []const structures.WorldCoord {
+        return switch (self) {
+            .input => &computeForbiddenZone(&inputForbiddenCords, @Vector(3, u32){ size(.input).w, 2, size(.input).h }),
+            .output => &computeForbiddenZone(&outputForbiddenCords, @Vector(3, u32){ size(.output).w, 2, size(.output).h }),
+            .inverter => &computeForbiddenZone(&inverterForbiddenCords, @Vector(3, u32){ size(.inverter).w, 4, size(.inverter).h }),
+            .and_gate => &computeForbiddenZone(&andGateForbiddenCoords, @Vector(3, u32){ size(.and_gate).w, 4, size(.and_gate).h }),
+            .or_gate => &computeForbiddenZone(&orGateForbiddenCoords, @Vector(3, u32){ size(.or_gate).w, 2, size(.or_gate).h }),
+        };
+    }
 };
+
+// nicely comptime:
+fn computeForbiddenZone(
+    comptime additionalCords: []const structures.WorldCoord,
+    comptime size: @Vector(3, u32),
+) [additionalCords.len + (size[0] * size[1] * size[2])]structures.WorldCoord {
+    var result: [additionalCords.len + (size[0] * size[1] * size[2])]structures.WorldCoord = undefined;
+
+    // Copy array1
+    inline for (additionalCords, 0..) |v, i| {
+        result[i] = v;
+    }
+
+    // Generate rectangle coordinates
+    var idx: usize = additionalCords.len;
+
+    inline for (0..size[0]) |x| {
+        inline for (0..size[1]) |y| {
+            inline for (0..size[2]) |z| {
+                result[idx] = .{
+                    @as(structures.WorldCoordNum, @intCast(x)),
+                    @as(structures.WorldCoordNum, @intCast(y)),
+                    @as(structures.WorldCoordNum, @intCast(z)),
+                };
+                idx += 1;
+            }
+        }
+    }
+
+    return result;
+}
 
 const inputBlocks = [_]structures.SchemBlock{
     .{
@@ -140,6 +181,8 @@ const inputBlocks = [_]structures.SchemBlock{
     },
 };
 
+const inputForbiddenCords = [_]structures.WorldCoord{};
+
 const outputBlocks = [_]structures.SchemBlock{
     .{
         .block = .dust,
@@ -153,38 +196,7 @@ const outputBlocks = [_]structures.SchemBlock{
     },
 };
 
-const orGateBlocks = [_]structures.SchemBlock{
-    .{ // in1
-        .block = .repeater,
-        .loc = .{ 0, 1, 0 },
-        .rot = .east,
-    },
-    .{
-        .block = .block,
-        .loc = .{ 0, 0, 0 },
-        .rot = .center,
-    },
-    .{
-        .block = .dust,
-        .loc = .{ 1, 1, 0 },
-        .rot = .center,
-    },
-    .{
-        .block = .block,
-        .loc = .{ 1, 0, 0 },
-        .rot = .center,
-    },
-    .{
-        .block = .repeater,
-        .loc = .{ 2, 1, 0 },
-        .rot = .west,
-    },
-    .{
-        .block = .block,
-        .loc = .{ 2, 0, 0 },
-        .rot = .center,
-    },
-};
+const outputForbiddenCords = [_]structures.WorldCoord{};
 
 const inverterBlocks = [_]structures.SchemBlock{
     .{
@@ -207,6 +219,16 @@ const inverterBlocks = [_]structures.SchemBlock{
         .loc = .{ 0, 1, 2 },
         .rot = .south,
     },
+};
+
+const inverterForbiddenCords = [_]structures.WorldCoord{
+    .{ -1, 1, 1 }, // left of torch
+    .{ -1, 1, 2 }, // left of powered block
+    .{ 1, 1, 1 }, // right of torch
+    .{ 1, 1, 2 }, // right of powered block
+    .{ 0, 0, 2 }, // below torch
+    .{ 0, 0, 1 }, // below powered block
+    .{ 0, 2, 2 }, // above torch
 };
 
 const andGateBlocks = [_]structures.SchemBlock{
@@ -265,6 +287,51 @@ const andGateBlocks = [_]structures.SchemBlock{
         .loc = .{ 2, 2, 1 },
         .rot = .center,
     },
+};
+
+const andGateForbiddenCoords = [_]structures.WorldCoord{
+    .{ -1, 1, 1 }, // left of powered block
+    .{ -1, 0, 1 }, // left of torch
+    .{ -1, 1, 3 }, // right of powered block
+    .{ -1, 1, 3 }, // right of torch
+};
+
+const orGateBlocks = [_]structures.SchemBlock{
+    .{ // in1
+        .block = .repeater,
+        .loc = .{ 0, 1, 0 },
+        .rot = .east,
+    },
+    .{
+        .block = .block,
+        .loc = .{ 0, 0, 0 },
+        .rot = .center,
+    },
+    .{
+        .block = .dust,
+        .loc = .{ 1, 1, 0 },
+        .rot = .center,
+    },
+    .{
+        .block = .block,
+        .loc = .{ 1, 0, 0 },
+        .rot = .center,
+    },
+    .{
+        .block = .repeater,
+        .loc = .{ 2, 1, 0 },
+        .rot = .west,
+    },
+    .{
+        .block = .block,
+        .loc = .{ 2, 0, 0 },
+        .rot = .center,
+    },
+};
+
+const orGateForbiddenCoords = [_]structures.WorldCoord{
+    .{ 1, 1, -1 }, // before powered dust
+    .{ 1, 0, -1 }, // before powered block
 };
 
 pub const Gate = struct {

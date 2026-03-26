@@ -506,13 +506,12 @@ pub fn routeTo(a: std.mem.Allocator, from: WorldCoord, to: WorldCoord, forbidden
             }
         }
     }
-    std.log.info("A* completed with {d} iterations and final path cost of {any} if path found.", .{ counter, distances.get(final_state.?) });
-
     if (final_state == null) {
         std.log.err("Could not find a path to .{any}", .{to});
         return error.PathNotFound;
     }
 
+    std.log.info("A* completed with {d} iterations and final path cost of {any} if path found.", .{ counter, distances.get(final_state.?) });
     return try buildRouteBlocks(a, from, final_state.?, parents);
 }
 
