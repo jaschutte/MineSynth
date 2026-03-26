@@ -581,21 +581,22 @@ fn randomMove(the_graph: *const Graph, the_placement: *Placement, to_perturb: gl
     size_to_use = @divFloor(size_to_use, min_spacing);
 
     const pos = the_placement.locations.getPtr(to_perturb).?;
+    const min_pos = if (node_padding >= 1) node_padding else 1; // ensure nodes are always placed at least 1 block from the edge
 
     // these normalizations are to keep the average position universally distributed, so it may be omitted for performance just fine.
-    const min_to_use_x: i32 = -@min(@divFloor(pos.x - node_padding, min_spacing), size_to_use);
+    const min_to_use_x: i32 = -@min(@divFloor(pos.x - min_pos, min_spacing), size_to_use);
     const max_to_use_x: i32 = @min(@divFloor(max_chipsize - pos.x, min_spacing), size_to_use);
 
     const dx = random.intRangeLessThan(i32, min_to_use_x, max_to_use_x) * min_spacing;
-    const new_x: postype = clampU32WithDelta(pos.x, dx, max_chipsize, node_padding);
+    const new_x: postype = clampU32WithDelta(pos.x, dx, max_chipsize, min_pos);
 
     var new_y: ?postype = fixed_y_pos;
     if (fixed_y_pos == null) {
-        const min_to_use_y: i32 = -@min(@divFloor(pos.y - node_padding, min_spacing), size_to_use);
+        const min_to_use_y: i32 = -@min(@divFloor(pos.y - min_pos, min_spacing), size_to_use);
         const max_to_use_y: i32 = @min(@divFloor(max_chipsize - pos.y, min_spacing), size_to_use);
 
         const dy = random.intRangeLessThan(i32, min_to_use_y, max_to_use_y) * min_spacing;
-        new_y = clampU32WithDelta(pos.y, dy, max_chipsize, node_padding);
+        new_y = clampU32WithDelta(pos.y, dy, max_chipsize, min_pos);
     }
 
     const result = try tryMove(the_placement, the_graph.getConstNode(to_perturb).?, pos, new_x, new_y.?, node_padding);
