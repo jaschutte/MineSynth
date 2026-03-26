@@ -15,7 +15,7 @@ pub fn main() !void {
     const gpa = real_gpa.allocator();
     defer _ = real_gpa.deinit();
 
-    const content = try std.fs.cwd().readFileAlloc(gpa, "aiger-examples/half-adder.aag", std.math.maxInt(usize));
+    const content = try std.fs.cwd().readFileAlloc(gpa, "aiger-examples/serial-adder.aag", std.math.maxInt(usize));
     defer _ = gpa.free(content);
 
     const aig = try aiger.Aiger.parseAag(gpa, content);
@@ -29,19 +29,19 @@ pub fn main() !void {
     glibopt.PreProcessor(glib.GateBody).preprocess(graph);
     sta.AAT(graph);
     graphviz.GraphVisualizer(glib.GateBody).printDFS(gpa, graph);
-    var placement = plc.placement_annealing(graph, .{ .initial_temperature = 3, .moves_per_temperature = 8000, .initial_window_size = 80, .alpha = 0.5, .node_padding = 5 }).?;
-    plc.print(graph, placement, graph.gpa);
-    graphviz.printPlacement(graph.gpa, graph, placement);
+    var placement = plc.placement_annealing(graph, .{ .initial_temperature = 30, .moves_per_temperature = 8000, .initial_window_size = 100, .alpha = 0.9, .node_padding = 1 }).?;
+    plc.print(graph, placement, gpa);
+    graphviz.printPlacement(gpa, graph, placement);
     const tuples = plc.getThoseTuples(graph, placement, 0);
     defer gpa.free(tuples);
-    // plc.printThoseTuples(graph.gpa, tuples);
-    // graph.gpa.free(tuples);
+    // plc.printThoseTuples(gpa, tuples);
+    // gpa.free(tuples);
     const placementBlocks = placement.toBlocklist(graph, 0);
-    defer graph.gpa.free(placementBlocks);
+    defer gpa.free(placementBlocks);
     // nbt.block_arr_to_schem(gpa, placementBlocks);
     var forbidden_zone = placement.toForbiddenzone(graph, 0);
     defer forbidden_zone.deinit();
-    placement.deinit(graph.gpa);
+    defer placement.deinit(gpa);
     defer graph.deinit();
 
     var allBlocks: std.ArrayList(ms.AbsBlock) = .empty;

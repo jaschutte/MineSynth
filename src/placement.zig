@@ -6,12 +6,11 @@ const netlist = @import("netlist.zig");
 const structures = @import("abstract/structures.zig");
 
 // comptime or private variables:
-// since schematic doesnt use negative coordinates, lets not bother with it here
 pub const postype = physical.PosType;
 const use_accurate_input_pos = false;
-const max_chipsize: u32 = 200;
+const max_chipsize: u32 = 300;
 // used to avoid reading out of index in the grid
-const max_cell_size: u32 = 6;
+const max_cell_size: u32 = 3;
 
 pub const AnnealingConfig = struct {
     // - "The annealing process starts at a high temperature, such as 4*10^6"
@@ -395,7 +394,7 @@ fn initialPlacement(the_graph: *const Graph, annealing_config: AnnealingConfig) 
     placement.output_y = annealing_config.initial_output_y + annealing_config.node_padding;
 
     const first_x_pos = annealing_config.grid_size + annealing_config.node_padding;
-    const max_gate_width = 3;
+    const max_gate_width = max_cell_size;
 
     const spacing = if (annealing_config.initial_spacing < max_gate_width + annealing_config.node_padding) max_gate_width + annealing_config.node_padding else annealing_config.initial_spacing;
 
@@ -458,7 +457,22 @@ fn initialPlacement(the_graph: *const Graph, annealing_config: AnnealingConfig) 
 
 // computes the cost of the given placement
 fn cost(the_graph: *const Graph, the_placement: *const Placement, annealing_config: AnnealingConfig) f32 {
-    return costWireLength(the_graph, the_placement, annealing_config); // + costOverlap(the_graph, the_placement);
+    return costWireLength(the_graph, the_placement, annealing_config) + computeCongestion(the_graph, the_placement, annealing_config); // + costOverlap(the_graph, the_placement);
+}
+
+// computes wire length estimation of given net
+fn HPWL(the_graph: *const Graph, the_placement: *const Placement, annealing_config: AnnealingConfig, net: *const glib.GateGraph.Edge) f32 {
+    const positions = getPortAbsolutePositions(the_graph, the_placement, net, use_accurate_input_pos, annealing_config.chip_height_coordinate).?;
+
+    const port_pos_from = positions[0];
+    const port_pos_to = positions[1];
+
+    const diff_x = if (port_pos_to[0] > port_pos_from[0]) port_pos_to[0] - port_pos_from[0] else port_pos_from[0] - port_pos_to[0];
+    const net_width = @as(f32, @floatFromInt(diff_x));
+    const diff_y = if (port_pos_to[2] > port_pos_from[2]) port_pos_to[2] - port_pos_from[2] else port_pos_from[2] - port_pos_to[2];
+    const net_height = @as(f32, @floatFromInt(diff_y));
+
+    return net_width * annealing_config.x_weight + net_height * annealing_config.y_weight;
 }
 
 fn costWireLength(the_graph: *const Graph, the_placement: *const Placement, annealing_config: AnnealingConfig) f32 {
@@ -466,21 +480,86 @@ fn costWireLength(the_graph: *const Graph, the_placement: *const Placement, anne
     var it = the_graph.edges.iterator();
     while (it.next()) |entry| {
         const net = entry.value_ptr;
-        const positions = getPortAbsolutePositions(the_graph, the_placement, net, use_accurate_input_pos, annealing_config.chip_height_coordinate).?;
-
-        const port_pos_from = positions[0];
-        const port_pos_to = positions[1];
-
-        const diff_x = if (port_pos_to[0] > port_pos_from[0]) port_pos_to[0] - port_pos_from[0] else port_pos_from[0] - port_pos_to[0];
-        const net_width = @as(f32, @floatFromInt(diff_x));
-        const diff_y = if (port_pos_to[2] > port_pos_from[2]) port_pos_to[2] - port_pos_from[2] else port_pos_from[2] - port_pos_to[2];
-        const net_height = @as(f32, @floatFromInt(diff_y));
-
-        const netcost = net_width * annealing_config.x_weight + net_height * annealing_config.y_weight;
+        const netcost = HPWL(the_graph, the_placement, annealing_config, net);
         sum = sum + netcost;
     }
 
     return annealing_config.wire_cost_weight * sum;
+}
+
+const cell = struct {};
+
+const cell_size_temp: f32 = 10; // in blocks
+const widthtemp: u32 = max_chipsize / cell_size_temp;
+const heighttemp: u32 = max_chipsize / cell_size_temp;
+const capacity: f32 = cell_size_temp / 2 * 2; // every 2 blocks 1 wire, and approximately 2 layers are used
+
+const Density = struct {
+    width: u32 = widthtemp,
+    height: u32 = heighttemp,
+    cell_size_x: f32,
+    cell_size_y: f32,
+    demand_grid: [widthtemp][heighttemp]f32,
+};
+
+// congestion!
+fn computeCongestion(the_graph: *const Graph, the_placement: *const Placement, annealing_config: AnnealingConfig) f32 {
+    var grid: Density = .{ .cell_size_x = cell_size_temp, .cell_size_y = cell_size_temp, .demand_grid = std.mem.zeroes([widthtemp][heighttemp]f32) };
+    var it = the_graph.edges.iterator();
+    while (it.next()) |entry| {
+        const net = entry.value_ptr;
+        add_rudy_fast(the_graph, the_placement, annealing_config, net, &grid);
+    }
+    var sum: f32 = 0;
+    for (0..widthtemp) |i| {
+        for (0..heighttemp) |j| {
+            // punish when it is over capacity.
+            sum += (std.math.pow(f32, grid.demand_grid[i][j] / capacity, 2));
+        }
+    }
+    return sum;
+}
+
+fn add_rudy_fast(the_graph: *const Graph, the_placement: *const Placement, annealing_config: AnnealingConfig, net: *const glib.GateGraph.Edge, grid: *Density) void {
+    const positions = getPortAbsolutePositions(the_graph, the_placement, net, use_accurate_input_pos, annealing_config.chip_height_coordinate).?;
+
+    const port_pos_from = positions[0];
+    const port_pos_to = positions[1];
+
+    const xmax: f32 = if (port_pos_from[0] > port_pos_to[0]) @floatFromInt(port_pos_from[0]) else @floatFromInt(port_pos_to[0]);
+    const xmin: f32 = if (port_pos_from[0] < port_pos_to[0]) @floatFromInt(port_pos_from[0]) else @floatFromInt(port_pos_to[0]);
+    const ymax: f32 = if (port_pos_from[1] > port_pos_to[1]) @floatFromInt(port_pos_from[1]) else @floatFromInt(port_pos_to[1]);
+    const ymin: f32 = if (port_pos_from[1] < port_pos_to[1]) @floatFromInt(port_pos_from[1]) else @floatFromInt(port_pos_to[1]);
+    const netlength = HPWL(the_graph, the_placement, annealing_config, net);
+    // std.debug.print("netlength: {d}\n", .{netlength});
+    // std.debug.print("(xmax - xmin): {d}\n", .{(xmax - xmin)});
+    // std.debug.print("(ymax - ymin): {d}\n", .{(ymax - ymin)});
+    // std.debug.print("((xmax - xmin) * (ymax - ymin) + epsilon): {d}\n", .{((xmax - xmin) * (ymax - ymin) + epsilon)});
+    const density = netlength / ((xmax - xmin + 1) * (ymax - ymin + 1));
+
+    const gx_min: u32 = @intFromFloat(@floor(xmin / grid.cell_size_x));
+    const gx_max: u32 = @intFromFloat(@floor(xmax / grid.cell_size_x));
+
+    const gy_min: u32 = @intFromFloat(@floor(ymin / grid.cell_size_y));
+    const gy_max: u32 = @intFromFloat(@floor(ymax / grid.cell_size_y));
+
+    const gx_min_clamp = std.math.clamp(gx_min, 0, grid.width - 1);
+    const gx_max_clamp = std.math.clamp(gx_max, 0, grid.width - 1);
+    const gy_min_clamp = std.math.clamp(gy_min, 0, grid.height - 1);
+    const gy_max_clamp = std.math.clamp(gy_max, 0, grid.height - 1);
+
+    if (@as(f32, @floatFromInt(grid.width)) < grid.cell_size_x and @as(f32, @floatFromInt(grid.height)) < grid.cell_size_y) {
+        const gx: u32 = @intFromFloat(@floor(xmin / grid.cell_size_x));
+        const gy: u32 = @intFromFloat(@floor(ymin / grid.cell_size_y));
+        grid.demand_grid[gx][gy] += netlength;
+        return;
+    }
+
+    for (gx_min_clamp..gx_max_clamp + 1) |gx| {
+        for (gy_min_clamp..gy_max_clamp + 1) |gy| {
+            grid.demand_grid[gx][gy] += density;
+        }
+    }
 }
 
 // depricated, movements now do not cause overlap at all
@@ -863,9 +942,10 @@ pub fn placement_annealing(the_graph: *const Graph, annealing_config: AnnealingC
         } // exit loop if in equilibrium at this temperature
 
         print(the_graph, current_placement, the_graph.gpa);
+        const debug_congestion_cost = computeCongestion(the_graph, current_placement, annealing_config);
         std.log.info(
-            "Cost: {d}, Temp: {d}, windowsize: {d}\n",
-            .{ lastCost, temperature, current_window_size },
+            "Cost: {d}, of which congestionCost: {d}, Temp: {d}, windowsize: {d}\n",
+            .{ lastCost, debug_congestion_cost, temperature, current_window_size },
         );
         // compute wnext=wcurr*(log(tnext)/log(tcurr)):
         current_window_size = current_window_size * (std.math.log10(temperature * alpha) / std.math.log10(temperature));
