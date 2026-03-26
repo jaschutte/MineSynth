@@ -10,7 +10,8 @@ max_iterations: u32 = 10,
 violation_cost_multiplier: u32 = 10.0,
 heuristic_weight: f32 = 1.0,
 delay_cost_multiplier: u32 = 1.0, // cost = this * delay + length
-max_cost: u32 = 1000000, // dont explore dumb paths
+max_cost: u32 = 1000, // dont explore dumb paths
+max_astar_iterations: u32 = 40000,
 
 // typedefs
 const WorldCoord = ms.WorldCoord;
@@ -389,13 +390,15 @@ pub fn routeAll(a: std.mem.Allocator, pairs: []RoutePair, forbidden_zone: *ms.Fo
         };
         optimizeBranchPoint(&nets[i], nets[0..i], config);
         std.log.info("Routing net {} from {any} to {any}", .{ i, nets[i].from, nets[i].to });
-        nets[i].route = try routeToUpdateForbiddenZone(a, nets[i].from, nets[i].from_signal, nets[i].to, forbidden_zone, config, nets[i].id);
+        nets[i].route = routeToUpdateForbiddenZone(a, nets[i].from, nets[i].from_signal, nets[i].to, forbidden_zone, config, nets[i].id) catch null;
     }
 
     // Evaluate global collisions and populate v_nets
     try updateViolations(a, nets);
     for (nets) |*net| {
-        std.log.info("Initial route for net from {any} to {any} has delay {d} and violating={any}", .{ net.from, net.to, net.route.?.delay, net.is_violating });
+        if (net.route) |r| {
+            std.log.info("Initial route for net from {any} to {any} has delay {d} and violating={any}", .{ net.from, net.to, r.delay, net.is_violating });
+        }
         if (net.is_violating) {
             try v_nets.append(a, net);
         }
@@ -415,7 +418,7 @@ pub fn routeAll(a: std.mem.Allocator, pairs: []RoutePair, forbidden_zone: *ms.Fo
             ripUp(net, forbidden_zone, a);
             optimizeBranchPoint(net, nets, config);
             std.log.info("Re-routing net from {any} to {any} with {} failures", .{ net.from, net.to, net.failures });
-            net.route = try routeToUpdateForbiddenZone(a, net.from, net.from_signal, net.to, forbidden_zone, config, net.id);
+            net.route = routeToUpdateForbiddenZone(a, net.from, net.from_signal, net.to, forbidden_zone, config, net.id) catch null;
         }
 
         // Recalculate global collisions after all queued nets have re-routed
@@ -580,7 +583,7 @@ pub fn routeTo(a: std.mem.Allocator, from: WorldCoord, from_signal: u5, to: Worl
     var final_state: ?NodeState = null;
 
     var counter: usize = 0;
-    while (queue.count() > 0) {
+    while (queue.count() > 0 and counter < config.max_astar_iterations) {
         counter += 1;
         const item = queue.removeOrNull().?;
         const u_state = item.state;
@@ -669,13 +672,12 @@ pub fn routeTo(a: std.mem.Allocator, from: WorldCoord, from_signal: u5, to: Worl
             }
         }
     }
-    std.log.info("A* completed with {d} iterations and final path cost of {any} if path found.", .{ counter, distances.get(final_state.?) });
-
     if (final_state == null) {
         std.log.err("Could not find a path to .{any}", .{to});
         return error.PathNotFound;
     }
 
+    std.log.info("A* completed with {d} iterations and final path cost of {any} if path found.", .{ counter, distances.get(final_state.?) });
     return try buildRouteBlocks(a, start_state, final_state.?, parents);
 }
 
