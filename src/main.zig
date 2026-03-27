@@ -15,7 +15,9 @@ pub fn main() !void {
     const gpa = real_gpa.allocator();
     defer _ = real_gpa.deinit();
 
-    const content = try std.fs.cwd().readFileAlloc(gpa, "aiger-examples/serial-adder.aag", std.math.maxInt(usize));
+    // const content = try std.fs.cwd().readFileAlloc(gpa, "aiger-examples/serial-adder.aag", std.math.maxInt(usize));
+    // const content = try std.fs.cwd().readFileAlloc(gpa, "aiger-examples/4bit-adder.aag", std.math.maxInt(usize));
+    const content = try std.fs.cwd().readFileAlloc(gpa, "aiger-examples/half-adder.aag", std.math.maxInt(usize));
     defer _ = gpa.free(content);
 
     const aig = try aiger.Aiger.parseAag(gpa, content);
@@ -52,6 +54,12 @@ pub fn main() !void {
     var allBlocks: std.ArrayList(ms.AbsBlock) = .empty;
     defer allBlocks.deinit(gpa);
 
+    // @import("new_routing.zig").route(gpa, graph, placement);
+    var routing = @import("new_routing.zig").Routing.new(gpa, graph, placement);
+
+    const routes = routing.route();
+    std.debug.print("ROUTED ALL {}!\n", .{routes.len});
+
     // var iter = forbidden_zone.iterator();
     // while (iter.next()) |entry| {
     //     const coord = entry.key_ptr.*;
@@ -72,21 +80,49 @@ pub fn main() !void {
         });
     }
 
-    var pairs: std.ArrayList(rt.RoutePair) = .empty;
-    defer pairs.deinit(gpa);
-    for (tuples) |tuple| {
-        try pairs.append(gpa, rt.RoutePair{
-            .from = .{ @as(ms.WorldCoordNum, @intCast(tuple.x[0])), @as(ms.WorldCoordNum, @intCast(tuple.x[1])), @as(ms.WorldCoordNum, @intCast(tuple.x[2])) },
-            .to = .{ @as(ms.WorldCoordNum, @intCast(tuple.y[0])), @as(ms.WorldCoordNum, @intCast(tuple.y[1])), @as(ms.WorldCoordNum, @intCast(tuple.y[2])) },
+    for (routing.edge_locations.values()) |locations| {
+        try allBlocks.append(gpa, ms.AbsBlock{
+            .block = .block3,
+            .rot = .center,
+            .loc = @truncate(locations.a),
+        });
+        try allBlocks.append(gpa, ms.AbsBlock{
+            .block = .block3,
+            .rot = .center,
+            .loc = @truncate(locations.b),
         });
     }
 
-    var route = rt.routeAll(gpa, seed, pairs.items, &forbidden_zone, .{}) catch |err| {
-        std.debug.print("Routing failed: {}\n", .{err});
-        return;
-    };
-    defer route.deinit(gpa);
-    try allBlocks.appendSlice(gpa, route.route.items);
+    // std.debug.print("{} <--> {}\n", .{routing.min_coord, routing.max_coord});
+    // var x = routing.min_coord[0];
+    // while (x <= routing.max_coord[0]) {
+    //     var z = routing.min_coord[2];
+    //     while (z <= routing.max_coord[2]) {
+    //         try allBlocks.append(gpa, ms.AbsBlock{
+    //             .block = .block3,
+    //             .rot = .center,
+    //             .loc = .{ @truncate(x), 0, @truncate(z) },
+    //         });
+    //         z += 1;
+    //     }
+    //     x += 1;
+    // }
+
+    // var pairs: std.ArrayList(rt.RoutePair) = .empty;
+    // defer pairs.deinit(gpa);
+    // for (tuples) |tuple| {
+    //     try pairs.append(gpa, rt.RoutePair{
+    //         .from = .{ @as(ms.WorldCoordNum, @intCast(tuple.x[0])), @as(ms.WorldCoordNum, @intCast(tuple.x[1])), @as(ms.WorldCoordNum, @intCast(tuple.x[2])) },
+    //         .to = .{ @as(ms.WorldCoordNum, @intCast(tuple.y[0])), @as(ms.WorldCoordNum, @intCast(tuple.y[1])), @as(ms.WorldCoordNum, @intCast(tuple.y[2])) },
+    //     });
+    // }
+    //
+    // var route = rt.routeAll(gpa, seed, pairs.items, &forbidden_zone, .{}) catch |err| {
+    //     std.debug.print("Routing failed: {}\n", .{err});
+    //     return;
+    // };
+    // defer route.deinit(gpa);
+    // try allBlocks.appendSlice(gpa, route.route.items);
 
     // visualize forbidden zone
 
