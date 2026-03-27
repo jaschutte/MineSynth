@@ -1,7 +1,7 @@
 const std = @import("std");
-const Graph = @import("abstract/graph.zig").Graph;
 const physical = @import("physical.zig");
-const glib = @import("abstract/graph.zig");
+const glib = @import("graph/graph.zig");
+const Graph = glib.Graph;
 
 // set metadata to timing
 pub fn initializeTimingMetadata(the_graph: *const glib.GateGraph) void {

@@ -1,3 +1,5 @@
+const library = @import("library.zig");
+
 // The block types as in the report
 pub const BasicBlock = enum {
     undef,
@@ -23,13 +25,15 @@ pub const Port = struct {
 };
 
 // A net consists of a list of ports
+// For simpler implementation in some places, the hyperedges in the netlist as
+// described in the report are collapsed to individual edges from output ports
+// to input ports. All Net structs with the same `net` value belong to the same net.
 pub const Net = struct {
-    inputs: []Port,
-    outputs: []Port,
+    net: usize, // The id of the net that this edge belongs to
+    input: Port, // The input port on this net
+    output: Port, // The output port on this net
 };
 
-// Type of gate
-pub const InstanceKind = enum { and_gate, or_gate, inverter, input, output };
 // Possible variants of the gate
 // pub const InstanceVariant = enum { north, east, south, west };
 // Placement of a gate in a grid
@@ -38,7 +42,8 @@ pub const InstancePlacement = struct {
     variant: *Schematic(BasicBlock),
 };
 pub const Instance = struct {
-    kind: InstanceKind,
+    kind: library.InstanceKind,
+    symbol: []const u8,
 };
 
 // Describes a netlist as in the report

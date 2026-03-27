@@ -1,5 +1,5 @@
 const std = @import("std");
-pub const Graph = @import("graph.zig");
+pub const Graph = @import("../graph/graph.zig");
 
 const builtin = @import("builtin");
 const dbg = builtin.mode == std.builtin.OptimizeMode.Debug;

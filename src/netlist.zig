@@ -1,5 +1,5 @@
 const std = @import("std");
-const aiger = @import("aiger.zig");
+const aiger = @import("normalization/aiger.zig");
 const physical = @import("physical.zig");
 const structures = @import("abstract/structures.zig");
 
@@ -415,7 +415,7 @@ pub const Netlist = struct {
         return self.gates.items[ptr].kind.size();
     }
 
-    pub inline fn getGateDelay(self: *const Self, ptr: GatePtr) u8 {
+    pub inline fn getGateDelay(self: *const Self, ptr: GatePtr) u32 {
         return self.gates.items[ptr].kind.delay();
     }
 

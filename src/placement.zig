@@ -1,5 +1,5 @@
 const std = @import("std");
-const glib = @import("abstract/graph.zig");
+const glib = @import("graph/graph.zig");
 const Graph = glib.GateGraph;
 const physical = @import("physical.zig");
 const netlist = @import("netlist.zig");
