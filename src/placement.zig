@@ -506,7 +506,7 @@ fn initialPlacement(the_graph: *const Graph, annealing_config: AnnealingConfig) 
 
 // computes the cost of the given placement
 fn cost(the_graph: *const Graph, the_placement: *const Placement, annealing_config: AnnealingConfig) f32 {
-    return costWireLength(the_graph, the_placement, annealing_config) + computeCongestion(the_graph, the_placement, annealing_config, false); // + costOverlap(the_graph, the_placement);
+    return costWireLength(the_graph, the_placement, annealing_config) + computeCongestionRUDY(the_graph, the_placement, annealing_config, false); // + costOverlap(the_graph, the_placement);
 }
 
 // computes wire length estimation of given net
@@ -550,18 +550,18 @@ const Density = struct {
 };
 
 // congestion!
-fn computeCongestion(the_graph: *const Graph, the_placement: *const Placement, annealing_config: AnnealingConfig, printthisgrid: bool) f32 {
+fn computeCongestionRUDY(the_graph: *const Graph, the_placement: *const Placement, annealing_config: AnnealingConfig, printthisgrid: bool) f32 {
     var grid: Density = .{ .cell_size_x = cell_size_temp, .cell_size_y = cell_size_temp, .demand_grid = std.mem.zeroes([widthtemp][heighttemp]f32) };
     var it = the_graph.edges.iterator();
     while (it.next()) |entry| {
         const net = entry.value_ptr;
-        add_rudy_fast(the_graph, the_placement, annealing_config, net, &grid);
+        computeNetRUDY(the_graph, the_placement, annealing_config, net, &grid);
     }
     var sum: f32 = 0;
     for (0..widthtemp) |i| {
         for (0..heighttemp) |j| {
             // punish when it is over capacity.
-            sum += (std.math.pow(f32, grid.demand_grid[i][j] / capacity, 2));
+            sum += grid.demand_grid[i][j];
         }
     }
 
@@ -574,7 +574,7 @@ fn computeCongestion(the_graph: *const Graph, the_placement: *const Placement, a
     return sum * annealing_config.congestion_cost_weight;
 }
 
-fn add_rudy_fast(the_graph: *const Graph, the_placement: *const Placement, annealing_config: AnnealingConfig, net: *const glib.GateGraph.Edge, grid: *Density) void {
+fn computeNetRUDY(the_graph: *const Graph, the_placement: *const Placement, annealing_config: AnnealingConfig, net: *const glib.GateGraph.Edge, grid: *Density) void {
     const positions = getPortAbsolutePositions(the_graph, the_placement, net, use_accurate_input_pos, annealing_config.chip_height_coordinate).?;
 
     const port_pos_from = positions[0];
@@ -609,39 +609,6 @@ fn add_rudy_fast(the_graph: *const Graph, the_placement: *const Placement, annea
             grid.demand_grid[gx][gy] += density;
         }
     }
-}
-
-// depricated, movements now do not cause overlap at all
-fn computeOverlapArea(the_graph: *const Graph, the_placement: *const Placement, i: glib.NodeId, j: glib.NodeId) f32 {
-    if (i == j) return 0;
-
-    const sizei = the_graph.getConstNode(i).?.body.kind.size();
-    const sizej = the_graph.getConstNode(j).?.body.kind.size();
-    const ipos = the_placement.locations.getPtr(i).?;
-    const jpos = the_placement.locations.getPtr(j).?;
-
-    const x_overlap = @max(0, @min(ipos.x + @as(i32, @intCast(sizei.w)), jpos.x + @as(i32, @intCast(sizej.w))) -
-        @max(ipos.x, jpos.x));
-
-    const y_overlap = @max(0, @min(ipos.y + @as(i32, @intCast(sizei.h)), jpos.y + @as(i32, @intCast(sizej.h))) -
-        @max(ipos.y, jpos.y));
-
-    return @floatFromInt(x_overlap * y_overlap);
-}
-
-// computationally expensive :(
-// but unused, since movements do not cause overlaps
-fn costOverlap(the_graph: *const Graph, the_placement: *const Placement) f32 {
-    var sum: f32 = 0;
-
-    for (the_placement.locations.keys()) |i| {
-        for (the_placement.locations.keys()) |j| {
-            const overlap = computeOverlapArea(the_graph, the_placement, i, j);
-            sum += overlap * overlap;
-        }
-    }
-
-    return sum;
 }
 
 // places node at position without checking for collisions, used by initial placement.
@@ -986,7 +953,7 @@ pub fn placement_annealing(the_graph: *const Graph, seed: u32, annealing_config:
 
         print(the_graph, current_placement, the_graph.gpa);
 
-        const debug_congestion_cost = computeCongestion(the_graph, current_placement, annealing_config, true);
+        const debug_congestion_cost = computeCongestionRUDY(the_graph, current_placement, annealing_config, true);
         std.log.info(
             "Cost: {d}, of which congestionCost: {d}, Temp: {d}, windowsize: {d}\n",
             .{ lastCost, debug_congestion_cost, temperature, current_window_size },
