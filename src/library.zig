@@ -16,13 +16,13 @@ pub const InstanceKind = enum {
     // TODO: For the love of god, make this return a reference to
     // the schematic that was built once and then stored in one variable
     // or another
-    pub fn modelSchematic(self: InstanceKind) model.Schematic {
+    pub fn modelSchematic(self: InstanceKind) type {
         return switch (self) {
-            .input => getSchematic(&Input),
-            .output => getSchematic(&Output),
-            .inverter => getSchematic(&Inverter),
-            .and_gate => getSchematic(&AndGate),
-            .or_gate => getSchematic(&OrGate),
+            .input => getSchematic(Input),
+            .output => getSchematic(Output),
+            .inverter => getSchematic(Inverter),
+            .and_gate => getSchematic(AndGate),
+            .or_gate => getSchematic(OrGate),
         };
     }
 
@@ -75,62 +75,103 @@ pub const MinecraftSchematic = struct {
 // I am fighting with comptime and comptime won
 // getSchematic should be precalculated either at startup or at comptime
 // for all schematics.
-pub fn getSchematic(self: *MinecraftSchematic) model.Schematic {
+pub fn getSchematic(comptime self: MinecraftSchematic) model.Schematic {
     if (self.blocks.len == 0) @panic("cry");
-    const first = self.blocks[0];
-    var xmin, var xmax, var ymin, var ymax, var zmin, var zmax = .{ first.loc[0], first.loc[0], first.loc[1], first.loc[1], first.loc[2], first.loc[2] };
-    for (self.blocks) |*block| {
-        xmin = @min(xmin, block.loc[0]);
-        ymin = @min(ymin, block.loc[1]);
-        zmin = @min(zmin, block.loc[2]);
-        xmax = @max(xmax, block.loc[0]);
-        ymax = @max(ymax, block.loc[1]);
-        zmax = @max(zmax, block.loc[2]);
-    }
 
-    const xlen = xmax - xmin + 1;
-    const ylen = ymax - ymin + 1;
-    const zlen = zmax - zmin + 1;
+    const dims = comptime blk: {
+        const first = self.blocks[0];
+        var xmin, var xmax, var ymin, var ymax, var zmin, var zmax = .{ first.loc[0], first.loc[0], first.loc[1], first.loc[1], first.loc[2], first.loc[2] };
+        for (self.blocks) |*block| {
+            xmin = @min(xmin, block.loc[0]);
+            ymin = @min(ymin, block.loc[1]);
+            zmin = @min(zmin, block.loc[2]);
+            xmax = @max(xmax, block.loc[0]);
+            ymax = @max(ymax, block.loc[1]);
+            zmax = @max(zmax, block.loc[2]);
+        }
 
-    var grid = .{.{.{model.BasicBlock.undef} ** zlen} ** ylen} ** xlen;
+        const xlen = xmax - xmin + 1;
+        const ylen = ymax - ymin + 1;
+        const zlen = zmax - zmin + 1;
 
-    for (self.blocks) |*block| {
-        grid[@as(usize, @intCast(block.loc[0] - xmin))][block.loc[1] - ymin][block.loc[2] - zmin] = .predef;
-    }
-
-    var inputs: [self.inputs.len]model.PortPos = .{};
-    for (self.inputs, 0..) |port, i| {
-        const pos, const pow = port;
-        // TODO: Ensure that there is wire at the locations of the
-        // inputs and outputs, shifted with the same vector as the
-        // normal blocks.
-        const shifted: model.Pos = .{ pos[0] - xmin, pos[1] - ymin, pos[2] - zmin };
-        inputs[i] = .{
-            .pos = shifted,
-            .pow = pow,
+        break :blk .{
+            .xlen = xlen,
+            .ylen = ylen,
+            .zlen = zlen,
+            .xmin = xmin,
+            .xmax = xmax,
+            .ymin = ymin,
+            .ymax = ymax,
+            .zmin = zmin,
+            .zmax = zmax,
         };
-    }
+    };
 
-    var outputs: [self.outputs.len]model.PortPos = .{};
-    for (self.outputs, 0..) |port, i| {
-        const pos, const pow = port;
-        const shifted: model.Pos = .{ pos[0] - xmin, pos[1] - ymin, pos[2] - zmin };
-        outputs[i] = .{
-            .pos = shifted,
-            .pow = pow,
-        };
-    }
+    const grid: [dims.xlen][dims.ylen][dims.zlen]model.BasicBlock = comptime blk: {
+        var g: [dims.xlen][dims.ylen][dims.zlen]model.BasicBlock = undefined;
 
-    return .{
+        // fill with undef first
+        for (g, 0..) |x, i| {
+            for (x, 0..) |y, j| {
+                for (y, 0..) |_, n| {
+                    g[i][j][n] = .undef;
+                }
+            }
+        }
+
+        // assign predef
+        for (self.blocks) |block| {
+            const xi = @as(usize, @intCast(block.loc[0] - dims.xmin));
+            const yi = @as(usize, @intCast(block.loc[1] - dims.ymin));
+            const zi = @as(usize, @intCast(block.loc[2] - dims.zmin));
+
+            g[xi][yi][zi] = .predef;
+        }
+
+        break :blk g;
+    };
+
+    const inputs: [self.inputs.len]model.PortPos = comptime blk: {
+        var tmp: [self.inputs.len]model.PortPos = undefined;
+
+        for (self.inputs, 0..) |port, i| {
+            const pos = port[0];
+            const pow = port[1];
+
+            const shifted: model.Pos = .{ pos[0] - dims.xmin, pos[1] - dims.ymin, pos[2] - dims.zmin };
+            tmp[i] = .{
+                .pos = shifted,
+                .pow = pow,
+            };
+        }
+
+        break :blk tmp;
+    };
+
+    const outputs: [self.outputs.len]model.PortPos = comptime blk: {
+        var tmp: [self.outputs.len]model.PortPos = undefined;
+        for (self.outputs, 0..) |port, i| {
+            const pos, const pow = port;
+            const shifted: model.Pos = .{ pos[0] - dims.xmin, pos[1] - dims.ymin, pos[2] - dims.zmin };
+            tmp[i] = .{
+                .pos = shifted,
+                .pow = pow,
+            };
+        }
+
+        break :blk tmp;
+    };
+
+    return model.Schematic(dims.xlen, dims.ylen, dims.zlen, self.inputs.len, self.outputs.len){
         .delay = self.delay,
         .inputs = &inputs,
         .outputs = &outputs,
-        .size = .{ xlen, ylen, zlen },
-        .grid = grid,
+        .size = .{ dims.xlen, dims.ylen, dims.zlen },
+        .grid = &grid,
     };
 }
 
-pub var Input: MinecraftSchematic = .{
+pub const Input: MinecraftSchematic = .{
     .delay = 0,
     .inputs = &.{.{ .{ 0, 1, 0 }, 15 }},
     .outputs = &.{},
@@ -154,7 +195,7 @@ pub var Input: MinecraftSchematic = .{
 };
 // pub const InputSchem: model.Schematic = Input.getSchematic();
 
-pub var Output: MinecraftSchematic = .{
+pub const Output: MinecraftSchematic = .{
     .delay = 0,
     .inputs = &.{.{ .{ 0, 1, 0 }, 1 }},
     .outputs = &.{},
@@ -173,7 +214,7 @@ pub var Output: MinecraftSchematic = .{
 };
 // pub const OutputSchem: model.Schematic = Output.getSchematic();
 
-pub var Inverter: MinecraftSchematic = .{
+pub const Inverter: MinecraftSchematic = .{
     .delay = 2,
     .inputs = &.{.{ .{ 0, 1, -1 }, 1 }},
     .outputs = &.{.{ .{ 0, 1, 3 }, 15 }},
@@ -202,7 +243,7 @@ pub var Inverter: MinecraftSchematic = .{
 };
 // pub const InverterSchem: model.Schematic = Inverter.getSchematic();
 
-pub var AndGate: MinecraftSchematic = .{
+pub const AndGate: MinecraftSchematic = .{
     .delay = 3,
     .inputs = &.{ .{ .{ 0, 1, -1 }, 1 }, .{ .{ 2, 1, -1 }, 1 } },
     .outputs = &.{.{ .{ 1, 1, 3 }, 15 }},
@@ -266,7 +307,7 @@ pub var AndGate: MinecraftSchematic = .{
 };
 // pub const AndGateSchem: model.Schematic = AndGate.getSchematic();
 
-pub var OrGate: MinecraftSchematic = .{
+pub const OrGate: MinecraftSchematic = .{
     .delay = 1,
     .inputs = &.{ .{ .{ -1, 1, 0 }, 1 }, .{ .{ 3, 1, 0 }, 1 } },
     .outputs = &.{.{ .{ 1, 1, 0 }, 15 }},

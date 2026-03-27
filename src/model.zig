@@ -89,20 +89,22 @@ pub const PortPos = struct { pos: Pos, pow: u8 };
 // The size is implicit from the grid value.
 // All our cells have a port-independent end-to-end delay, so the
 // delay is just a single value.
-pub const Schematic = struct {
-    inputs: []PortPos, // Positions of the inputs
-    outputs: []PortPos, // Positions of the outputs
-    size: Size, // Size of the grid
-    grid: [][][]BasicBlock, // Grid of blocks, indexed with grid[x][y][z]
-    delay: usize, // End-to-end delay of the Schematic
+pub fn Schematic(comptime X: usize, comptime Y: usize, comptime Z: usize, comptime inlen: usize, comptime outlen: usize) type {
+    return struct {
+        inputs: [inlen]PortPos, // Positions of the inputs
+        outputs: [outlen]PortPos, // Positions of the outputs
+        size: Size, // Size of the grid
+        grid: [X][Y][Z]BasicBlock, // Grid of blocks, indexed with grid[x][y][z]
+        delay: usize, // End-to-end delay of the Schematic
 
-    pub fn brect(self: *const Schematic) Rect {
-        return Rect{
-            .h = self.size[2], // Height is north/south so Z coordinate
-            .w = self.size[0], // Width is east/west so X coordinate
-        };
-    }
-};
+        pub fn brect(self: *const Schematic) Rect {
+            return Rect{
+                .h = self.size[2], // Height is north/south so Z coordinate
+                .w = self.size[0], // Width is east/west so X coordinate
+            };
+        }
+    };
+}
 
 // Describes a placement of the instances of a netlist.
 // Together with a netlist D, Placement[i] indicates the chosen
