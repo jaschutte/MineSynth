@@ -7,7 +7,7 @@ const ms = @import("abstract/structures.zig");
 const Router = @This();
 
 max_iterations: u32 = 20,
-violation_cost_multiplier: u32 = 15.0,
+violation_cost_multiplier: u32 = 10.0,
 heuristic_weight: f32 = 1.0,
 delay_cost_multiplier: u32 = 1.0,
 max_length: u32 = 1000,
@@ -333,6 +333,7 @@ fn sortNetsSortWeight(context: Router, lhs: Net, rhs: Net) bool {
 }
 
 pub fn routeAll(a: std.mem.Allocator, seed: u32, pairs: []RoutePair, forbidden_zone: *ms.ForbiddenZone, config: Router) !Route {
+    var var_config = config;
     var nets = try a.alloc(Net, pairs.len);
 
     defer {
@@ -415,6 +416,7 @@ pub fn routeAll(a: std.mem.Allocator, seed: u32, pairs: []RoutePair, forbidden_z
         const num_v_nets_this_pass = v_nets.items.len;
 
         std.log.info("Iteration {}: Routing {} violating nets", .{ iters, num_v_nets_this_pass });
+        var_config.violation_cost_multiplier += 5;
 
         for (0..num_v_nets_this_pass) |_| {
             var net = v_nets.orderedRemove(0);
