@@ -348,7 +348,6 @@ pub fn routeAll(a: std.mem.Allocator, seed: u32, pairs: []RoutePair, forbidden_z
     var targets = std.AutoHashMap(WorldCoord, MergePoint).init(a);
     defer targets.deinit();
 
-    // 1. Initialize and calculate initial sort weight (length)
     for (pairs, 0..) |pair, i| {
         nets[i] = .{
             .id = i,
@@ -363,10 +362,9 @@ pub fn routeAll(a: std.mem.Allocator, seed: u32, pairs: []RoutePair, forbidden_z
         };
     }
 
-    // 2. Sort by length (shortest first). Change `<` to `>` in comparator for longest first.
+    // sort beforehand
     std.sort.block(Net, nets, config, sortNetsSortWeight);
 
-    // 3. Perform the first routing pass in sorted order
     for (nets, 0..) |*net, i| {
         targets.clearRetainingCapacity();
         try targets.put(net.to, .{ .cost_to_root = 0, .signal_at_node = 1 });
@@ -472,6 +470,13 @@ pub fn routeAll(a: std.mem.Allocator, seed: u32, pairs: []RoutePair, forbidden_z
     std.log.info("Assembling final route with total {} nets, {} violating.", .{ nets.len, v_nets.items.len });
     for (nets) |*net| {
         if (net.route) |*r| {
+            if (net.is_violating) {
+                for (0..r.route.items.len) |i| {
+                    if (r.route.items[i].block == .block) {
+                        r.route.items[i].block = .block3;
+                    }
+                }
+            }
             try final_route.route.appendSlice(a, r.route.items);
             try final_route.footprints.appendSlice(a, r.footprints.items);
             final_route.delay += r.delay;
