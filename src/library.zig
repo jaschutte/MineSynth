@@ -16,13 +16,23 @@ pub const InstanceKind = enum {
     // TODO: For the love of god, make this return a reference to
     // the schematic that was built once and then stored in one variable
     // or another
-    pub fn modelSchematic(comptime self: InstanceKind) model.Schematic(myfunc(self)) {
+    pub inline fn modelSchematic(self: InstanceKind) model.Schematic {
         return switch (self) {
             .input => getSchematic(Input),
             .output => getSchematic(Output),
             .inverter => getSchematic(Inverter),
             .and_gate => getSchematic(AndGate),
             .or_gate => getSchematic(OrGate),
+        };
+    }
+
+    pub inline fn mcSchematicComptime(self: InstanceKind) MinecraftSchematic {
+        return switch (self) {
+            .input => Input,
+            .output => Output,
+            .inverter => Inverter,
+            .and_gate => AndGate,
+            .or_gate => OrGate,
         };
     }
 
@@ -80,7 +90,7 @@ pub const thattype = struct {
     outlen: usize,
 };
 
-fn myfunc(comptime self: MinecraftSchematic, case: InstanceKind) thattype {
+fn myfunc(comptime self: MinecraftSchematic) thattype {
     const dims = comptime blk: {
         const first = self.blocks[0];
         var xmin, var xmax, var ymin, var ymax, var zmin, var zmax = .{ first.loc[0], first.loc[0], first.loc[1], first.loc[1], first.loc[2], first.loc[2] };
@@ -116,7 +126,7 @@ fn myfunc(comptime self: MinecraftSchematic, case: InstanceKind) thattype {
 // I am fighting with comptime and comptime won
 // getSchematic should be precalculated either at startup or at comptime
 // for all schematics.
-pub fn getSchematic(comptime self: MinecraftSchematic) model.Schematic(myfunc(self)) {
+pub fn getSchematic(comptime self: MinecraftSchematic) model.Schematic {
     if (self.blocks.len == 0) @panic("cry");
 
     const dims = comptime blk: {
@@ -203,12 +213,12 @@ pub fn getSchematic(comptime self: MinecraftSchematic) model.Schematic(myfunc(se
         break :blk tmp;
     };
 
-    return model.Schematic(myfunc(self)){
+    return model.Schematic{
         .delay = self.delay,
-        .inputs = inputs,
-        .outputs = outputs,
+        .inputs = &inputs,
+        .outputs = &outputs,
         .size = .{ dims.xlen, dims.ylen, dims.zlen },
-        .grid = grid,
+        .grid = &grid,
     };
 }
 

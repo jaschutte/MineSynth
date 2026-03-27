@@ -592,7 +592,6 @@ fn add_rudy_fast(netlist: *const Netlist, the_placement: *const Placement, annea
 
 // places node at position without checking for collisions, used by initial placement.
 fn place(the_placement: *Placement, id: Id, kind: InstanceKind, new_x: postype, new_y: postype, orientation: Orientation, node_padding: u8) !void {
-    const val = InstanceKind.and_gate.modelSchematic();
     const rect = kind.modelSchematic();
     for (new_x - node_padding..new_x + rect.w) |x| {
         for (new_y - node_padding..new_y + rect.h) |y| {
