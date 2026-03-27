@@ -89,12 +89,12 @@ pub const PortPos = struct { pos: Pos, pow: u8 };
 // The size is implicit from the grid value.
 // All our cells have a port-independent end-to-end delay, so the
 // delay is just a single value.
-pub fn Schematic(comptime X: usize, comptime Y: usize, comptime Z: usize, comptime inlen: usize, comptime outlen: usize) type {
+pub fn Schematic(comptime ding: library.thattype) type {
     return struct {
-        inputs: [inlen]PortPos, // Positions of the inputs
-        outputs: [outlen]PortPos, // Positions of the outputs
+        inputs: [ding.inlen]PortPos, // Positions of the inputs
+        outputs: [ding.outlen]PortPos, // Positions of the outputs
         size: Size, // Size of the grid
-        grid: [X][Y][Z]BasicBlock, // Grid of blocks, indexed with grid[x][y][z]
+        grid: [ding.X][ding.Y][ding.Z]BasicBlock, // Grid of blocks, indexed with grid[x][y][z]
         delay: usize, // End-to-end delay of the Schematic
 
         pub fn brect(self: *const Schematic) Rect {

@@ -16,7 +16,7 @@ pub const InstanceKind = enum {
     // TODO: For the love of god, make this return a reference to
     // the schematic that was built once and then stored in one variable
     // or another
-    pub fn modelSchematic(self: InstanceKind) type {
+    pub fn modelSchematic(comptime self: InstanceKind) model.Schematic(myfunc(self)) {
         return switch (self) {
             .input => getSchematic(Input),
             .output => getSchematic(Output),
@@ -72,10 +72,51 @@ pub const MinecraftSchematic = struct {
     blocks: []const MinecraftBlock,
 };
 
+pub const thattype = struct {
+    X: usize,
+    Y: usize,
+    Z: usize,
+    inlen: usize,
+    outlen: usize,
+};
+
+fn myfunc(comptime self: MinecraftSchematic, case: InstanceKind) thattype {
+    const dims = comptime blk: {
+        const first = self.blocks[0];
+        var xmin, var xmax, var ymin, var ymax, var zmin, var zmax = .{ first.loc[0], first.loc[0], first.loc[1], first.loc[1], first.loc[2], first.loc[2] };
+        for (self.blocks) |*block| {
+            xmin = @min(xmin, block.loc[0]);
+            ymin = @min(ymin, block.loc[1]);
+            zmin = @min(zmin, block.loc[2]);
+            xmax = @max(xmax, block.loc[0]);
+            ymax = @max(ymax, block.loc[1]);
+            zmax = @max(zmax, block.loc[2]);
+        }
+
+        const xlen = xmax - xmin + 1;
+        const ylen = ymax - ymin + 1;
+        const zlen = zmax - zmin + 1;
+
+        break :blk .{
+            .xlen = xlen,
+            .ylen = ylen,
+            .zlen = zlen,
+            .xmin = xmin,
+            .xmax = xmax,
+            .ymin = ymin,
+            .ymax = ymax,
+            .zmin = zmin,
+            .zmax = zmax,
+        };
+    };
+
+    return .{ .X = dims.xlen, .Y = dims.ylen, .Z = dims.zlen, .inlen = self.inputs.len, .outlen = self.outputs.len };
+}
+
 // I am fighting with comptime and comptime won
 // getSchematic should be precalculated either at startup or at comptime
 // for all schematics.
-pub fn getSchematic(comptime self: MinecraftSchematic) model.Schematic {
+pub fn getSchematic(comptime self: MinecraftSchematic) model.Schematic(myfunc(self)) {
     if (self.blocks.len == 0) @panic("cry");
 
     const dims = comptime blk: {
@@ -162,12 +203,12 @@ pub fn getSchematic(comptime self: MinecraftSchematic) model.Schematic {
         break :blk tmp;
     };
 
-    return model.Schematic(dims.xlen, dims.ylen, dims.zlen, self.inputs.len, self.outputs.len){
+    return model.Schematic(myfunc(self)){
         .delay = self.delay,
-        .inputs = &inputs,
-        .outputs = &outputs,
+        .inputs = inputs,
+        .outputs = outputs,
         .size = .{ dims.xlen, dims.ylen, dims.zlen },
-        .grid = &grid,
+        .grid = grid,
     };
 }
 
