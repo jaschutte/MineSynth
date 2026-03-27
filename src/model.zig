@@ -14,7 +14,7 @@ pub const BasicBlock = enum {
 };
 
 // A position in the grid is just three usizes
-pub const Pos = @Vector(3, usize);
+pub const Pos = @Vector(3, isize);
 pub const Size = @Vector(3, usize);
 pub const PowerLevel = u8;
 pub const Id = usize;

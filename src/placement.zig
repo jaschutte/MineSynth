@@ -356,14 +356,14 @@ fn isInput(the_placement: *const Placement, node_id: glib.NodeId) bool {
 
 // computes absolute position from an absolute coordinate and a relative vector.
 // min_pos is to avoid writing in/output ports outside of bounds
-fn getAbsolutePosition(position: *const Position, port_pos_relative: physical.CoordinateRelative, min_pos: postype, chip_height_coordinate: postype) physical.Coordinate {
+fn getAbsolutePosition(position: *const Position, port_pos_relative: model.Pos, min_pos: postype, chip_height_coordinate: postype) physical.Coordinate {
     // do not allow rotations for now
     // this would cause pain for computewirelength if negative:
     std.debug.assert(@as(i32, @intCast(position.x)) + port_pos_relative[0] >= 0);
     std.debug.assert(@as(i32, @intCast(position.x)) + port_pos_relative[2] >= 0);
 
-    const new_x = clampU32WithDelta(position.x, port_pos_relative[0], max_chipsize, min_pos);
-    const new_y = clampU32WithDelta(position.y, port_pos_relative[2], max_chipsize, min_pos);
+    const new_x = clampU32WithDelta(position.x, @as(i32, @intCast(port_pos_relative[0])), max_chipsize, min_pos);
+    const new_y = clampU32WithDelta(position.y, @as(i32, @intCast(port_pos_relative[2])), max_chipsize, min_pos);
 
     return .{ new_x, chip_height_coordinate + @as(u32, @intCast(port_pos_relative[1])), new_y };
 }
@@ -402,23 +402,23 @@ fn getPortAbsolutePositions(netlist: *const Netlist, the_placement: *const Place
     if (schematic_input.inputs.len <= to_node.port) @panic("cry");
     const port_input = schematic_input.inputs[to_node.port];
 
-    const pos_from = the_placement.locations.getPtr(from_node.id) orelse {
-        std.debug.print("node 'from_node_id' {d} not placed\n", .{from_node.id});
+    const pos_from = the_placement.locations.getPtr(from_node.instance) orelse {
+        std.debug.print("node 'from_node_id' {d} not placed\n", .{from_node.instance});
         return null;
     };
-    const pos_to = the_placement.locations.getPtr(to_node.id) orelse {
-        std.debug.print("node 'to_node_id' {d} not placed\n", .{to_node.id});
+    const pos_to = the_placement.locations.getPtr(to_node.instance) orelse {
+        std.debug.print("node 'to_node_id' {d} not placed\n", .{to_node.instance});
         return null;
     };
 
     // if this fails, positions are clamped to 0 and not accurate
-    std.debug.assert(@as(i32, @intCast(pos_to.x)) + port_input[0] >= 0);
-    std.debug.assert(@as(i32, @intCast(pos_to.y)) + port_input[0] >= 0);
-    std.debug.assert(@as(i32, @intCast(pos_from.x)) + port_output[2] >= 0);
-    std.debug.assert(@as(i32, @intCast(pos_from.y)) + port_output[2] >= 0);
+    std.debug.assert(pos_to.x + port_input.pos[0] >= 0);
+    std.debug.assert(pos_to.y + port_input.pos[0] >= 0);
+    std.debug.assert(pos_from.x + port_output.pos[2] >= 0);
+    std.debug.assert(pos_from.y + port_output.pos[2] >= 0);
 
-    const port_pos_from = getAbsolutePosition(pos_from, port_output, 0, chip_height_coordinate);
-    const port_pos_to = getAbsolutePosition(pos_to, port_input, 0, chip_height_coordinate);
+    const port_pos_from = getAbsolutePosition(pos_from, port_output.pos, 0, chip_height_coordinate);
+    const port_pos_to = getAbsolutePosition(pos_to, port_input.pos, 0, chip_height_coordinate);
 
     return .{ port_pos_from, port_pos_to };
 }
