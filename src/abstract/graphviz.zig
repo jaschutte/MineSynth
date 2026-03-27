@@ -24,6 +24,8 @@ pub fn printNode(string: *std.io.Writer.Allocating, node: *glib.GateGraph.Node, 
     }
     try string.writer.print("\", fillcolor={s}, tooltip=\"{}\"", .{ color, node.id });
     if (position != null) {
+        const size = node.body.kind.size();
+        try string.writer.print(", fixedsize=\"shape\", width={}, height={}, shape=\"rectangle\"", .{ size.w, size.h });
         try string.writer.print(", pos=\"{d},{d}!, pin=true\"", .{ position.?[0], position.?[1] });
     }
     try string.writer.print("];\n", .{});
@@ -44,7 +46,7 @@ pub fn printEdge(graph: *const glib.GateGraph, string: *std.io.Writer.Allocating
     };
 
     try string.writer.print("    {} {s} {} [label=\"", .{ order.from, order.arrow, order.to });
-    try string.writer.print("{s}", .{ edge.body.symbol });
+    try string.writer.print("{s}", .{edge.body.symbol});
     try string.writer.print("\", color={s}, tooltip=\"{}\"]\n", .{ color, edge.id });
 }
 
