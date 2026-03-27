@@ -4,12 +4,8 @@ const physical = @import("../physical.zig");
 const id = @import("id.zig");
 const model = @import("../model.zig");
 
-// pub const GateBody = struct {
-//     kind: nl.GateType,
-//     symbol: []const u8,
-// };
 pub const GateBody = model.Instance;
-pub const GateGraph = Graph(model.Instance);
+pub const GateGraph = Graph(GateBody);
 
 pub const NodeId = id.Id;
 pub const EdgeId = id.Id;

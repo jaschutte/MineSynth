@@ -2,6 +2,9 @@ const std = @import("std");
 const aiger = @import("normalization/aiger.zig");
 const physical = @import("physical.zig");
 const structures = @import("abstract/structures.zig");
+const model = @import("model.zig");
+const library = @import("library.zig");
+const InstanceKind = library.InstanceKind;
 
 const Error = error{
     MalorderedAiger,
@@ -37,112 +40,112 @@ pub const Net = struct {
     }
 };
 
-pub const GateType = enum {
-    inverter,
-    and_gate,
-    or_gate,
-    input,
-    output,
+// pub const GateType = enum {
+//     inverter,
+//     and_gate,
+//     or_gate,
+//     input,
+//     output,
 
-    pub inline fn size(self: GateType) physical.Size {
-        return switch (self) {
-            .input => physical.Size{
-                .w = 1,
-                .h = 1,
-            },
-            .output => physical.Size{
-                .w = 1,
-                .h = 1,
-            },
-            .inverter => physical.Size{
-                .w = 1,
-                .h = 3,
-            },
-            .and_gate => physical.Size{
-                .w = 3,
-                .h = 3,
-            },
-            .or_gate => physical.Size{
-                .w = 3,
-                .h = 1,
-            },
-        };
-    }
+//     pub inline fn size(self: GateType) physical.Size {
+//         return switch (self) {
+//             .input => physical.Size{
+//                 .w = 1,
+//                 .h = 1,
+//             },
+//             .output => physical.Size{
+//                 .w = 1,
+//                 .h = 1,
+//             },
+//             .inverter => physical.Size{
+//                 .w = 1,
+//                 .h = 3,
+//             },
+//             .and_gate => physical.Size{
+//                 .w = 3,
+//                 .h = 3,
+//             },
+//             .or_gate => physical.Size{
+//                 .w = 3,
+//                 .h = 1,
+//             },
+//         };
+//     }
 
-    pub inline fn delay(self: GateType) physical.Delay {
-        return switch (self) {
-            .input => 0,
-            .output => 0,
-            .inverter => 2,
-            .and_gate => 3,
-            .or_gate => 1,
-        };
-    }
+//     pub inline fn delay(self: GateType) physical.Delay {
+//         return switch (self) {
+//             .input => 0,
+//             .output => 0,
+//             .inverter => 2,
+//             .and_gate => 3,
+//             .or_gate => 1,
+//         };
+//     }
 
-    // assuming the default orientation (.north)
-    pub inline fn inputPositionsRelative(self: GateType) physical.InputPositionsRelative {
-        return switch (self) {
-            .input => .{ .{ 0, 1, 0 }, null },
-            .output => .{ .{ 0, 1, 0 }, null },
-            .inverter => .{ .{ 0, 1, -1 }, null },
-            .and_gate => .{ .{ 0, 1, -1 }, .{ 2, 1, -1 } },
-            .or_gate => .{ .{ -1, 1, 0 }, .{ 3, 1, 0 } },
-        };
-    }
+//     // assuming the default orientation (.north)
+//     pub inline fn inputPositionsRelative(self: GateType) physical.InputPositionsRelative {
+//         return switch (self) {
+//             .input => .{ .{ 0, 1, 0 }, null },
+//             .output => .{ .{ 0, 1, 0 }, null },
+//             .inverter => .{ .{ 0, 1, -1 }, null },
+//             .and_gate => .{ .{ 0, 1, -1 }, .{ 2, 1, -1 } },
+//             .or_gate => .{ .{ -1, 1, 0 }, .{ 3, 1, 0 } },
+//         };
+//     }
 
-    // assuming the default orientation (.north)
-    pub inline fn outputPositionsRelative(self: GateType) physical.OutputPositionsRelative {
-        return switch (self) {
-            .input => .{ 0, 1, 0 },
-            .output => .{ 0, 1, 0 },
-            .inverter => .{ 0, 1, 3 },
-            .and_gate => .{ 1, 1, 3 },
-            .or_gate => .{ 1, 1, 0 },
-        };
-    }
+//     // assuming the default orientation (.north)
+//     pub inline fn outputPositionsRelative(self: GateType) physical.OutputPositionsRelative {
+//         return switch (self) {
+//             .input => .{ 0, 1, 0 },
+//             .output => .{ 0, 1, 0 },
+//             .inverter => .{ 0, 1, 3 },
+//             .and_gate => .{ 1, 1, 3 },
+//             .or_gate => .{ 1, 1, 0 },
+//         };
+//     }
 
-    pub inline fn outputPowerLevel(self: GateType) physical.PowerLevel {
-        return switch (self) {
-            .input => 15,
-            .output => 15,
-            .inverter => 15,
-            .and_gate => 15,
-            .or_gate => 15,
-        };
-    }
+//     pub inline fn outputPowerLevel(self: GateType) physical.PowerLevel {
+//         return switch (self) {
+//             .input => 15,
+//             .output => 15,
+//             .inverter => 15,
+//             .and_gate => 15,
+//             .or_gate => 15,
+//         };
+//     }
 
-    pub inline fn inputPowerLevel(self: GateType) physical.PowerLevel {
-        return switch (self) {
-            .input => 1,
-            .output => 1,
-            .inverter => 1,
-            .and_gate => 1,
-            .or_gate => 1,
-        };
-    }
+//     pub inline fn inputPowerLevel(self: GateType) physical.PowerLevel {
+//         return switch (self) {
+//             .input => 1,
+//             .output => 1,
+//             .inverter => 1,
+//             .and_gate => 1,
+//             .or_gate => 1,
+//         };
+//     }
 
-    pub inline fn blockArray(self: GateType) []const structures.AbsBlock {
-        return switch (self) {
-            .input => &inputBlocks,
-            .output => &outputBlocks,
-            .inverter => &inverterBlocks,
-            .and_gate => &andGateBlocks,
-            .or_gate => &orGateBlocks,
-        };
-    }
+//     pub inline fn blockArray(self: GateType) []const structures.AbsBlock {
+//         return switch (self) {
+//             .input => &inputBlocks,
+//             .output => &outputBlocks,
+//             .inverter => &inverterBlocks,
+//             .and_gate => &andGateBlocks,
+//             .or_gate => &orGateBlocks,
+//         };
+//     }
 
-    // requires negative offsets, so we use worldcoord but it is still a relative position
-    pub inline fn forbiddenCoordsRelative(self: GateType) []const structures.WorldCoord {
-        return switch (self) {
-            .input => &inputForbiddenCords, // &computeForbiddenZone(&inputForbiddenCords, @Vector(3, u32){ size(.input).w, 2, size(.input).h }),
-            .output => &outputForbiddenCords, //&computeForbiddenZone(&outputForbiddenCords, @Vector(3, u32){ size(.output).w, 2, size(.output).h }),
-            .inverter => &computeForbiddenZone(&inverterForbiddenCords, @Vector(3, u32){ size(.inverter).w, 3, size(.inverter).h }),
-            .and_gate => &computeForbiddenZone(&andGateForbiddenCoords, @Vector(3, u32){ size(.and_gate).w, 4, size(.and_gate).h }),
-            // otherwise signal strength isnt taken into account correctly:
-            .or_gate => &orGateForbiddenCoords, //&computeForbiddenZone(&orGateForbiddenCoords, @Vector(3, u32){ size(.or_gate).w, 2, size(.or_gate).h }),
-        };
-    }
-};
+//     // requires negative offsets, so we use worldcoord but it is still a relative position
+//     pub inline fn forbiddenCoordsRelative(self: GateType) []const structures.WorldCoord {
+//         return switch (self) {
+//             .input => &inputForbiddenCords, // &computeForbiddenZone(&inputForbiddenCords, @Vector(3, u32){ size(.input).w, 2, size(.input).h }),
+//             .output => &outputForbiddenCords, //&computeForbiddenZone(&outputForbiddenCords, @Vector(3, u32){ size(.output).w, 2, size(.output).h }),
+//             .inverter => &computeForbiddenZone(&inverterForbiddenCords, @Vector(3, u32){ size(.inverter).w, 3, size(.inverter).h }),
+//             .and_gate => &computeForbiddenZone(&andGateForbiddenCoords, @Vector(3, u32){ size(.and_gate).w, 4, size(.and_gate).h }),
+//             // otherwise signal strength isnt taken into account correctly:
+//             .or_gate => &orGateForbiddenCoords, //&computeForbiddenZone(&orGateForbiddenCoords, @Vector(3, u32){ size(.or_gate).w, 2, size(.or_gate).h }),
+//         };
+//     }
+// };
 
 // nicely comptime:
 fn computeForbiddenZone(
@@ -355,7 +358,7 @@ pub const Gate = struct {
     inputs: std.ArrayList(NetPtr),
     outputs: std.ArrayList(NetPtr),
     symbol: aiger.Symbol,
-    kind: GateType,
+    kind: InstanceKind,
 
     var gate_number: u64 = 0;
 
@@ -365,7 +368,7 @@ pub const Gate = struct {
         gpa.free(self.symbol);
     }
 
-    fn new(kind: GateType, symbol: ?aiger.Symbol) Gate {
+    fn new(kind: InstanceKind, symbol: ?aiger.Symbol) Gate {
         return Gate{
             .inputs = .empty,
             .outputs = .empty,
@@ -447,7 +450,7 @@ pub const Netlist = struct {
             return;
         }
 
-        var inverter = Gate.new(GateType.inverter, Gate.newGateSymbol(self.allocator));
+        var inverter = Gate.new(InstanceKind.inverter, Gate.newGateSymbol(self.allocator));
         try inverter.outputs.append(self.allocator, base_ptr);
         try inverter.inputs.append(self.allocator, negated_ptr);
         try self.gates.append(self.allocator, inverter);
@@ -488,7 +491,7 @@ pub const Netlist = struct {
             const input_ptr = try netlist.addOrGetNet(item.input);
             try netlist.addNegatedNet(item.input);
 
-            var input = Gate.new(GateType.input, try Gate.netInOutSymbol(allocator, true, item.input));
+            var input = Gate.new(InstanceKind.input, try Gate.netInOutSymbol(allocator, true, item.input));
             try input.outputs.append(allocator, input_ptr);
             try netlist.gates.append(allocator, input);
             const gate_ptr = netlist.gates.items.len - 1;
@@ -498,7 +501,7 @@ pub const Netlist = struct {
             const output_ptr = try netlist.addOrGetNet(item.output);
             try netlist.addNegatedNet(item.output);
 
-            var output = Gate.new(GateType.output, try Gate.netInOutSymbol(allocator, false, item.output));
+            var output = Gate.new(InstanceKind.output, try Gate.netInOutSymbol(allocator, false, item.output));
             try output.inputs.append(allocator, output_ptr);
             try netlist.gates.append(allocator, output);
             const gate_ptr = netlist.gates.items.len - 1;
@@ -515,7 +518,7 @@ pub const Netlist = struct {
             try netlist.addNegatedNet(item.and_gate.a);
             try netlist.addNegatedNet(item.and_gate.b);
 
-            var and_gate = Gate.new(GateType.and_gate, Gate.newGateSymbol(allocator));
+            var and_gate = Gate.new(InstanceKind.and_gate, Gate.newGateSymbol(allocator));
             try and_gate.outputs.append(allocator, out_ptr);
             try and_gate.inputs.append(allocator, a_ptr);
             try and_gate.inputs.append(allocator, b_ptr);
