@@ -1,9 +1,6 @@
 const std = @import("std");
 const glib = @import("graph/graph.zig");
 const Graph = glib.GateGraph;
-const physical = @import("physical.zig");
-// const netlist = @import("netlist.zig");
-const structures = @import("abstract/structures.zig");
 const model = @import("model.zig");
 const Netlist = model.Netlist;
 const Id = model.Id;
@@ -14,7 +11,7 @@ const Variant = library.InstanceVariant;
 const Library = library.Library;
 
 // comptime or private variables:
-pub const postype = physical.PosType;
+pub const postype = model.PosNum;
 const use_accurate_input_pos = false;
 const max_chipsize: u32 = 300;
 // used to avoid reading out of index in the grid
@@ -100,48 +97,6 @@ pub const Placement = struct {
         self.input_nodes.deinit();
         self.output_nodes.deinit();
         allocator.destroy(self);
-    }
-
-    // returns new array containing all blocks in the placement.
-    pub fn toBlocklist(Self: *const Placement, the_graph: *const Graph, chip_height_coordinate: postype) []const structures.AbsBlock {
-        errdefer @panic("Download some RAM");
-        var results = std.ArrayList(structures.AbsBlock).empty;
-
-        var it = Self.locations.iterator();
-        while (it.next()) |entry| {
-            const pos = entry.value_ptr;
-            const node_id: glib.NodeId = entry.key_ptr.*;
-            const node = the_graph.getConstNode(node_id).?;
-            const blocks = node.body.kind.blockArray();
-            for (blocks) |block| {
-                const new_pos = @Vector(3, structures.WorldCoordNum){ @as(structures.WorldCoordNum, @intCast(pos.x)) + block.loc[0], @as(structures.WorldCoordNum, @intCast(chip_height_coordinate)) + block.loc[1], @as(structures.WorldCoordNum, @intCast(pos.y)) + block.loc[2] };
-                try results.append(the_graph.gpa, .{ .block = block.block, .loc = new_pos, .rot = block.rot });
-            }
-        }
-
-        return try results.toOwnedSlice(the_graph.gpa);
-    }
-
-    // returns new forbidden zone containing all coordinates to avoid during placement
-    pub fn toForbiddenzone(Self: *const Placement, the_graph: *const Graph, chip_height_coordinate: postype) structures.ForbiddenZone {
-        errdefer @panic("Download some RAM");
-        var forbidden_zone = structures.ForbiddenZone.init(the_graph.gpa);
-
-        var it = Self.locations.iterator();
-        while (it.next()) |entry| {
-            const pos = entry.value_ptr;
-            const node_id: glib.NodeId = entry.key_ptr.*;
-            const node = the_graph.getConstNode(node_id).?;
-            const coords = node.body.kind.forbiddenCoordsRelative();
-            for (coords) |coord| {
-                const new_pos = structures.WorldCoord{ @as(structures.WorldCoordNum, @intCast(pos.x)) + coord[0], @as(structures.WorldCoordNum, @intCast(chip_height_coordinate)) + coord[1], @as(structures.WorldCoordNum, @intCast(pos.y)) + coord[2] };
-                try forbidden_zone.put(new_pos, .{
-                    .ftype = .gate,
-                });
-            }
-        }
-
-        return forbidden_zone;
     }
 };
 
@@ -364,7 +319,7 @@ fn isInput(the_placement: *const Placement, node_id: glib.NodeId) bool {
 
 // computes absolute position from an absolute coordinate and a relative vector.
 // min_pos is to avoid writing in/output ports outside of bounds
-fn getAbsolutePosition(position: *const Position, port_pos_relative: model.Pos, min_pos: postype, chip_height_coordinate: postype) physical.Coordinate {
+fn getAbsolutePosition(position: *const Position, port_pos_relative: model.Pos, min_pos: postype, chip_height_coordinate: postype) model.Pos {
     // do not allow rotations for now
     // this would cause pain for computewirelength if negative:
     std.debug.assert(position.x + port_pos_relative[0] >= 0);
@@ -393,7 +348,7 @@ fn getEdgeFromToNodes(the_graph: *const Graph, the_placement: *const Placement, 
 // returns 2 coordinates of the ports connected to this edge, the 'from' port (output port of the input node) , and the 'to' port (input port of the output node)
 // min_pos is to avoid writing in/output ports outside of bounds.
 // vector returned as .{port_pos_from, port_pos_to}
-fn getPortAbsolutePositions(netlist: *const Netlist, the_placement: *const Placement, edge: *const Net, accurate: bool, chip_height_coordinate: postype) ?[2]physical.Coordinate {
+fn getPortAbsolutePositions(netlist: *const Netlist, the_placement: *const Placement, edge: *const Net, accurate: bool, chip_height_coordinate: postype) ?[2]model.Pos {
     _ = netlist; // autofix
     // do not allow rotations for now
     const net = edge;
@@ -652,10 +607,10 @@ fn checkCollision(the_placement: *const Placement, node_id: glib.NodeId, size: m
 }
 
 fn clampU32WithDelta(x: postype, dx: i32, max_pos: postype, min_pos: postype) postype {
-    var wide: i64 = @as(i64, x) + @as(i64, dx);
+    var wide: i64 = @as(i64, @intCast(x)) + @as(i64, dx);
 
-    if (wide < min_pos) wide = min_pos;
-    if (wide > max_pos) wide = max_pos;
+    if (wide < min_pos) wide = @intCast(min_pos);
+    if (wide > max_pos) wide = @intCast(max_pos);
 
     return @as(postype, @intCast(wide));
 }
@@ -963,53 +918,4 @@ pub fn placement_annealing(gpa: std.mem.Allocator, netlist: *const Netlist, seed
         temperature *= alpha;
     }
     return best_placement;
-}
-
-// (n, x, a, y, b) indicating that we
-// need xaCby in the schematic and that this wire belongs to net n.
-
-const FancyTuple = struct {
-    n: glib.EdgeId,
-    x: physical.Coordinate,
-    a: physical.PowerLevel,
-    y: physical.Coordinate,
-    b: physical.PowerLevel,
-};
-
-// returns new array containing all tuples for the given placement.
-pub fn getThoseTuples(the_graph: *const Graph, the_placement: *Placement, chip_height_coordinate: postype) []FancyTuple {
-    errdefer @panic("Download some RAM");
-    var results = std.ArrayList(FancyTuple).empty;
-
-    var it = the_graph.edges.iterator();
-    while (it.next()) |entry| {
-        const net = entry.value_ptr;
-        const positions = getPortAbsolutePositions(the_graph, the_placement, net, true, chip_height_coordinate).?;
-        const nodes = getEdgeFromToNodes(the_graph, the_placement, net);
-
-        try results.append(the_graph.gpa, .{
-            .n = net.id,
-            .a = nodes[0].body.kind.outputPowerLevel(),
-            .x = positions[0], // this copies by value right ?
-            .b = nodes[1].body.kind.inputPowerLevel(),
-            .y = positions[1],
-        });
-    }
-
-    return try results.toOwnedSlice(the_graph.gpa);
-}
-
-pub fn printThoseTuples(gpa: std.mem.Allocator, those_tuples: []FancyTuple) void {
-    errdefer @panic("Skill issue");
-    var string = std.io.Writer.Allocating.init(gpa);
-    try string.writer.writeAll("Tuples: {\n");
-    for (those_tuples) |dem_tuple| {
-        try string.writer.print("   (n:{d}, a:{d},", .{ dem_tuple.n, dem_tuple.a });
-        try string.writer.print("x:({d},{d},{d}), b:{d}, ", .{ dem_tuple.x[0], dem_tuple.x[1], dem_tuple.x[2], dem_tuple.b });
-        try string.writer.print("y:({d},{d},{d}))\n", .{ dem_tuple.y[0], dem_tuple.y[1], dem_tuple.y[2] });
-    }
-    try string.writer.writeAll("}\n");
-
-    std.debug.print("{s}", .{string.written()});
-    string.deinit();
 }

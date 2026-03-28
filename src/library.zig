@@ -74,12 +74,6 @@ fn MCBlockType(comptime B: type) type {
 pub const MinecraftBlock = MCBlockType(WorldPos);
 pub const SchemBlock = MCBlockType(SchemPos);
 
-// pub const MinecraftBlock = struct {
-//     loc: WorldPos, // Location of the block
-//     block: BlockType, // Type of the block
-//     rot: Orientation, // Orientation of the block
-// };
-
 pub const WorldPortPos = struct { WorldPos, model.PowerLevel };
 
 pub const MinecraftSchematic = struct {
@@ -163,10 +157,6 @@ fn getSchematic(self: MinecraftSchematic, gpa: std.mem.Allocator) !struct { *con
             .pow = pow,
         });
     }
-
-    // TODO: Ensure that there is wire at the locations of the
-    // inputs and outputs, shifted with the same vector as the
-    // normal blocks.
 
     var ret = try gpa.create(model.Schematic);
     ret.delay = self.delay;

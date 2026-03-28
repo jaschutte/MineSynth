@@ -1,11 +1,10 @@
 const std = @import("std");
 const glib = @import("../graph/graph.zig");
-const id = @import("../graph/id.zig");
 const model = @import("../model.zig");
 const library = @import("../library.zig");
 
-pub fn convertGraphToModel(gpa: std.mem.Allocator, graph: *const glib.Graph(glib.GateBody)) !model.Netlist {
-    var id_mapping: std.AutoArrayHashMap(id.Id, usize) = .init(gpa);
+pub fn convertGraphToModel(gpa: std.mem.Allocator, graph: *const glib.Graph(glib.GateBody), lib: library.Library) !model.Netlist {
+    var id_mapping: std.AutoArrayHashMap(model.Id, usize) = .init(gpa);
     var ports_used: std.ArrayList(usize) = .empty;
     var instances: std.ArrayList(model.Instance) = .empty;
     var nets: std.ArrayList(model.Net) = .empty;
@@ -67,6 +66,6 @@ pub fn convertGraphToModel(gpa: std.mem.Allocator, graph: *const glib.Graph(glib
     var nl: model.Netlist = undefined;
     nl.nets = try nets.toOwnedSlice(gpa);
     nl.instances = try instances.toOwnedSlice(gpa);
-    nl.lib = try library.Library.init(gpa);
+    nl.lib = lib;
     return nl;
 }

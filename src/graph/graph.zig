@@ -1,14 +1,18 @@
 const std = @import("std");
 const nl = @import("../netlist.zig");
-const physical = @import("../physical.zig");
-const id = @import("id.zig");
 const model = @import("../model.zig");
+
+var _global_id_counter: model.Id = 0;
+pub fn getId() model.Id {
+    _global_id_counter += 1;
+    return _global_id_counter;
+}
 
 pub const GateBody = model.Instance;
 pub const GateGraph = Graph(GateBody);
 
-pub const NodeId = id.Id;
-pub const EdgeId = id.Id;
+pub const NodeId = model.Id;
+pub const EdgeId = model.Id;
 
 pub const GraphConstructors = struct {
     pub fn fromNetlist(gpa: std.mem.Allocator, netlist: *const nl.Netlist) *GateGraph {
@@ -137,24 +141,6 @@ pub fn Graph(comptime NodeBody: type) type {
                 return edges;
             }
 
-            pub const getSize = switch (NodeBody) {
-                GateBody => struct {
-                    fn size(self: *const Node) physical.Size {
-                        return self.owner.?.source.netlist.getGateSize(self.body);
-                    }
-                }.size,
-                else => @compileError("NodeBody does not support retrieving its size"),
-            };
-
-            pub const getArea = switch (NodeBody) {
-                GateBody => struct {
-                    fn area(self: *const Node) physical.Area {
-                        return self.size().area();
-                    }
-                }.area,
-                else => @compileError("NodeBody does not support retrieving its area"),
-            };
-
             pub fn deinit(self: *const Node, gpa: std.mem.Allocator) void {
                 switch (NodeBody) {
                     GateBody => {
@@ -263,7 +249,7 @@ pub fn Graph(comptime NodeBody: type) type {
         pub fn addNode(self: *Self, body: Body, meta: Node.Metadata) NodeId {
             errdefer @panic("Ran out of memory when adding node");
 
-            const node_id = id.getId();
+            const node_id = getId();
             try self.nodes.putNoClobber(node_id, Node{
                 .id = node_id,
                 .body = body,
@@ -278,7 +264,7 @@ pub fn Graph(comptime NodeBody: type) type {
         pub fn addEdge(self: *Self, a: NodeId, a_relation: Edge.Relation, b: NodeId, b_relation: Edge.Relation, body: Edge.Body, weight: ?f32) EdgeId {
             errdefer @panic("Ran out of memory when adding edge");
 
-            const edge_id = id.getId();
+            const edge_id = getId();
             try self.edges.putNoClobber(edge_id, Edge{
                 .weight = weight orelse 0,
                 .body = body,

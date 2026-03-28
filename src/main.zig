@@ -4,6 +4,9 @@ const library = @import("library.zig");
 const nbt = @import("visualization/nbt.zig");
 
 fn normalization_stage(gpa: std.mem.Allocator, aiger_file: []u8) !model.Netlist {
+    // Construct library
+    const lib = try library.Library.init(gpa);
+
     // Parse AIGER file
     const aiger = @import("normalization/aiger.zig");
     const aig = try aiger.Aiger.parseAag(gpa, aiger_file);
@@ -16,12 +19,12 @@ fn normalization_stage(gpa: std.mem.Allocator, aiger_file: []u8) !model.Netlist 
 
     // Construct Graph from netlit and apply normalization
     const glib = @import("graph/graph.zig");
-    const glibopt = @import("graph/preprocessor.zig");
-    // const sta = @import("sta.zig");
+    const preprocessor = @import("graph/preprocessor.zig");
+    const sta = @import("sta.zig");
     const graph = glib.GraphConstructors.fromNetlist(gpa, &netlist);
     defer graph.deinit();
-    glibopt.PreProcessor(glib.GateBody).preprocess(graph);
-    // sta.AAT(graph); // Perform static timing analysis
+    preprocessor.PreProcessor(glib.GateBody).preprocess(graph);
+    sta.AAT(graph, &lib); // Perform static timing analysis
 
     // Print graph
     const graphviz = @import("graph/graphviz.zig");
@@ -29,7 +32,7 @@ fn normalization_stage(gpa: std.mem.Allocator, aiger_file: []u8) !model.Netlist 
 
     // Convert graph into model type
     const conversion = @import("normalization/conversion.zig");
-    const nets = try conversion.convertGraphToModel(gpa, graph);
+    const nets = try conversion.convertGraphToModel(gpa, graph, lib);
 
     return nets;
 }
@@ -50,7 +53,6 @@ fn placement_stage(gpa: std.mem.Allocator, netlist: *const model.Netlist) !model
     };
     const placement = plc.placement_annealing(gpa, netlist, seed, annealing_config).?;
 
-    // return placement;
     const conversion = @import("placement/conversion.zig");
     const plac = try conversion.convertPlacement(gpa, placement);
 
@@ -70,6 +72,7 @@ fn validation(gpa: std.mem.Allocator, schem: *const model.Schematic, netlist: *c
     _ = netlist; // autofix
     _ = placement; // autofix
     // TODO: Perform validation
+    // TODO: Perform static timing analysis
     return true;
 }
 

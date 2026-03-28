@@ -15,8 +15,9 @@ pub const BasicBlock = enum {
 };
 
 // A position in the grid is just three usizes
-pub const Pos = @Vector(3, usize);
-pub const Size = @Vector(3, usize);
+pub const PosNum = usize;
+pub const Pos = @Vector(3, PosNum);
+pub const Size = @Vector(3, PosNum);
 pub const PowerLevel = u8;
 pub const Id = usize;
 pub const NodeId = Id;
@@ -123,7 +124,7 @@ pub const Schematic = struct {
 // Describes a placement of the instances of a netlist.
 // Together with a netlist D, Placement[i] indicates the chosen
 // variant and position for instance i in netlist D.
-pub const padding: Pos = .{ 5, 10, 5 };
+pub const padding: Pos = .{ 0, 0, 0 };
 
 pub const Placement = struct {
     placement: []InstancePlacement,

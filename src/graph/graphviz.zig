@@ -44,7 +44,7 @@ pub fn printEdge(graph: *const glib.GateGraph, string: *std.io.Writer.Allocating
     };
 
     try string.writer.print("    {} {s} {} [label=\"", .{ order.from, order.arrow, order.to });
-    try string.writer.print("{s}", .{ edge.body.symbol });
+    try string.writer.print("{s}", .{edge.body.symbol});
     try string.writer.print("\", color={s}, tooltip=\"{}\"]\n", .{ color, edge.id });
 }
 

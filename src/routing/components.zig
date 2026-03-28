@@ -1,13 +1,14 @@
 const std = @import("std");
-const ms = @import("../abstract/structures.zig");
-const WorldCoord = ms.WorldCoord;
+const model = @import("../model.zig");
+const library = @import("../library.zig");
+const WorldCoord = model.Pos;
 
 pub const SignalBehavior = enum { decay, reset, via };
 
 pub const BuildBlock = struct {
     offset: WorldCoord,
-    cat: ms.BlockCat,
-    rot: ms.Orientation = .center,
+    cat: library.BlockType,
+    rot: library.Orientation = .center,
 };
 
 pub const ComponentType = enum {
