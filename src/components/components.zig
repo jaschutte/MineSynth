@@ -25,6 +25,7 @@ pub const ComponentDef = struct {
     min_signal: u5,
     signal_behavior: SignalBehavior,
     build_blocks: []const BuildBlock,
+    padding: []const WorldCoord,
 };
 pub const components = [_]ComponentDef{
     .{
@@ -37,6 +38,22 @@ pub const components = [_]ComponentDef{
         .build_blocks = &[_]BuildBlock{
             .{ .offset = .{ 0, 0, 0 }, .cat = .dust },
             .{ .offset = .{ 0, -1, 0 }, .cat = .block },
+        },
+        .padding = &[_]WorldCoord{
+            // four cardinal directions
+            .{ 1, 0, 0 },
+            .{ -1, 0, 0 },
+            .{ 0, 0, 1 },
+            .{ 0, 0, -1 },
+            // also cant have dust diagonally but corners are ok
+            .{ 1, 1, 0 },
+            .{ 1, -1, 0 },
+            .{ -1, 1, 0 },
+            .{ -1, -1, 0 },
+            .{ 0, 1, -1 },
+            .{ 0, 1, 1 },
+            .{ 0, -1, -1 },
+            .{ 0, -1, 1 },
         },
     },
     .{
@@ -54,6 +71,36 @@ pub const components = [_]ComponentDef{
             .{ .offset = .{ 2, 0, 0 }, .cat = .dust },
             .{ .offset = .{ 2, -1, 0 }, .cat = .block },
         },
+        .padding = &[_]WorldCoord{
+            // four cardinal directions
+            .{ 1, 0, 0 },
+            .{ -1, 0, 0 },
+            .{ 0, 0, 1 },
+            .{ 0, 0, -1 },
+            // also cant have dust diagonally but corners are ok
+            .{ 1, 1, 0 },
+            .{ 1, -1, 0 },
+            .{ -1, 1, 0 },
+            .{ -1, -1, 0 },
+            .{ 0, 1, -1 },
+            .{ 0, 1, 1 },
+            .{ 0, -1, -1 },
+            .{ 0, -1, 1 },
+            // and for the other dust
+            .{ 3, 0, 0 },
+            .{ 1, 0, 0 },
+            .{ 2, 0, 1 },
+            .{ 2, 0, -1 },
+            // diagonally
+            .{ 3, 1, 0 },
+            .{ 3, -1, 0 },
+            .{ 1, 1, 0 },
+            .{ 1, -1, 0 },
+            .{ 2, 1, 1 },
+            .{ 2, 1, -1 },
+            .{ 2, -1, 1 },
+            .{ 2, -1, -1 },
+        },
     },
     .{
         .cat = .staircase_up,
@@ -67,6 +114,22 @@ pub const components = [_]ComponentDef{
             .{ .offset = .{ 0, 0, 0 }, .cat = .block },
             .{ .offset = .{ -1, 1, 0 }, .cat = .air },
         },
+        .padding = &[_]WorldCoord{
+            // four cardinal directions from dust
+            .{ 1, 1, 0 },
+            .{ -1, 1, 0 },
+            .{ 0, 1, 1 },
+            .{ 0, 1, -1 },
+            // also cant have dust diagonally but corners are ok
+            .{ 1, 2, 0 },
+            .{ 1, 0, 0 },
+            .{ -1, 2, 0 },
+            .{ -1, 0, 0 },
+            .{ 0, 2, 1 },
+            .{ 0, 2, -1 },
+            .{ 0, 0, 1 },
+            .{ 0, 0, -1 },
+        },
     },
     .{
         .cat = .staircase_down,
@@ -79,6 +142,22 @@ pub const components = [_]ComponentDef{
             .{ .offset = .{ 0, 0, 0 }, .cat = .air },
             .{ .offset = .{ 0, -1, 0 }, .cat = .dust },
             .{ .offset = .{ 0, -2, 0 }, .cat = .block },
+        },
+        .padding = &[_]WorldCoord{
+            // four cardinal directions
+            .{ 1, -1, 0 },
+            .{ -1, -1, 0 },
+            .{ 0, -1, 1 },
+            .{ 0, -1, -1 },
+            // also cant have dust diagonally but corners are ok
+            .{ 1, -2, 0 },
+            .{ 1, 0, 0 },
+            .{ -1, -2, 0 },
+            .{ -1, 0, 0 },
+            .{ 0, -2, 1 },
+            .{ 0, -2, -1 },
+            .{ 0, 0, 1 },
+            .{ 0, 0, -1 },
         },
     },
 };
