@@ -15,7 +15,7 @@ pub fn main() !void {
     const gpa = real_gpa.allocator();
     defer _ = real_gpa.deinit();
 
-    const content = try std.fs.cwd().readFileAlloc(gpa, "aiger-examples/half-adder.aag", std.math.maxInt(usize));
+    const content = try std.fs.cwd().readFileAlloc(gpa, "aiger-examples/4bit-adder.aag", std.math.maxInt(usize));
     defer _ = gpa.free(content);
 
     const aig = try aiger.Aiger.parseAag(gpa, content);
@@ -35,8 +35,7 @@ pub fn main() !void {
     var seed: u32 = undefined;
     try std.posix.getrandom(std.mem.asBytes(&seed));
 
-    var placement = plc.placement_annealing(graph, seed, .{ .initial_temperature = 30, .moves_per_temperature = 3000, .initial_window_size = 80, .alpha = 0.5, .node_padding = 5 }).?;
-    var placement = plc.placement_annealing(graph, seed, .{ .initial_temperature = 3, .moves_per_temperature = 8000, .initial_window_size = 80, .alpha = 0.5, .node_padding = 5 }).?;
+    var placement = plc.placement_annealing(graph, seed, .{ .initial_temperature = 30, .moves_per_temperature = 3000, .initial_window_size = 80, .alpha = 0.95, .node_padding = 3 }).?;
     defer placement.deinit(gpa);
     plc.print(graph, placement, graph.gpa);
     graphviz.printPlacement(graph.gpa, graph, placement);
@@ -49,8 +48,6 @@ pub fn main() !void {
     // nbt.block_arr_to_schem(gpa, placementBlocks);
     var forbidden_zone = placement.toForbiddenzone(graph, 0);
     defer forbidden_zone.deinit();
-    placement.deinit(graph.gpa);
-
     var allBlocks: std.ArrayList(ms.AbsBlock) = .empty;
     defer allBlocks.deinit(gpa);
 
