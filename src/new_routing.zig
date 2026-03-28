@@ -2,29 +2,72 @@ pub const std = @import("std");
 pub const glib = @import("abstract/graph.zig");
 pub const plc = @import("placement.zig");
 
-pub const RoutingCell = struct {
+pub const PersistentCell = struct {
+    const Self = @This();
+
+    node_origin: ?glib.NodeId,
+    forbidden: bool,
+    overlap: u8,
+    padding: bool,
+
+    pub fn passable(self: *const Self, our_source: glib.NodeId) bool {
+        return !self.forbidden and (self.node_origin == null or self.node_origin == our_source);
+    }
+};
+
+pub const JPSCell = struct {
     const Self = @This();
 
     g: i64,
     h: i64,
     f: i64,
-
     position: Coord,
-    parent: Coord,
+    parent: ?Coord,
 
-    overlap: u8,
-    node_origin: ?glib.NodeId,
-    padding: bool,
-    forbidden: bool,
+    pub fn new(g: i64, h: i64, pos: Coord, parent: ?Coord) Self {
+        return .{ .h = h, .g = g, .f = h + g, .position = pos, .parent = parent };
+    }
 
-    fn reset(self: *Self) void {
-        self.g = 0;
-        self.h = 0;
-        self.f = std.math.maxInt(i64) - 1; // Do not remove this 1
+    pub fn compareFunc(_: void, a: Self, b: Self) std.math.Order {
+        if (a.f == b.f) {
+            return .eq;
+        } else if (a.f > b.f) {
+            return .gt;
+        } else {
+            return .lt;
+        }
     }
 };
 
 const Coord = @Vector(3, i64);
+
+const Direction = enum {
+    const Self = @This();
+
+    up,
+    down,
+    left,
+    right,
+
+    upleft,
+    upright,
+    downleft,
+    downright,
+
+    pub fn asUnitCoord(self: *const Self) Coord {
+        return switch (self.*) {
+            .up => Coord{ 0, 0, 1 },
+            .down => Coord{ 0, 0, -1 },
+            .left => Coord{ -1, 0, 0 },
+            .right => Coord{ 1, 0, 0 },
+
+            .upleft => Coord{ -1, 0, 1 },
+            .upright => Coord{ 1, 0, 1 },
+            .downleft => Coord{ -1, 0, -1 },
+            .downright => Coord{ 1, 0, -1 },
+        };
+    }
+};
 
 pub fn coordExact(a: Coord, b: Coord) bool {
     return a[0] == b[0] and
@@ -32,9 +75,9 @@ pub fn coordExact(a: Coord, b: Coord) bool {
         a[2] == b[2];
 }
 
-pub fn coordManhattenDistance2D(a: Coord, b: Coord) u64 {
+pub fn coordManhattenDistance2D(a: Coord, b: Coord) i64 {
     const offsets = @abs(a - b);
-    return offsets[0] + offsets[1] + offsets[2];
+    return @intCast(offsets[0] + offsets[1] + offsets[2]);
 }
 
 pub const Routing = struct {
@@ -44,7 +87,7 @@ pub const Routing = struct {
         a: @Vector(3, i64),
         b: @Vector(3, i64),
 
-        pub fn manhattenDistance2D(self: *const EdgeLocations) u64 {
+        pub fn manhattenDistance2D(self: *const EdgeLocations) i64 {
             return coordManhattenDistance2D(self.a, self.b);
         }
     };
@@ -54,39 +97,18 @@ pub const Routing = struct {
     placement: *const plc.Placement,
 
     edge_locations: std.AutoArrayHashMap(glib.EdgeId, EdgeLocations),
-    routing_grid: std.AutoArrayHashMap(Coord, RoutingCell),
+    persistent_grid: std.AutoArrayHashMap(Coord, PersistentCell),
 
     max_coord: Coord,
     min_coord: Coord,
+
+    current_goal: Coord,
+    current_edge_id: glib.EdgeId,
 
     fn sortEdgesOnDistance(self: *const Self, a_id: glib.EdgeId, b_id: glib.EdgeId) bool {
         const a_dist = self.edge_locations.get(a_id).?.manhattenDistance2D();
         const b_dist = self.edge_locations.get(b_id).?.manhattenDistance2D();
         return a_dist > b_dist;
-    }
-
-    pub fn getCell(self: *Self, coord: Coord) *RoutingCell {
-        errdefer @panic("OOM");
-
-        const has_cell = self.routing_grid.getPtr(coord);
-        if (has_cell) |existing| {
-            return existing;
-        }
-
-        try self.routing_grid.put(coord, .{
-            .g = 0,
-            .h = 0,
-            .f = std.math.maxInt(i64) - 1, // Do not remove this 1
-
-            .position = coord,
-            .parent = undefined,
-
-            .overlap = 0,
-            .node_origin = null,
-            .padding = false,
-            .forbidden = false,
-        });
-        return self.routing_grid.getPtr(coord).?;
     }
 
     pub fn withinBounds(self: *Self, coord: Coord) bool {
@@ -95,114 +117,160 @@ pub const Routing = struct {
             (coord[2] >= self.min_coord[2] and coord[2] <= self.max_coord[2]);
     }
 
-    pub fn routeEdge(self: *Self, edge_id: glib.EdgeId) ?[]Coord {
-        errdefer @panic("out of memory");
-        std.log.info("Pathfinding for edge {}", .{edge_id});
-
-        for (self.routing_grid.values()) |*cell| {
-            cell.reset();
-        }
-
-        // Following:
-        // https://www.geeksforgeeks.org/dsa/a-search-algorithm/
-
-        const edge_locations = self.edge_locations.get(edge_id).?;
-        // const edge = self.graph.getConstEdge(edge_id).?;
-
-        const start_coord = edge_locations.a;
-        const goal_coord = edge_locations.b;
-
-        var open_list = std.array_list.Managed(Coord).init(self.gpa);
-        var closed_list = std.array_list.Managed(Coord).init(self.gpa);
-        defer open_list.deinit();
-        defer closed_list.deinit();
-        try open_list.append(start_coord);
-
-        var found: ?Coord = null;
-        open_list_loop: while (open_list.items.len != 0) {
-            var q: Coord = undefined;
-            var q_f: i64 = std.math.maxInt(i64);
-            var q_index: usize = undefined;
-            var q_g: i64 = undefined;
-            for (0.., open_list.items) |index, candidate| {
-                const cand_cell = self.getCell(candidate);
-                if (cand_cell.f < q_f) {
-                    q_f = cand_cell.f;
-                    q = candidate;
-                    q_index = index;
-                    q_g = cand_cell.g;
-                }
-            }
-            _ = open_list.swapRemove(q_index);
-
-            if (coordExact(q, goal_coord)) {
-                found = q;
-                break :open_list_loop;
-            }
-
-            const successors = [4]Coord{
-                q + Coord{ 1, 0, 0 },
-                q + Coord{ -1, 0, 0 },
-                q + Coord{ 0, 0, 1 },
-                q + Coord{ 0, 0, -1 },
+    pub fn getCell(self: *Self, coord: Coord) PersistentCell {
+        if (self.persistent_grid.get(coord)) |found| {
+            return found;
+        } else {
+            return .{
+                .node_origin = null,
+                .forbidden = false,
+                .overlap = 0,
+                .padding = false,
             };
-            successor_loop: for (successors) |succ_coord| {
-                if (!self.withinBounds(succ_coord)) continue :successor_loop;
+        }
+    }
 
-                const successor = self.getCell(succ_coord);
-                if (successor.forbidden) continue :successor_loop;
+    pub fn isCellPassable(self: *Self, coord: Coord) bool {
+        return self.getCell(coord).passable(self.current_edge_id);
+    }
 
-                // We can follow similar blocks coming from the same source for free
-                const h: i64 = @intCast(coordManhattenDistance2D(succ_coord, goal_coord));
-                // const g = q_g + @intFromBool(successor.node_origin != edge.id);
-                const g = q_g + 1;
-                const f = g + h;
+    pub fn hasForcedNeighbour(self: *Self, from: Coord, direction: Direction) bool {
+        const dir_unit = direction.asUnitCoord();
+        if (dir_unit[0] != 0) {
+            const direct_up = from + Coord{ 0, 0, 1 };
+            const moved_up = from - dir_unit + Coord{ 0, 0, 1 };
+            if (self.isCellPassable(direct_up) and !self.isCellPassable(moved_up)) return true;
 
-                if (f < successor.f) {
-                    successor.h = h;
-                    successor.g = g;
-                    successor.f = f;
-                    successor.parent = q;
+            const direct_down = from + Coord{ 0, 0, -1 };
+            const moved_down = from - dir_unit + Coord{ 0, 0, -1 };
+            if (self.isCellPassable(direct_down) and !self.isCellPassable(moved_down)) return true;
+        }
+        if (dir_unit[2] != 0) {
+            const direct_right = from + Coord{ 1, 0, 0 };
+            const moved_right = from - dir_unit + Coord{ 1, 0, 0 };
+            if (self.isCellPassable(direct_right) and !self.isCellPassable(moved_right)) return true;
 
-                    // Don't have duplicates in the open_list
-                    for (open_list.items) |in_open| {
-                        if (coordExact(in_open, succ_coord)) continue :successor_loop;
-                    }
-                    try open_list.append(succ_coord);
-                }
+            const direct_left = from + Coord{ -1, 0, 0 };
+            const moved_left = from - dir_unit + Coord{ -1, 0, 0 };
+            if (self.isCellPassable(direct_left) and !self.isCellPassable(moved_left)) return true;
+        }
+        return false;
+    }
 
-                // If there's a cell in the same position as us which is better, then skip
-                // TODO: Possible optimisation: maybe make the open_list a hashmap with position as key?
-                // for (open_list.items) |check| {
-                //     const check_cell = self.getCell(check);
-                //     if (coordExact(check, succ_coord) and check_cell.f < f) {
-                //         continue :successor_loop;
-                //     }
-                // }
-                // for (closed_list.items) |check| {
-                //     const check_cell = self.getCell(check);
-                //     if (coordExact(check, succ_coord) and check_cell.f < f) {
-                //         continue :successor_loop;
-                //     }
-                // }
+    pub fn jump(self: *Self, from: Coord) ?JPSCell {
+        if (self.checkHorizontalVertical(from)) |found| return found;
+
+        const diagonals = [4]Direction{ .upright, .upleft, .downright, .downleft };
+        for (diagonals) |diagonal| {
+            if (self.checkDiagonal(from, diagonal)) |found| return found;
+        }
+
+        return null;
+    }
+
+    pub fn checkHorizontalVertical(self: *Self, from: Coord) ?JPSCell {
+        if (self.checkDirection(from, Direction.left)) |found| return found;
+        if (self.checkDirection(from, Direction.right)) |found| return found;
+        if (self.checkDirection(from, Direction.up)) |found| return found;
+        if (self.checkDirection(from, Direction.down)) |found| return found;
+        return null;
+    }
+
+    pub fn checkDiagonal(self: *Self, from: Coord, direction: Direction) ?JPSCell {
+        var moving = from + direction.asUnitCoord();
+
+        while (self.withinBounds(moving)) {
+            if (!self.getCell(moving).passable(self.current_edge_id)) return null;
+            if (self.checkHorizontalVertical(from)) |found| {
+                return found;
+                // return JPSCell.new(0, coordManhattenDistance2D(moving, self.current_goal), moving, null);
             }
 
-            try closed_list.append(q);
+            moving += direction.asUnitCoord();
         }
 
+        return null;
+    }
+
+    pub fn checkDirection(self: *Self, from: Coord, direction: Direction) ?JPSCell {
+        var moving = from + direction.asUnitCoord();
+
+        while (self.withinBounds(moving)) {
+            if (!self.getCell(moving).passable(self.current_edge_id)) return null;
+            if (coordExact(moving, self.current_goal)) {
+                return JPSCell.new(0, coordManhattenDistance2D(moving, self.current_goal), moving, null);
+            }
+
+            if (self.hasForcedNeighbour(moving, direction)) {
+                return JPSCell.new(0, coordManhattenDistance2D(moving, self.current_goal), moving, null);
+            }
+
+            moving += direction.asUnitCoord();
+        }
+        return null;
+    }
+
+    pub fn routeEdge(self: *Self, edge_id: glib.EdgeId) ?[]Coord {
+        // https://every-algorithm.github.io/2024/03/22/jump_point_search.html
+
+        errdefer @panic("out of memory");
+
+        const start = self.edge_locations.get(edge_id).?.a;
+        const goal = self.edge_locations.get(edge_id).?.b;
+        self.current_goal = goal;
+        self.current_edge_id = edge_id;
+
+        std.log.info("Pathfinding for edge {}, from {} to {}", .{ edge_id, start, goal });
+
+        var open = std.PriorityQueue(JPSCell, void, JPSCell.compareFunc).init(self.gpa, undefined);
+        var closed = std.AutoHashMap(Coord, JPSCell).init(self.gpa);
+
+        try open.add(JPSCell.new(0, coordManhattenDistance2D(start, goal), start, null));
+
+        var found: ?JPSCell = null;
+
+        while (open.items.len > 0) {
+            const current = open.remove();
+            if (coordExact(current.position, goal)) {
+                found = current;
+                break;
+            }
+            try closed.put(current.position, current);
+            std.debug.print("Considering {}\n", .{current.position});
+
+            const directions = [8]Direction{ .left, .right, .up, .down, .upleft, .upright, .downleft, .downright };
+            for (directions) |neighbour_dir| {
+                const neighbour_coord = current.position + neighbour_dir.asUnitCoord();
+
+                if (!self.withinBounds(neighbour_coord)) continue;
+                if (closed.contains(neighbour_coord)) continue;
+
+                var jump_cell = self.jump(neighbour_coord) orelse continue;
+                if (closed.contains(jump_cell.position)) continue;
+                jump_cell.parent = current.position;
+                std.debug.print(" -> ADDING {} TO OPEN\n", .{jump_cell.position});
+                try open.add(jump_cell);
+            }
+        }
+
+        std.log.info("Found: {any}", .{found});
+
+        var backtrack = found orelse @panic("TODO: No route found!");
         var trace = std.array_list.Managed(Coord).init(self.gpa);
-        defer trace.deinit();
-
-        var current = found orelse @panic("TODO: Impossible to route, provide proper feedback");
-
-        std.log.info("Tracing back ID {}", .{edge_id});
-        while (!coordExact(current, start_coord)) {
-            try trace.append(current);
-            current = self.getCell(current).parent;
+        while (true) {
+            std.debug.print("> {}\n", .{ backtrack.position });
+            try trace.append(backtrack.position);
+            if (backtrack.parent) |parent| {
+                backtrack = closed.get(parent).?;
+            }
+            break;
         }
-        std.log.info("[!] ROUTED WITH LEN {} FROM {} -> {}\n", .{ closed_list.items.len, start_coord, goal_coord });
 
-        return try trace.toOwnedSlice();
+        for (0.., trace.items) |i, location| {
+            std.log.info("  {}: {}", .{ i, location });
+        }
+
+        @panic(":)");
     }
 
     pub fn route(self: *Self) [][]Coord {
@@ -211,6 +279,14 @@ pub const Routing = struct {
         const most_expensive_edges = try self.gpa.dupe(glib.EdgeId, self.graph.edges.keys());
         defer self.gpa.free(most_expensive_edges);
         std.mem.sort(glib.EdgeId, most_expensive_edges, self, sortEdgesOnDistance);
+
+        self.min_coord = Coord{ 0, 0, 0 };
+        self.max_coord = Coord{ 20, 0, 20 };
+        try self.edge_locations.put(69420, EdgeLocations{
+            .a = Coord{ 2, 0, 5 },
+            .b = Coord{ 8, 0, 6 },
+        });
+        _ = self.routeEdge(69420);
 
         var routes = std.array_list.Managed([]Coord).init(self.gpa);
         defer routes.deinit();
@@ -238,7 +314,11 @@ pub const Routing = struct {
             .max_coord = @Vector(3, i64){ std.math.minInt(i64), std.math.minInt(i64), std.math.minInt(i64) },
 
             .edge_locations = .init(gpa),
-            .routing_grid = .init(gpa),
+            .persistent_grid = .init(gpa),
+
+            // teehee
+            .current_goal = undefined,
+            .current_edge_id = undefined,
         };
 
         // Calculate the maximum bounding box, so that A* has limits
