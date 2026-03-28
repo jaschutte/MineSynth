@@ -14,20 +14,24 @@ pub const Router = @This();
 
 pub const Config = struct {
     max_iterations: u32 = 20,
-    violation_cost_multiplier: f16 = 5,
+    violation_cost_multiplier: f16 = 5.0,
+    violation_cost_increase: f16 = 1.0,
     max_length: u32 = 1000,
     max_astar_iterations: u32 = 100000,
+    astar_iterations_increase: u32 = 100000,
+    path_length_bound_multiplier: f16 = 8.0,
 };
 
 config: Config = .{},
+var_config: Config = .{},
 a: Allocator = undefined,
 external_a: Allocator = undefined,
 pairs: []RoutePair = undefined,
 route_infos: []RouteInfo = undefined,
 route_results: []RoutingResult = undefined,
 
-const MIN_Y = 0;
-const MAX_Y = 20;
+const MIN_Y = 1;
+const MAX_Y = 10;
 
 pub const RoutePair = struct {
     from: WorldCoord,
@@ -172,6 +176,7 @@ pub fn routeAll(
     defer arena.deinit();
     router.a = arena_a;
     router.external_a = a;
+    router.var_config = router.config; // copy config to mutable var
 
     // initiate rng
     var rng = std.Random.DefaultPrng.init(seed);
@@ -272,7 +277,7 @@ pub fn routeAll(
             break;
         }
 
-        std.log.info("Iteration {d}: Ripping up and rerouting {d} sub-nets...", .{ iteration, violating_set.count() });
+        std.log.info("Iteration {d}: Rerouting {d} sub-nets...", .{ iteration, violating_set.count() });
 
         // Phase 1: Teardown
         // Rip up EVERYTHING that is flagged before any routing begins
@@ -351,6 +356,14 @@ pub fn routeAll(
             total_result.failed = true;
         }
     }
+
+    std.log.info("Final Result: Cost = {}, Delay = {d}, Length = {d}, Violations = {d}, Failed Routes = {}", .{
+        total_result.cost,
+        total_result.delay,
+        total_result.length,
+        total_result.violations.items.len,
+        total_result.failed,
+    });
 
     return total_result;
 }
@@ -539,6 +552,9 @@ fn routeAStar(router: *Router, a: Allocator, info: RouteInfo, forbidden_zone: *F
     });
     try nodes.put(info.dest, AStarNode{ .cost_so_far = 0 });
 
+    const min_heuristic = calculateHeuristic(info.dest, info.origins.items);
+    const max_allowed_cost = @max(min_heuristic * router.config.path_length_bound_multiplier, 50.0);
+
     var iterations: u32 = 0;
     var found_path = false;
     var final_coord: WorldCoord = undefined;
@@ -624,7 +640,7 @@ fn routeAStar(router: *Router, a: Allocator, info: RouteInfo, forbidden_zone: *F
             const movement_cost = if (validity == .violation) calculated_cost * router.config.violation_cost_multiplier else calculated_cost;
             const new_cost = current.g_cost + movement_cost;
 
-            // Skip if we've found a better path to this neighbor already
+            if (new_cost > max_allowed_cost) continue;
             if (new_cost >= neighbor_node.cost_so_far) continue;
 
             // Update neighbor with better path
