@@ -80,7 +80,7 @@ pub const RoutingResult = struct {
     delay: u32,
     length: u32,
     failed: bool,
-    violations: std.ArrayList(Violation),
+    violations: std.ArrayList(Violation) = .empty,
 
     pub fn deinit(self: *RoutingResult, allocator: Allocator) void {
         self.blocks.deinit(allocator);
@@ -193,6 +193,18 @@ pub fn routeAll(
 
     router.route_infos = try arena_a.alloc(RouteInfo, pairs.len);
     router.route_results = try arena_a.alloc(RoutingResult, pairs.len);
+    for (router.route_results) |*res| {
+        res.* = .{
+            .blocks = .empty,
+            .moves = .empty,
+            .path_origins = .empty,
+            .cost = 0,
+            .delay = 0,
+            .length = 0,
+            .violations = .empty,
+            .failed = false,
+        };
+    }
     for (pairs, 0..) |pair, i| {
         router.route_infos[i] = RouteInfo{
             .id = i,
@@ -647,6 +659,7 @@ fn routeAStar(router: *Router, a: Allocator, info: RouteInfo, forbidden_zone: *F
         for (moves) |move| {
             const neighbor_coord = current.coord + move.offset;
             if (neighbor_coord[1] < MIN_Y or neighbor_coord[1] > MAX_Y) continue;
+
             if (current.last_heading[0] != 0 or current.last_heading[1] != 0 or current.last_heading[2] != 0) {
                 if (move.heading[0] + current.last_heading[0] == 0 and
                     move.heading[1] + current.last_heading[1] == 0 and
@@ -654,6 +667,10 @@ fn routeAStar(router: *Router, a: Allocator, info: RouteInfo, forbidden_zone: *F
                 {
                     continue;
                 }
+                // the air block staircases have does not get properly rotated
+                // it needs to be calculated dynamically which needs extra tracking variables
+                // for now just enforce the same heading for staircases to prevent issues where
+                // the staircase connection is not protected
                 if (move.def.cat == .staircase_up or move.def.cat == .staircase_down) {
                     if (!vecEq(move.heading, current.last_heading)) {
                         continue;
@@ -666,8 +683,9 @@ fn routeAStar(router: *Router, a: Allocator, info: RouteInfo, forbidden_zone: *F
             for (info.origins.items) |origin| {
                 if (vecEq(neighbor_coord, origin.loc)) {
                     is_at_origin = true;
-                    available_origin_signal = origin.signal;
-                    break;
+                    if (origin.signal > available_origin_signal) {
+                        available_origin_signal = origin.signal;
+                    }
                 }
             }
             const is_dust = move.def == &comp.components[0];
@@ -686,7 +704,7 @@ fn routeAStar(router: *Router, a: Allocator, info: RouteInfo, forbidden_zone: *F
             };
             if (new_signal_strength == 0) continue;
             if (is_at_origin) {
-                const required_signal = 15 - new_signal_strength;
+                const required_signal = 16 - new_signal_strength;
                 if (available_origin_signal < required_signal) continue;
             }
 

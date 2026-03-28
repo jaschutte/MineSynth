@@ -110,6 +110,9 @@ pub const components = [_]ComponentDef{
             .{ .offset = .{ 1, -1, 0 }, .cat = .block },
             .{ .offset = .{ 2, 0, 0 }, .cat = .dust },
             .{ .offset = .{ 2, -1, 0 }, .cat = .block },
+            // optional but helpful to prevent repeater loops, air next to repeater
+            .{ .offset = .{ 1, 0, 1 }, .cat = .air },
+            .{ .offset = .{ 1, 0, -1 }, .cat = .air },
         },
         .padding = &[_]WorldCoord{
             // four cardinal directions
