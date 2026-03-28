@@ -14,10 +14,15 @@ pub const Router = @This();
 
 pub const Config = struct {
     max_iterations: u32 = 20,
-    violation_cost_multiplier: u32 = 10.0,
+    violation_cost_multiplier: u32 = 10,
     max_length: u32 = 1000,
-    max_astar_iterations: u32 = 999999999,
+    max_astar_iterations: u32 = 10000,
 };
+
+config: Config = .{},
+pairs: []RoutePair = undefined,
+route_infos: []RouteInfo = undefined,
+route_results: []RoutingResult = undefined,
 
 pub const RoutePair = struct {
     from: WorldCoord,
@@ -74,7 +79,6 @@ pub fn routeAll(
     seed: u32,
     pairs: []RoutePair,
     forbidden_zone: *ForbiddenZone,
-    config: Config,
 ) !RoutingResult {
     var arena = std.heap.ArenaAllocator.init(a);
     const arena_a = arena.allocator();
@@ -88,34 +92,34 @@ pub fn routeAll(
     std.sort.block(RoutePair, pairs, true, sortPairsManhattan);
 
     // allocate routeinfo for each pair
-    var route_infos = try arena_a.alloc(RouteInfo, pairs.len);
-    var route_results = try arena_a.alloc(RoutingResult, pairs.len);
+    router.route_infos = try arena_a.alloc(RouteInfo, pairs.len);
+    router.route_results = try arena_a.alloc(RoutingResult, pairs.len);
     for (pairs, 0..) |pair, i| {
-        route_infos[i] = RouteInfo{
+        router.route_infos[i] = RouteInfo{
             .dest = pair.to,
             .origins = .empty,
             .sister_routes = .empty,
         };
         // add the primary origin for this route
-        try route_infos[i].origins.append(arena_a, pair.from);
+        try router.route_infos[i].origins.append(arena_a, pair.from);
         // add routes that have the same origin to sister_routes
         for (pairs, 0..) |other_pair, j| {
             if (i != j and vecEq(pair.from, other_pair.from))
-                try route_infos[i].sister_routes.append(arena_a, j);
+                try router.route_infos[i].sister_routes.append(arena_a, j);
         }
     }
 
     // initial route pass
     for (pairs, 0..) |pair, i| {
         _ = pair; // autofix
-        const result = try routeAStar(router, arena_a, route_infos[i], forbidden_zone, config);
+        const result = try routeAStar(router, arena_a, router.route_infos[i], forbidden_zone);
         // once a result is geneated, let the sister routes know that they can use any point along the path as an origin
-        // for (result.blocks.items) |block| {
-        //     for (route_infos[i].sister_routes.items) |sister_index| {
-        //         try route_infos[sister_index].origins.append(arena_a, block.loc);
-        //     }
-        // }
-        route_results[i] = result;
+        for (result.blocks.items) |block| {
+            for (router.route_infos[i].sister_routes.items) |sister_index| {
+                try router.route_infos[sister_index].origins.append(arena_a, block.loc);
+            }
+        }
+        router.route_results[i] = result;
     }
 
     var total_result = RoutingResult{
@@ -125,7 +129,7 @@ pub fn routeAll(
         .length = 0,
         .violations = .empty,
     };
-    for (route_results) |result| {
+    for (router.route_results) |result| {
         try total_result.blocks.appendSlice(a, result.blocks.items);
         total_result.cost += result.cost;
         total_result.delay = @max(total_result.delay, result.delay);
@@ -163,7 +167,23 @@ const AStarNode = struct {
     parent: ?ParentInfo = null,
 };
 
-fn routeAStar(router: *Router, a: Allocator, info: RouteInfo, forbidden_zone: *ForbiddenZone, config: Config) !RoutingResult {
+const Validity = union(enum) {
+    valid,
+    invalid,
+    violation: Violation,
+};
+
+fn moveValidity(router: *Router, move: Move, forbidden_zone: *ForbiddenZone) Validity {
+    _ = router; // autofix
+    const conflict = forbidden_zone.get(move.to) orelse return .valid;
+    switch (conflict.ftype) {
+        .gate => return .invalid,
+        .wire => return .valid, // wires can be shared
+        .wire_padding => return .valid, // wire padding can be shared
+    }
+}
+
+fn routeAStar(router: *Router, a: Allocator, info: RouteInfo, forbidden_zone: *ForbiddenZone) !RoutingResult {
 
     // Set up A* data structures
     var queue = AStarQueue.init(a, router);
@@ -197,7 +217,7 @@ fn routeAStar(router: *Router, a: Allocator, info: RouteInfo, forbidden_zone: *F
     var final_coord: WorldCoord = undefined;
 
     // Main A* loop
-    while (queue.count() > 0 and iterations < config.max_astar_iterations) {
+    while (queue.count() > 0 and iterations < router.config.max_astar_iterations) {
         iterations += 1;
 
         const current = queue.remove();
@@ -228,7 +248,7 @@ fn routeAStar(router: *Router, a: Allocator, info: RouteInfo, forbidden_zone: *F
         }
 
         // Get neighbors of current position
-        const moves = getMoves();
+        const moves = getMoves(current.coord);
         for (moves) |move| {
             const neighbor_coord = current.coord + move.offset;
 
@@ -246,8 +266,12 @@ fn routeAStar(router: *Router, a: Allocator, info: RouteInfo, forbidden_zone: *F
             };
             if (new_signal_strength == 0) continue; // skip if signal strength has decayed to 0
 
+            // check validity
+            const validity = moveValidity(router, move, forbidden_zone);
+            if (validity == .invalid) continue; // skip invalid moves
+
             // Calculate movement cost
-            const movement_cost = calculateMovementCost(current.coord, neighbor_coord, move, forbidden_zone, config);
+            const movement_cost = calculateMovementCost(current.coord, neighbor_coord, move, forbidden_zone);
             const new_cost = current.g_cost + movement_cost;
 
             // Skip if we've found a better path to this neighbor already
@@ -261,7 +285,7 @@ fn routeAStar(router: *Router, a: Allocator, info: RouteInfo, forbidden_zone: *F
             };
 
             // Calculate heuristic (distance to nearest origin)
-            const heuristic = calculateHeuristic(neighbor_coord, info.origins.items, config);
+            const heuristic = calculateHeuristic(neighbor_coord, info.origins.items);
             const estimated_total = new_cost + heuristic;
 
             // Add to queue
@@ -280,6 +304,15 @@ fn routeAStar(router: *Router, a: Allocator, info: RouteInfo, forbidden_zone: *F
             result.cost = final_node.cost_so_far;
         }
 
+        for (comp.components[0].build_blocks) |build_block| {
+            try result.blocks.append(a, Block{
+                .loc = final_coord + build_block.offset,
+                .block = build_block.cat,
+                .rot = build_block.rot,
+            });
+        }
+        result.length += 1;
+
         // Build path from final_coord back to destination
         var current_coord = final_coord;
 
@@ -289,13 +322,14 @@ fn routeAStar(router: *Router, a: Allocator, info: RouteInfo, forbidden_zone: *F
                 if (current_node.parent) |parent_info| {
                     // Add blocks according to the component definition used for this move
                     const component = parent_info.move.def;
+                    // ... (rest of your existing loop logic)
                     const heading = parent_info.move.heading;
 
                     for (component.build_blocks) |build_block| {
                         // Rotate the build block's offset according to the heading direction
                         const rotated_offset = comp.rotateCoord(build_block.offset, heading);
                         const block = Block{
-                            .loc = current_coord + rotated_offset,
+                            .loc = parent_info.parent + rotated_offset,
                             .block = build_block.cat,
                             .rot = comp.rotateOrientation(build_block.rot, heading),
                         };
@@ -311,9 +345,6 @@ fn routeAStar(router: *Router, a: Allocator, info: RouteInfo, forbidden_zone: *F
                 break; // shouldn't happen if path was found
             }
         }
-
-        // Reverse the path since we built it backwards
-        // std.mem.reverse(Block, result.blocks.items);
     }
     std.log.info("A* iterations: {d}, found path: {any}, final coord: {any}, cost: {d}, delay: {d}, num_blocks: {d}", .{ iterations, found_path, final_coord, result.cost, result.delay, result.blocks.items.len });
 
@@ -321,26 +352,27 @@ fn routeAStar(router: *Router, a: Allocator, info: RouteInfo, forbidden_zone: *F
 }
 
 const Move = struct {
+    from: WorldCoord,
+    to: WorldCoord,
     def: *const comp.ComponentDef,
     offset: WorldCoord,
     signal_behavior: comp.SignalBehavior,
     heading: WorldCoord,
 };
 
-/// Get neighboring coordinates (6-connected in 3D space)
-/// This can be customized based on routing constraints
-inline fn getMoves() [4 * comp.components.len]Move {
-    // four possible directions, but each
-    // direction can use a move from comp.components
+inline fn getMoves(from: WorldCoord) [4 * comp.components.len]Move {
     var moves: [4 * comp.components.len]Move = undefined;
     var index: usize = 0;
-    for (comp.components) |component| {
+
+    for (&comp.components) |*component| {
         for ([_]WorldCoord{ .{ 1, 0, 0 }, .{ 0, 0, 1 }, .{ -1, 0, 0 }, .{ 0, 0, -1 } }) |cdir| {
             moves[index] = .{
+                .from = from,
+                .to = from + cdir,
                 .offset = comp.rotateCoord(component.base_dir, cdir),
                 .heading = cdir,
                 .signal_behavior = component.signal_behavior,
-                .def = &component,
+                .def = component,
             };
             index += 1;
         }
@@ -351,11 +383,10 @@ inline fn getMoves() [4 * comp.components.len]Move {
 
 /// Calculate the cost of moving from one coordinate to another
 /// This is a placeholder that can be customized based on routing requirements
-fn calculateMovementCost(from: WorldCoord, to: WorldCoord, move: Move, forbidden_zone: *ForbiddenZone, config: Config) f16 {
+fn calculateMovementCost(from: WorldCoord, to: WorldCoord, move: Move, forbidden_zone: *ForbiddenZone) f16 {
     _ = from; // autofix
     _ = to; // autofix
     _ = forbidden_zone; // autofix
-    _ = config; // autofix
 
     // Basic movement cost - can be enhanced later with:
     // - Forbidden zone penalties
@@ -369,8 +400,7 @@ fn calculateMovementCost(from: WorldCoord, to: WorldCoord, move: Move, forbidden
 
 /// Calculate heuristic (estimated cost to reach any origin)
 /// This uses the minimum Manhattan distance to any origin point
-fn calculateHeuristic(coord: WorldCoord, origins: []WorldCoord, config: Config) f16 {
-    _ = config; // autofix
+fn calculateHeuristic(coord: WorldCoord, origins: []WorldCoord) f16 {
     if (origins.len == 0) {
         return 0; // No origins, so heuristic is 0
     }

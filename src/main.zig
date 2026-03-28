@@ -89,8 +89,8 @@ pub fn main() !void {
         }
     }.lessThan);
 
-    var router = rt.Router{};
-    var route = router.routeAll(gpa, seed, pairs.items, &forbidden_zone, .{}) catch |err| {
+    var router = rt.Router{ .config = .{} };
+    var route = router.routeAll(gpa, seed, pairs.items, &forbidden_zone) catch |err| {
         std.debug.print("Routing failed: {}\n", .{err});
         return;
     };
