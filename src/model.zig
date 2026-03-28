@@ -151,9 +151,11 @@ pub const Placement = struct {
             zmax = @max(zmax, pos[2] + variant.size[2]);
         }
 
-        const xlen = xmax - xmin + 1 + padding[0] * 2;
-        const ylen = ymax - ymin + 1 + padding[1] * 2;
-        const zlen = zmax - zmin + 1 + padding[2] * 2;
+        // We do not use xmin in the size computation, as that would cause an offset in the grid
+        // which would need to be handled carefully.
+        const xlen = xmax + 1 + padding[0] * 2;
+        const ylen = ymax + 1 + padding[1] * 2;
+        const zlen = zmax + 1 + padding[2] * 2;
 
         var grid = std.ArrayList(BasicBlock).empty;
         try grid.appendNTimes(gpa, .undef, xlen * ylen * zlen);
