@@ -80,9 +80,9 @@ fn placement_stage(gpa: std.mem.Allocator, netlist: *const model.Netlist) !model
     const plc = @import("placement/placement.zig");
     const annealing_config: plc.AnnealingConfig = .{
         .initial_temperature = 3,
-        .moves_per_temperature = 1000,
+        .moves_per_temperature = 8000,
         .initial_window_size = 80,
-        .alpha = 0.5,
+        .alpha = 0.95,
         .node_padding = 1,
     };
     const placement = plc.placement_annealing(gpa, netlist, seed, annealing_config).?;

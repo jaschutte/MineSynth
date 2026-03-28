@@ -516,16 +516,14 @@ fn costWireLength(netlist: *const Netlist, the_placement: *const Placement, anne
 }
 
 // congestion!
-fn computeCongestionRUDY(netlist: *const Netlist, the_placement: *const Placement, annealing_config: AnnealingConfig, printthisgrid: bool) f32 {
+fn computeCongestionRUDY(netlist: *const Netlist, the_placement: *const Placement, annealing_config: AnnealingConfig, printthisgrid: bool, gpa: std.mem.Allocator) f32 {
     errdefer @panic("kut");
     // supply per cell = area of cell * #wires per block
     const supply_per_cell: f32 = annealing_config.congestion_supply_wires_per_block;
 
     var grid: Density = .{ .cell_size_x = congestion_cell_size, .cell_size_y = congestion_cell_size, .demand_grid = std.mem.zeroes([number_cells][number_cells]f32), .cell_count_x = number_cells, .cell_count_y = number_cells, .supply_per_block = supply_per_cell };
 
-    var it = netlist.nets.iterator();
-    while (it.next()) |entry| {
-        const net = entry.value_ptr;
+    for (netlist.nets) |*net| {
         computeNetDensity(netlist, the_placement, annealing_config, net, &grid);
     }
     var sum: f32 = 0;
@@ -537,7 +535,7 @@ fn computeCongestionRUDY(netlist: *const Netlist, the_placement: *const Placemen
     }
 
     if (printthisgrid) {
-        var string = std.io.Writer.Allocating.init();
+        var string = std.io.Writer.Allocating.init(gpa);
         printCongestionGrid(grid, &string);
         std.debug.print("{s}", .{string.written()});
         string.deinit();
@@ -545,25 +543,25 @@ fn computeCongestionRUDY(netlist: *const Netlist, the_placement: *const Placemen
     return sum * annealing_config.congestion_cost_weight;
 }
 
-fn computeNetDensity(netlist: *const Netlist, the_placement: *const Placement, annealing_config: AnnealingConfig, net: *const glib.GateGraph.Edge, grid: *Density) void {
+fn computeNetDensity(netlist: *const Netlist, the_placement: *const Placement, annealing_config: AnnealingConfig, net: *const Net, grid: *Density) void {
     const positions = getPortAbsolutePositions(netlist, the_placement, net, use_accurate_input_pos, annealing_config.chip_height_coordinate).?;
 
     const port_pos_from = positions[0];
     const port_pos_to = positions[1];
 
-    const xmax: u32 = if (port_pos_from[0] > port_pos_to[0]) (port_pos_from[0]) else (port_pos_to[0]);
-    const xmin: u32 = if (port_pos_from[0] < port_pos_to[0]) (port_pos_from[0]) else (port_pos_to[0]);
-    const ymax: u32 = if (port_pos_from[2] > port_pos_to[2]) (port_pos_from[2]) else (port_pos_to[2]);
-    const ymin: u32 = if (port_pos_from[2] < port_pos_to[2]) (port_pos_from[2]) else (port_pos_to[2]);
+    const xmax: usize = if (port_pos_from[0] > port_pos_to[0]) (port_pos_from[0]) else (port_pos_to[0]);
+    const xmin: usize = if (port_pos_from[0] < port_pos_to[0]) (port_pos_from[0]) else (port_pos_to[0]);
+    const ymax: usize = if (port_pos_from[2] > port_pos_to[2]) (port_pos_from[2]) else (port_pos_to[2]);
+    const ymin: usize = if (port_pos_from[2] < port_pos_to[2]) (port_pos_from[2]) else (port_pos_to[2]);
     const netlength = HPWL(netlist, the_placement, annealing_config, net);
     const density = netlength / @as(f32, @floatFromInt((xmax - xmin + 1) * (ymax - ymin + 1)));
 
     // compute all cells that this net overlaps with:
-    const gx_min: u32 = xmin / grid.cell_size_x;
-    const gx_max: u32 = xmax / grid.cell_size_x;
+    const gx_min: usize = xmin / grid.cell_size_x;
+    const gx_max: usize = xmax / grid.cell_size_x;
 
-    const gy_min: u32 = ymin / grid.cell_size_y;
-    const gy_max: u32 = ymax / grid.cell_size_y;
+    const gy_min: usize = ymin / grid.cell_size_y;
+    const gy_max: usize = ymax / grid.cell_size_y;
 
     const gx_min_clamp = std.math.clamp(gx_min, 0, grid.cell_count_x - 1);
     const gx_max_clamp = std.math.clamp(gx_max, 0, grid.cell_count_x - 1);
@@ -801,6 +799,9 @@ fn moveInputOrOutputAxis(netlist: *const Netlist, the_placement: *Placement, win
     while (it2.next()) |entry| {
         const id: glib.NodeId = entry.key_ptr.*;
         const pos = the_placement.locations.getPtr(id).?;
+        const variant = the_placement.variants.get(id).?;
+        const rect = variant.model.brect();
+        std.debug.assert(0 == try checkCollision(the_placement, id, rect, pos.x, new_y, node_padding));
         const result = try tryMove(the_placement, id, pos, pos.x, new_y, node_padding);
         // std.debug.print("moved once {d},{d}", .{ before, result });
         std.debug.assert(result == 0);
@@ -944,7 +945,7 @@ pub fn placement_annealing(gpa: std.mem.Allocator, netlist: *const Netlist, seed
 
         print(netlist, current_placement, gpa);
 
-        const debug_congestion_cost = computeCongestionRUDY(netlist, current_placement, annealing_config, true);
+        const debug_congestion_cost = computeCongestionRUDY(netlist, current_placement, annealing_config, true, gpa);
         std.log.info(
             "Cost: {d}, of which congestionCost: {d}, Temp: {d}, windowsize: {d}\n",
             .{ lastCost, debug_congestion_cost, temperature, current_window_size },
