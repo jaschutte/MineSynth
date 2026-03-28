@@ -46,6 +46,7 @@ pub const ForbiddenZoneType = enum {
 };
 pub const ForbiddenZoneInfo = struct {
     ftype: ForbiddenZoneType,
+    route_ids: std.ArrayList(usize) = .empty,
     ref_count: u32 = 1,
     route_id: usize = 99999,
     source_coord: WorldCoord = .{ 0, 0, 0 },
