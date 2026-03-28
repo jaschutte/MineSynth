@@ -9,7 +9,7 @@
             "type": "lldb",
             "request": "launch",
             "program": "${workspaceFolder}/zig-out/bin/MineSynth.exe",
-            "args": [],
+            "preLaunchTask": "zig-build-debug",
             "cwd": "${workspaceFolder}"
         }
     ]

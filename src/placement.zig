@@ -9,8 +9,12 @@ const structures = @import("abstract/structures.zig");
 pub const postype = physical.PosType;
 const use_accurate_input_pos = false;
 const max_chipsize: u32 = 300;
+// in blocks
+const congestion_cell_size = 10;
 // used to avoid reading out of index in the grid
 const max_cell_size: u32 = 3;
+const number_cells = max_chipsize / congestion_cell_size;
+// const number_cells_sqr = number_cells * number_cells;
 
 pub const AnnealingConfig = struct {
     // - "The annealing process starts at a high temperature, such as 4*10^6"
@@ -32,7 +36,7 @@ pub const AnnealingConfig = struct {
     x_weight: f32 = 1,
     y_weight: f32 = 2,
     wire_cost_weight: f32 = 1,
-    congestion_cost_weight: f32 = 50,
+    congestion_cost_weight: f32 = 4,
     // initial placement is completely independent from final result
     initial_spacing: postype = 6,
     initial_row_size: postype = 15,
@@ -45,6 +49,30 @@ pub const AnnealingConfig = struct {
     chip_height_coordinate: postype = 0,
     // to avoid unroutability:
     node_padding: u8 = 1,
+
+    congestion_supply_wires_per_block: f32 = 0.5, // in wires per block
+};
+
+const Density = struct {
+    cell_count_x: u32,
+    cell_count_y: u32,
+    cell_size_x: u32,
+    cell_size_y: u32,
+    supply_per_block: f32, // could be expanded to a grid
+    demand_grid: [number_cells][number_cells]f32,
+
+    // helper to access 2d array
+    pub fn getDemandAt(self: *const Density, x: usize, y: usize) f32 {
+        return self.demand_grid[x][y];
+    }
+
+    pub fn getCostAt(self: *const Density, x: usize, y: usize) f32 {
+        return @max(0, getDemandAt(self, x, y) - self.supply_per_block);
+    }
+
+    pub fn addDemandAt(self: *Density, x: usize, y: usize, demand: f32) void {
+        self.demand_grid[x][y] += demand;
+    }
 };
 
 pub const Orientation = enum {
@@ -280,25 +308,25 @@ pub fn printOccupancyGrid(self: *const Placement, string: *std.io.Writer.Allocat
 }
 
 pub fn printCongestionGrid(grid: Density, string: *std.io.Writer.Allocating) void {
-    const max_demand: f32 = 2;
+    const max_cost: f32 = 10;
 
-    // --- Find max demand (for normalization) ---
-    // for (0..grid.width) |x| {
-    //     for (0..grid.height) |y| {
+    // // --- Find max demand (for normalization) ---
+    // for (0..grid.cell_count_x) |x| {
+    //     for (0..grid.cell_count_y) |y| {
     //         const d = grid.demand_grid[x][y];
-    //         if (d > max_demand) max_demand = (std.math.pow(f32, d / capacity, 2));
+    //         if (d > max_cost) max_cost = grid.getCostAt(x, y);
     //     }
     // }
 
-    // if (max_demand == 0) max_demand = 1; // avoid div by zero
+    // if (max_cost == 0) max_cost = 1; // avoid div by zero
 
     // --- Print grid ---
-    for (0..grid.height) |i_rev| {
-        const y = grid.height - 1 - i_rev;
-        for (0..grid.width) |j_rev| {
-            const x = grid.width - 1 - j_rev;
-            const demand = grid.demand_grid[x][y];
-            const norm = (std.math.pow(f32, demand / capacity, 2)) / max_demand;
+    for (0..grid.cell_count_y) |i_rev| {
+        const y = grid.cell_count_y - 1 - i_rev;
+        for (0..grid.cell_count_x) |j_rev| {
+            const x = grid.cell_count_x - 1 - j_rev;
+            const demand = grid.getCostAt(x, y);
+            const norm = demand / max_cost;
 
             // --- Map to 256-color heatmap ---
             const color: u8 = heatColor(norm);
@@ -536,32 +564,24 @@ fn costWireLength(the_graph: *const Graph, the_placement: *const Placement, anne
     return annealing_config.wire_cost_weight * sum;
 }
 
-const cell_size_temp: f32 = 10; // in blocks
-const widthtemp: u32 = max_chipsize / cell_size_temp;
-const heighttemp: u32 = max_chipsize / cell_size_temp;
-const capacity: f32 = cell_size_temp / 2; // an approximation to tune the wires per cell
-
-const Density = struct {
-    width: u32 = widthtemp,
-    height: u32 = heighttemp,
-    cell_size_x: f32,
-    cell_size_y: f32,
-    demand_grid: [widthtemp][heighttemp]f32,
-};
-
 // congestion!
 fn computeCongestionRUDY(the_graph: *const Graph, the_placement: *const Placement, annealing_config: AnnealingConfig, printthisgrid: bool) f32 {
-    var grid: Density = .{ .cell_size_x = cell_size_temp, .cell_size_y = cell_size_temp, .demand_grid = std.mem.zeroes([widthtemp][heighttemp]f32) };
+    errdefer @panic("kut");
+    // supply per cell = area of cell * #wires per block
+    const supply_per_cell: f32 = annealing_config.congestion_supply_wires_per_block;
+
+    var grid: Density = .{ .cell_size_x = congestion_cell_size, .cell_size_y = congestion_cell_size, .demand_grid = std.mem.zeroes([number_cells][number_cells]f32), .cell_count_x = number_cells, .cell_count_y = number_cells, .supply_per_block = supply_per_cell };
+
     var it = the_graph.edges.iterator();
     while (it.next()) |entry| {
         const net = entry.value_ptr;
-        computeNetRUDY(the_graph, the_placement, annealing_config, net, &grid);
+        computeNetDensity(the_graph, the_placement, annealing_config, net, &grid);
     }
     var sum: f32 = 0;
-    for (0..widthtemp) |i| {
-        for (0..heighttemp) |j| {
+    for (0..grid.cell_count_x) |i| {
+        for (0..grid.cell_count_y) |j| {
             // punish when it is over capacity.
-            sum += grid.demand_grid[i][j];
+            sum += grid.getCostAt(i, j);
         }
     }
 
@@ -574,41 +594,56 @@ fn computeCongestionRUDY(the_graph: *const Graph, the_placement: *const Placemen
     return sum * annealing_config.congestion_cost_weight;
 }
 
-fn computeNetRUDY(the_graph: *const Graph, the_placement: *const Placement, annealing_config: AnnealingConfig, net: *const glib.GateGraph.Edge, grid: *Density) void {
+fn computeNetDensity(the_graph: *const Graph, the_placement: *const Placement, annealing_config: AnnealingConfig, net: *const glib.GateGraph.Edge, grid: *Density) void {
     const positions = getPortAbsolutePositions(the_graph, the_placement, net, use_accurate_input_pos, annealing_config.chip_height_coordinate).?;
 
     const port_pos_from = positions[0];
     const port_pos_to = positions[1];
 
-    const xmax: f32 = if (port_pos_from[0] > port_pos_to[0]) @floatFromInt(port_pos_from[0]) else @floatFromInt(port_pos_to[0]);
-    const xmin: f32 = if (port_pos_from[0] < port_pos_to[0]) @floatFromInt(port_pos_from[0]) else @floatFromInt(port_pos_to[0]);
-    const ymax: f32 = if (port_pos_from[2] > port_pos_to[2]) @floatFromInt(port_pos_from[2]) else @floatFromInt(port_pos_to[2]);
-    const ymin: f32 = if (port_pos_from[2] < port_pos_to[2]) @floatFromInt(port_pos_from[2]) else @floatFromInt(port_pos_to[2]);
+    const xmax: u32 = if (port_pos_from[0] > port_pos_to[0]) (port_pos_from[0]) else (port_pos_to[0]);
+    const xmin: u32 = if (port_pos_from[0] < port_pos_to[0]) (port_pos_from[0]) else (port_pos_to[0]);
+    const ymax: u32 = if (port_pos_from[2] > port_pos_to[2]) (port_pos_from[2]) else (port_pos_to[2]);
+    const ymin: u32 = if (port_pos_from[2] < port_pos_to[2]) (port_pos_from[2]) else (port_pos_to[2]);
     const netlength = HPWL(the_graph, the_placement, annealing_config, net);
-    const density = netlength / ((xmax - xmin + 1) * (ymax - ymin + 1));
+    const density = netlength / @as(f32, @floatFromInt((xmax - xmin + 1) * (ymax - ymin + 1)));
 
-    const gx_min: u32 = @intFromFloat(@floor(xmin / grid.cell_size_x));
-    const gx_max: u32 = @intFromFloat(@floor(xmax / grid.cell_size_x));
+    // compute all cells that this net overlaps with:
+    const gx_min: u32 = xmin / grid.cell_size_x;
+    const gx_max: u32 = xmax / grid.cell_size_x;
 
-    const gy_min: u32 = @intFromFloat(@floor(ymin / grid.cell_size_y));
-    const gy_max: u32 = @intFromFloat(@floor(ymax / grid.cell_size_y));
+    const gy_min: u32 = ymin / grid.cell_size_y;
+    const gy_max: u32 = ymax / grid.cell_size_y;
 
-    const gx_min_clamp = std.math.clamp(gx_min, 0, grid.width - 1);
-    const gx_max_clamp = std.math.clamp(gx_max, 0, grid.width - 1);
-    const gy_min_clamp = std.math.clamp(gy_min, 0, grid.height - 1);
-    const gy_max_clamp = std.math.clamp(gy_max, 0, grid.height - 1);
+    const gx_min_clamp = std.math.clamp(gx_min, 0, grid.cell_count_x - 1);
+    const gx_max_clamp = std.math.clamp(gx_max, 0, grid.cell_count_x - 1);
+    const gy_min_clamp = std.math.clamp(gy_min, 0, grid.cell_count_y - 1);
+    const gy_max_clamp = std.math.clamp(gy_max, 0, grid.cell_count_y - 1);
 
-    if (@as(f32, @floatFromInt(grid.width)) < grid.cell_size_x and @as(f32, @floatFromInt(grid.height)) < grid.cell_size_y) {
-        const gx: u32 = @intFromFloat(@floor(xmin / grid.cell_size_x));
-        const gy: u32 = @intFromFloat(@floor(ymin / grid.cell_size_y));
-        grid.demand_grid[gx][gy] += netlength;
-        return;
-    }
+    // std.log.info(
+    //     "\ngx_min: {d}, gx_max: {d}, gy_min: {d}, gy_max: {d}",
+    //     .{ gx_min, gx_max, gy_min, gy_max },
+    // );
+    // std.log.info(
+    //     "xmin: {d}, xmax: {d}, ymin: {d}, ymax: {d}",
+    //     .{ xmin, xmax, ymin, ymax },
+    // );
+
+    var count: u32 = 0;
     for (gx_min_clamp..gx_max_clamp + 1) |gx| {
         for (gy_min_clamp..gy_max_clamp + 1) |gy| {
-            grid.demand_grid[gx][gy] += density;
+            grid.addDemandAt(gx, gy, density);
+            count += 1;
+            // std.log.info(
+            //     "added density: {d} to x:{d},y:{d}",
+            //     .{ density, gx, gy },
+            // );
         }
     }
+
+    // std.log.info(
+    //     "count: {d}",
+    //     .{count},
+    // );
 }
 
 // places node at position without checking for collisions, used by initial placement.
