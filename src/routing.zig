@@ -16,7 +16,7 @@ pub const Config = struct {
     max_iterations: u32 = 20,
     violation_cost_multiplier: f16 = 5,
     max_length: u32 = 1000,
-    max_astar_iterations: u32 = 10000,
+    max_astar_iterations: u32 = 100000,
 };
 
 config: Config = .{},
