@@ -15,7 +15,7 @@ pub fn main() !void {
     const gpa = real_gpa.allocator();
     defer _ = real_gpa.deinit();
 
-    const content = try std.fs.cwd().readFileAlloc(gpa, "aiger-examples/serial-adder.aag", std.math.maxInt(usize));
+    const content = try std.fs.cwd().readFileAlloc(gpa, "aiger-examples/half-adder.aag", std.math.maxInt(usize));
     defer _ = gpa.free(content);
 
     const aig = try aiger.Aiger.parseAag(gpa, content);
@@ -81,12 +81,21 @@ pub fn main() !void {
         });
     }
 
-    var route = rt.routeAll(gpa, seed, pairs.items, &forbidden_zone, .{}) catch |err| {
+    // Sort pairs by shortest Manhattan distance
+    std.sort.heap(rt.RoutePair, pairs.items, {}, struct {
+        fn lessThan(context: void, a: rt.RoutePair, b: rt.RoutePair) bool {
+            _ = context;
+            return rt.manhattanDistance(a.from, a.to) < rt.manhattanDistance(b.from, b.to);
+        }
+    }.lessThan);
+
+    var router = rt.Router{};
+    var route = router.routeAll(gpa, seed, pairs.items, &forbidden_zone, .{}) catch |err| {
         std.debug.print("Routing failed: {}\n", .{err});
         return;
     };
     defer route.deinit(gpa);
-    try allBlocks.appendSlice(gpa, route.route.items);
+    try allBlocks.appendSlice(gpa, route.blocks.items);
 
     // visualize forbidden zone
 
