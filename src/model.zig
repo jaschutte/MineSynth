@@ -42,12 +42,10 @@ pub const Net = struct {
     output: Port, // The output port on this net
 };
 
-// Possible variants of the gate
-// pub const InstanceVariant = enum { north, east, south, west };
 // Placement of a gate in a grid
 pub const InstancePlacement = struct {
     pos: Pos,
-    variant: library.InstanceKind, // InstanceKind as we currently have no variants
+    variant: library.InstanceVariant,
 };
 pub const Instance = struct {
     kind: library.InstanceKind,
@@ -61,6 +59,7 @@ pub const Instance = struct {
 pub const Netlist = struct {
     nets: []Net,
     instances: []Instance,
+    lib: library.Library,
 
     pub fn numInputPorts(self: *const Netlist, node: NodeId) usize {
         var count: usize = 0;
@@ -93,7 +92,7 @@ pub const Schematic = struct {
     inputs: []PortPos, // Positions of the inputs
     outputs: []PortPos, // Positions of the outputs
     size: Size, // Size of the grid
-    grid: [][][]BasicBlock, // Grid of blocks, indexed with grid[x][y][z]
+    grid: []BasicBlock, // Grid of blocks, indexed with grid[x*size[1]*size[2] + y*size[2] + z]
     delay: usize, // End-to-end delay of the Schematic
 
     pub fn brect(self: *const Schematic) Rect {
@@ -101,6 +100,14 @@ pub const Schematic = struct {
             .h = self.size[2], // Height is north/south so Z coordinate
             .w = self.size[0], // Width is east/west so X coordinate
         };
+    }
+
+    pub inline fn get(self: *const Schematic, x: usize, y: usize, z: usize) BasicBlock {
+        return self.grid[x * self.size[1] * self.size[2] + y * self.size[2] + z];
+    }
+
+    pub inline fn getPtr(self: *const Schematic, x: usize, y: usize, z: usize) *BasicBlock {
+        return &self.grid[x * self.size[1] * self.size[2] + y * self.size[2] + z];
     }
 };
 

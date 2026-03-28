@@ -1,7 +1,40 @@
 const std = @import("std");
 const model = @import("model.zig");
 
-pub const Size = struct { w: usize, h: usize };
+pub const InstanceVariant = struct { model: *const model.Schematic, minecraft: *const MinecraftSchematic };
+
+pub const Library = struct {
+    variants: std.AutoHashMap(InstanceKind, std.ArrayList(InstanceVariant)),
+
+    pub fn init(gpa: std.mem.Allocator) !Library {
+        var library = Library{
+            .variants = .init(gpa),
+        };
+
+        const kinds = [_]InstanceKind{ .inverter, .and_gate, .or_gate, .input, .output };
+        const bases = [_]*const MinecraftSchematic{ &Inverter, &AndGate, &OrGate, &Input, &Output };
+        for (kinds, bases) |kind, base| {
+            var v = std.ArrayList(InstanceVariant).empty;
+
+            // TODO: Add rotations to the library
+            // TODO: Add flipped versions to the library
+            const schem = try getSchematic(base.*, gpa);
+            try v.append(gpa, .{ .minecraft = base, .model = schem });
+
+            try library.variants.put(kind, v);
+        }
+
+        {
+            std.debug.print("Even even earlier results\n", .{});
+            const variants = library.variants.get(.input).?;
+            const variant = variants.items[0];
+            std.debug.print("num variants: {}\n", .{variants.items.len});
+            std.debug.print("chosen: {}\n", .{variant.model});
+        }
+
+        return library;
+    }
+};
 
 pub const InstanceKind = enum {
     inverter,
@@ -9,32 +42,6 @@ pub const InstanceKind = enum {
     or_gate,
     input,
     output,
-
-    // If we want to implement variants, this function should
-    // return a slice of references to possible implementation
-    // schematics
-    // TODO: For the love of god, make this return a reference to
-    // the schematic that was built once and then stored in one variable
-    // or another
-    pub fn modelSchematic(self: InstanceKind) model.Schematic {
-        return switch (self) {
-            .input => getSchematic(&Input),
-            .output => getSchematic(&Output),
-            .inverter => getSchematic(&Inverter),
-            .and_gate => getSchematic(&AndGate),
-            .or_gate => getSchematic(&OrGate),
-        };
-    }
-
-    pub fn mcSchematic(self: InstanceKind) *const MinecraftSchematic {
-        return switch (self) {
-            .input => &Input,
-            .output => &Output,
-            .inverter => &Inverter,
-            .and_gate => &AndGate,
-            .or_gate => &OrGate,
-        };
-    }
 };
 
 pub const WorldPos = @Vector(3, isize);
@@ -72,10 +79,7 @@ pub const MinecraftSchematic = struct {
     blocks: []const MinecraftBlock,
 };
 
-// I am fighting with comptime and comptime won
-// getSchematic should be precalculated either at startup or at comptime
-// for all schematics.
-pub fn getSchematic(self: *MinecraftSchematic) model.Schematic {
+fn getSchematic(self: MinecraftSchematic, gpa: std.mem.Allocator) !*const model.Schematic {
     if (self.blocks.len == 0) @panic("cry");
     const first = self.blocks[0];
     var xmin, var xmax, var ymin, var ymax, var zmin, var zmax = .{ first.loc[0], first.loc[0], first.loc[1], first.loc[1], first.loc[2], first.loc[2] };
@@ -88,52 +92,58 @@ pub fn getSchematic(self: *MinecraftSchematic) model.Schematic {
         zmax = @max(zmax, block.loc[2]);
     }
 
-    const xlen = xmax - xmin + 1;
-    const ylen = ymax - ymin + 1;
-    const zlen = zmax - zmin + 1;
+    const xlen: usize = @intCast(xmax - xmin + 1);
+    const ylen: usize = @intCast(ymax - ymin + 1);
+    const zlen: usize = @intCast(zmax - zmin + 1);
 
-    var grid = .{.{.{model.BasicBlock.undef} ** zlen} ** ylen} ** xlen;
+    var grid = std.ArrayList(model.BasicBlock).empty;
+    try grid.appendNTimes(gpa, .undef, xlen * ylen * zlen);
+    // var grid = .{.{.{model.BasicBlock.undef} ** zlen} ** ylen} ** xlen;
 
     for (self.blocks) |*block| {
-        grid[@as(usize, @intCast(block.loc[0] - xmin))][block.loc[1] - ymin][block.loc[2] - zmin] = .predef;
+        const xpos: usize = @intCast(block.loc[0] - xmin);
+        const ypos: usize = @intCast(block.loc[1] - ymin);
+        const zpos: usize = @intCast(block.loc[2] - zmin);
+        grid.items[xpos * ylen * zlen + ypos * zlen + zpos] = .predef;
     }
 
-    var inputs: [self.inputs.len]model.PortPos = .{};
-    for (self.inputs, 0..) |port, i| {
-        const pos, const pow = port;
-        // TODO: Ensure that there is wire at the locations of the
-        // inputs and outputs, shifted with the same vector as the
-        // normal blocks.
-        const shifted: model.Pos = .{ pos[0] - xmin, pos[1] - ymin, pos[2] - zmin };
-        inputs[i] = .{
-            .pos = shifted,
-            .pow = pow,
-        };
-    }
-
-    var outputs: [self.outputs.len]model.PortPos = .{};
-    for (self.outputs, 0..) |port, i| {
+    var inputs = std.ArrayList(model.PortPos).empty;
+    for (self.inputs) |port| {
         const pos, const pow = port;
         const shifted: model.Pos = .{ pos[0] - xmin, pos[1] - ymin, pos[2] - zmin };
-        outputs[i] = .{
+        try inputs.append(gpa, .{
             .pos = shifted,
             .pow = pow,
-        };
+        });
     }
 
-    return .{
-        .delay = self.delay,
-        .inputs = &inputs,
-        .outputs = &outputs,
-        .size = .{ xlen, ylen, zlen },
-        .grid = grid,
-    };
+    var outputs = std.ArrayList(model.PortPos).empty;
+    for (self.outputs) |port| {
+        const pos, const pow = port;
+        const shifted: model.Pos = .{ pos[0] - xmin, pos[1] - ymin, pos[2] - zmin };
+        try outputs.append(gpa, .{
+            .pos = shifted,
+            .pow = pow,
+        });
+    }
+
+    // TODO: Ensure that there is wire at the locations of the
+    // inputs and outputs, shifted with the same vector as the
+    // normal blocks.
+
+    var ret = try gpa.create(model.Schematic);
+    ret.delay = self.delay;
+    ret.inputs = try inputs.toOwnedSlice(gpa);
+    ret.outputs = try outputs.toOwnedSlice(gpa);
+    ret.size = .{ xlen, ylen, zlen };
+    ret.grid = try grid.toOwnedSlice(gpa);
+    return ret;
 }
 
-pub var Input: MinecraftSchematic = .{
+const Input: MinecraftSchematic = .{
     .delay = 0,
-    .inputs = &.{.{ .{ 0, 1, 0 }, 15 }},
-    .outputs = &.{},
+    .inputs = &.{},
+    .outputs = &.{.{ .{ 0, 1, 0 }, 15 }},
     .blocks = &.{
         .{
             .block = .dust,
@@ -152,9 +162,8 @@ pub var Input: MinecraftSchematic = .{
         },
     },
 };
-// pub const InputSchem: model.Schematic = Input.getSchematic();
 
-pub var Output: MinecraftSchematic = .{
+const Output: MinecraftSchematic = .{
     .delay = 0,
     .inputs = &.{.{ .{ 0, 1, 0 }, 1 }},
     .outputs = &.{},
@@ -171,9 +180,8 @@ pub var Output: MinecraftSchematic = .{
         },
     },
 };
-// pub const OutputSchem: model.Schematic = Output.getSchematic();
 
-pub var Inverter: MinecraftSchematic = .{
+const Inverter: MinecraftSchematic = .{
     .delay = 2,
     .inputs = &.{.{ .{ 0, 1, -1 }, 1 }},
     .outputs = &.{.{ .{ 0, 1, 3 }, 15 }},
@@ -200,9 +208,8 @@ pub var Inverter: MinecraftSchematic = .{
         },
     },
 };
-// pub const InverterSchem: model.Schematic = Inverter.getSchematic();
 
-pub var AndGate: MinecraftSchematic = .{
+const AndGate: MinecraftSchematic = .{
     .delay = 3,
     .inputs = &.{ .{ .{ 0, 1, -1 }, 1 }, .{ .{ 2, 1, -1 }, 1 } },
     .outputs = &.{.{ .{ 1, 1, 3 }, 15 }},
@@ -264,9 +271,8 @@ pub var AndGate: MinecraftSchematic = .{
         },
     },
 };
-// pub const AndGateSchem: model.Schematic = AndGate.getSchematic();
 
-pub var OrGate: MinecraftSchematic = .{
+const OrGate: MinecraftSchematic = .{
     .delay = 1,
     .inputs = &.{ .{ .{ -1, 1, 0 }, 1 }, .{ .{ 3, 1, 0 }, 1 } },
     .outputs = &.{.{ .{ 1, 1, 0 }, 15 }},
@@ -293,4 +299,3 @@ pub var OrGate: MinecraftSchematic = .{
         },
     },
 };
-// pub const OrGateSchem: model.Schematic = OrGate.getSchematic();

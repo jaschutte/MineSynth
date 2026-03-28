@@ -27,26 +27,30 @@ fn normalization_stage(gpa: std.mem.Allocator, aiger_file: []u8) !model.Netlist 
 
     // Convert graph into model type
     const conversion = @import("normalization/conversion.zig");
-    return try conversion.convertGraphToModel(gpa, graph);
+    const nets = try conversion.convertGraphToModel(gpa, graph);
+
+    return nets;
 }
 
 fn placement_stage(gpa: std.mem.Allocator, netlist: *const model.Netlist) !model.Placement {
     var seed: u32 = undefined;
     try std.posix.getrandom(std.mem.asBytes(&seed));
 
+    std.debug.print("Early netlist {any}\n", .{netlist});
+
     const plc = @import("placement.zig");
     const annealing_config: plc.AnnealingConfig = .{
-        .initial_temperature = 3,
+        .initial_temperature = 64 + 1,
         .moves_per_temperature = 8000,
         .initial_window_size = 80,
         .alpha = 0.5,
-        .node_padding = 5,
+        .node_padding = 0,
     };
     const placement = plc.placement_annealing(gpa, netlist, seed, annealing_config);
 
     // return placement;
     _ = placement;
-    @panic("");
+    @panic("finished placement");
 }
 
 // fn routing_stage(schem: model.Schematic, wires: []model.Wire) model.Schematic {}

@@ -2,6 +2,7 @@ const std = @import("std");
 const glib = @import("../graph/graph.zig");
 const id = @import("../graph/id.zig");
 const model = @import("../model.zig");
+const library = @import("../library.zig");
 
 pub fn convertGraphToModel(gpa: std.mem.Allocator, graph: *const glib.Graph(glib.GateBody)) !model.Netlist {
     var id_mapping: std.AutoArrayHashMap(id.Id, usize) = .init(gpa);
@@ -21,7 +22,6 @@ pub fn convertGraphToModel(gpa: std.mem.Allocator, graph: *const glib.Graph(glib
     var net_counter: usize = 0;
     var net_mapping: std.AutoArrayHashMap(usize, usize) = .init(gpa);
     for (graph.edges.values()) |*edge| {
-        std.debug.print("{}\n", .{edge.id});
         // Map node to instance id
         const in_node_id, const out_node_id = switch (edge.a_relation) {
             .input => .{ edge.a, edge.b },
@@ -64,8 +64,9 @@ pub fn convertGraphToModel(gpa: std.mem.Allocator, graph: *const glib.Graph(glib
         try nets.append(gpa, net);
     }
 
-    return .{
-        .instances = try instances.toOwnedSlice(gpa),
-        .nets = try nets.toOwnedSlice(gpa),
-    };
+    var nl: model.Netlist = undefined;
+    nl.nets = try nets.toOwnedSlice(gpa);
+    nl.instances = try instances.toOwnedSlice(gpa);
+    nl.lib = try library.Library.init(gpa);
+    return nl;
 }

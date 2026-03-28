@@ -9,7 +9,9 @@ const Netlist = model.Netlist;
 const Id = model.Id;
 const Net = model.Net;
 const library = @import("library.zig");
-const InstanceKind = library.InstanceKind;
+const Kind = library.InstanceKind;
+const Variant = library.InstanceVariant;
+const Library = library.Library;
 
 // comptime or private variables:
 pub const postype = physical.PosType;
@@ -64,6 +66,7 @@ pub const Position = struct { x: postype, y: postype, orientation: Orientation }
 
 pub const Placement = struct {
     locations: std.AutoArrayHashMap(glib.NodeId, Position),
+    variants: std.AutoArrayHashMap(glib.NodeId, Variant),
     occupancy_grid: [max_chipsize + max_cell_size][max_chipsize + max_cell_size]glib.NodeId,
     output_y: postype, // to fix all outputs to this y position
     input_y: postype, // to fix all inputs to this y position
@@ -73,6 +76,7 @@ pub const Placement = struct {
     pub fn clone(self: *const Placement, allocator: std.mem.Allocator) !*Placement {
         var placement = try allocator.create(Placement);
         placement.locations = try self.locations.clone();
+        placement.variants = try self.variants.clone();
         placement.occupancy_grid = self.occupancy_grid;
         placement.output_y = self.output_y;
         placement.input_y = self.input_y;
@@ -83,6 +87,7 @@ pub const Placement = struct {
 
     pub fn init(self: *Placement, allocator: std.mem.Allocator) void {
         self.locations = std.AutoArrayHashMap(glib.NodeId, Position).init(allocator);
+        self.variants = std.AutoArrayHashMap(glib.NodeId, Variant).init(allocator);
         self.occupancy_grid = std.mem.zeroes([max_chipsize + max_cell_size][max_chipsize + max_cell_size]glib.NodeId);
         self.output_y = 0;
         self.input_y = 0;
@@ -146,6 +151,7 @@ pub fn renderAscii(
     placement: *const Placement,
     string: *std.io.Writer.Allocating,
 ) !void {
+    _ = netlist; // autofix
     var it = placement.locations.iterator();
 
     // --- 1. Compute bounds ---
@@ -157,7 +163,8 @@ pub fn renderAscii(
     while (it.next()) |entry| {
         const r = entry.value_ptr.*;
         const id: glib.NodeId = entry.key_ptr.*;
-        const size = netlist.instances[id].kind.modelSchematic().brect();
+        const variant = placement.variants.get(id).?;
+        const size = variant.model.brect();
         const w: postype = @intCast(size.w);
         const h: postype = @intCast(size.h);
 
@@ -194,7 +201,8 @@ pub fn renderAscii(
     while (it.next()) |entry| {
         const r = entry.value_ptr.*;
         const id: glib.NodeId = entry.key_ptr.*;
-        const size = netlist.instances[id].kind.modelSchematic().brect();
+        const variant = placement.variants.get(id).?;
+        const size = variant.model.brect();
         const w: postype = @intCast(size.w);
         const h: postype = @intCast(size.h);
 
@@ -386,6 +394,7 @@ fn getEdgeFromToNodes(the_graph: *const Graph, the_placement: *const Placement, 
 // min_pos is to avoid writing in/output ports outside of bounds.
 // vector returned as .{port_pos_from, port_pos_to}
 fn getPortAbsolutePositions(netlist: *const Netlist, the_placement: *const Placement, edge: *const Net, accurate: bool, chip_height_coordinate: postype) ?[2]physical.Coordinate {
+    _ = netlist; // autofix
     // do not allow rotations for now
     const net = edge;
 
@@ -395,10 +404,10 @@ fn getPortAbsolutePositions(netlist: *const Netlist, the_placement: *const Place
     // search for correct edge index: expensive :(
     // no longer expensive :)
     _ = accurate;
-    const schematic_output = netlist.instances[from_node.instance].kind.modelSchematic();
+    const schematic_output = the_placement.variants.get(from_node.instance).?.model;
     if (schematic_output.outputs.len <= from_node.port) @panic("cry");
     const port_output = schematic_output.outputs[from_node.port];
-    const schematic_input = netlist.instances[to_node.instance].kind.modelSchematic();
+    const schematic_input = the_placement.variants.get(to_node.instance).?.model;
     if (schematic_input.inputs.len <= to_node.port) @panic("cry");
     const port_input = schematic_input.inputs[to_node.port];
 
@@ -436,16 +445,22 @@ fn initialPlacement(gpa: std.mem.Allocator, netlist: *const Netlist, annealing_c
 
     const spacing = if (annealing_config.initial_spacing < max_gate_width + annealing_config.node_padding) max_gate_width + annealing_config.node_padding else annealing_config.initial_spacing;
 
+    // choose variant for each node
+    for (netlist.instances, 0..) |*instance, i| {
+        const variant = netlist.lib.variants.getPtr(instance.kind).?.items[0];
+        try placement.variants.put(i, variant);
+    }
+
     // place input nodes:
     var x: postype = first_x_pos;
     var y: postype = placement.input_y;
 
     var count: u32 = 0;
 
-    for (netlist.instances, 0..) |*instance, i| {
+    for (0..netlist.instances.len) |i| {
         // if there are no input edges connected to this node, it is considered an input to the chip
         if (netlist.numInputPorts(i) == 0) {
-            try place(placement, i, instance.kind, x, y, .North, annealing_config.node_padding);
+            try place(placement, i, x, y, .North, annealing_config.node_padding);
             try placement.input_nodes.put(i, {});
             count += 1;
             std.debug.assert(placement.locations.count() == count);
@@ -457,10 +472,10 @@ fn initialPlacement(gpa: std.mem.Allocator, netlist: *const Netlist, annealing_c
     x = first_x_pos;
     y = placement.output_y;
 
-    for (netlist.instances, 0..) |*instance, i| {
+    for (0..netlist.instances.len) |i| {
         // if there are no output edges connected to this node, it is considered an output to the chip
         if (netlist.numOutputPorts(i) == 0) {
-            try place(placement, i, instance.kind, x, y, .North, annealing_config.node_padding);
+            try place(placement, i, x, y, .North, annealing_config.node_padding);
             try placement.output_nodes.put(i, {});
             count += 1;
             std.debug.assert(placement.locations.count() == count);
@@ -471,11 +486,11 @@ fn initialPlacement(gpa: std.mem.Allocator, netlist: *const Netlist, annealing_c
     x = first_x_pos;
     y = placement.input_y + spacing;
 
-    for (netlist.instances, 0..) |*instance, node_id| {
+    for (0..netlist.instances.len) |node_id| {
         if (isOutput(placement, node_id) or isInput(placement, node_id)) {
             continue;
         }
-        try place(placement, node_id, instance.kind, x, y, .North, annealing_config.node_padding);
+        try place(placement, node_id, x, y, .North, annealing_config.node_padding);
         count += 1;
         std.debug.assert(placement.locations.count() == count);
         x = x + spacing;
@@ -591,8 +606,9 @@ fn add_rudy_fast(netlist: *const Netlist, the_placement: *const Placement, annea
 }
 
 // places node at position without checking for collisions, used by initial placement.
-fn place(the_placement: *Placement, id: Id, kind: InstanceKind, new_x: postype, new_y: postype, orientation: Orientation, node_padding: u8) !void {
-    const rect = kind.modelSchematic().brect();
+fn place(the_placement: *Placement, id: Id, new_x: postype, new_y: postype, orientation: Orientation, node_padding: u8) !void {
+    const variant = the_placement.variants.get(id).?;
+    const rect = variant.model.brect();
     for (new_x - node_padding..new_x + rect.w) |x| {
         for (new_y - node_padding..new_y + rect.h) |y| {
             the_placement.occupancy_grid[x][y] = id;
@@ -605,9 +621,10 @@ fn place(the_placement: *Placement, id: Id, kind: InstanceKind, new_x: postype, 
 // tries to move a node to a new position, checking for collisions.
 // Returns 0 if move was succesful and without collisions
 // Returns the nodeid of the collision.
-fn tryMove(the_placement: *Placement, id: Id, kind: InstanceKind, last_pos: *const Position, new_x: postype, new_y: postype, node_padding: u8) !glib.NodeId {
+fn tryMove(the_placement: *Placement, id: Id, last_pos: *const Position, new_x: postype, new_y: postype, node_padding: u8) !glib.NodeId {
     // const node = the_graph.getConstNode(to_place);
-    const rect = kind.modelSchematic().brect();
+    const variant = the_placement.variants.get(id).?;
+    const rect = variant.model.brect();
 
     const collision_result = try checkCollision(the_placement, id, rect, new_x, new_y, node_padding);
     if (collision_result != 0) return collision_result;
@@ -619,7 +636,7 @@ fn tryMove(the_placement: *Placement, id: Id, kind: InstanceKind, last_pos: *con
         }
     }
 
-    try place(the_placement, id, kind, new_x, new_y, last_pos.orientation, node_padding);
+    try place(the_placement, id, new_x, new_y, last_pos.orientation, node_padding);
     return 0;
 }
 
@@ -648,6 +665,7 @@ fn clampU32WithDelta(x: postype, dx: i32, max_pos: postype, min_pos: postype) po
 // Returns 0 if move was succesful and without collisions
 // Returns the nodeid of the collision.
 fn randomMove(netlist: *const Netlist, the_placement: *Placement, to_perturb: glib.NodeId, window_size: u32, random: std.Random, min_spacing: u8, fixed_y_pos: ?postype, node_padding: u8) glib.NodeId {
+    _ = netlist; // autofix
     errdefer @panic("Skill issue");
     var size_to_use: i32 = @intCast(window_size);
     if (size_to_use < min_spacing) {
@@ -674,7 +692,7 @@ fn randomMove(netlist: *const Netlist, the_placement: *Placement, to_perturb: gl
         new_y = clampU32WithDelta(pos.y, dy, max_chipsize, min_pos);
     }
 
-    const result = try tryMove(the_placement, to_perturb, netlist.instances[to_perturb].kind, pos, new_x, new_y.?, node_padding);
+    const result = try tryMove(the_placement, to_perturb, pos, new_x, new_y.?, node_padding);
     if (fixed_y_pos != null) {
         std.debug.assert(fixed_y_pos == the_placement.locations.getPtr(to_perturb).?.y);
     }
@@ -684,6 +702,7 @@ fn randomMove(netlist: *const Netlist, the_placement: *Placement, to_perturb: gl
 // attempts to swap the 2 nodes given
 // if both fit at the new locations without collisions, it performs the swap and returns true.
 fn swap(netlist: *const Netlist, the_placement: *Placement, node_a_id: glib.NodeId, node_b_id: glib.NodeId, node_padding: u8) bool {
+    _ = netlist; // autofix
     errdefer @panic("Skill issue");
     if (isInput(the_placement, node_a_id) or isOutput(the_placement, node_a_id)) {
         return false;
@@ -692,10 +711,10 @@ fn swap(netlist: *const Netlist, the_placement: *Placement, node_a_id: glib.Node
         return false;
     }
 
-    const node_a = netlist.instances[node_a_id];
-    const node_b = netlist.instances[node_b_id];
-    const rect_a = node_a.kind.modelSchematic().brect();
-    const rect_b = node_b.kind.modelSchematic().brect();
+    const node_a = the_placement.variants.get(node_a_id).?;
+    const node_b = the_placement.variants.get(node_b_id).?;
+    const rect_a = node_a.model.brect();
+    const rect_b = node_b.model.brect();
     const pos_a = the_placement.locations.getPtr(node_a_id).?;
     const pos_b = the_placement.locations.getPtr(node_b_id).?;
 
@@ -737,9 +756,9 @@ fn swap(netlist: *const Netlist, the_placement: *Placement, node_a_id: glib.Node
     }
 
     // set a to b position
-    try place(the_placement, node_a_id, node_a.kind, unsigned_new_x_a, unsigned_new_y_a, pos_a.orientation, node_padding);
+    try place(the_placement, node_a_id, unsigned_new_x_a, unsigned_new_y_a, pos_a.orientation, node_padding);
     // set b to a position
-    try place(the_placement, node_b_id, node_b.kind, unsigned_new_x_b, unsigned_new_y_b, pos_b.orientation, node_padding);
+    try place(the_placement, node_b_id, unsigned_new_x_b, unsigned_new_y_b, pos_b.orientation, node_padding);
 
     return true;
 }
@@ -750,6 +769,7 @@ fn swap(netlist: *const Netlist, the_placement: *Placement, node_a_id: glib.Node
 
 // useInput = true means we move the input axis, if false we use the output axis.
 fn moveInputOrOutputAxis(netlist: *const Netlist, the_placement: *Placement, window_size: u32, random: std.Random, min_spacing: u8, useInput: bool, node_padding: u8) glib.NodeId {
+    _ = netlist; // autofix
     errdefer @panic("Skill issue");
     var size_to_use: i32 = @intCast(window_size);
     if (size_to_use < min_spacing) {
@@ -771,7 +791,8 @@ fn moveInputOrOutputAxis(netlist: *const Netlist, the_placement: *Placement, win
     var it1 = hashmap_to_use.iterator();
     while (it1.next()) |entry| {
         const id: glib.NodeId = entry.key_ptr.*;
-        const rect = netlist.instances[id].kind.modelSchematic().brect();
+        const variant = the_placement.variants.get(id).?;
+        const rect = variant.model.brect();
         const pos = the_placement.locations.getPtr(id).?;
         if (lasytpos == null) {
             lasytpos = pos.y;
@@ -788,7 +809,7 @@ fn moveInputOrOutputAxis(netlist: *const Netlist, the_placement: *Placement, win
     while (it2.next()) |entry| {
         const id: glib.NodeId = entry.key_ptr.*;
         const pos = the_placement.locations.getPtr(id).?;
-        const result = try tryMove(the_placement, id, netlist.instances[id].kind, pos, pos.x, new_y, node_padding);
+        const result = try tryMove(the_placement, id, pos, pos.x, new_y, node_padding);
         // std.debug.print("moved once {d},{d}", .{ before, result });
         std.debug.assert(result == 0);
     }
