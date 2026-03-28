@@ -81,60 +81,69 @@ pub fn validate_logical_equivalence(D: *const model.Netlist, S: *const model.Sch
         }
     }
 
-    // // Extract connectivity from D
-    // for (D.nets) |net| {
-    //     var output_ports = std.ArrayList(model.Port).empty;
-    //     var input_ports = std.ArrayList(model.Port).empty;
-    //     for (net) |port| {
-    //         switch (port.direction) {
-    //             .input => {
-    //                 try input_ports.append(gpa, port);
-    //             },
-    //             .output => {
-    //                 try output_ports.append(gpa, port);
-    //             },
-    //         }
-    //     }
-    //     for (output_ports) |output| {
-    //         const port_conn = connectivity.getPtr(output).?;
-    //         for (input_ports) |input| {
-    //             try port_conn.put(input);
-    //         }
-    //     }
-    // }
+    // Extract connectivity from D
+    for (D.nets) |net| {
+        try connectivity.getPtr(net.output).?.put(net.output, undefined);
+        try connectivity.getPtr(net.output).?.put(net.input, undefined);
+    }
 
-    // // Check if every output port is connected as it should be
-    // var ports_iterator = ports.iterator();
-    // while (ports_iterator.next()) |entry| {
-    //     const pos = entry.key_ptr;
-    //     _ = pos; // autofix
-    //     const port = entry.value_ptr;
-    //     if (port.direction != .output) continue;
-    //     // TODO: Finish
-    // }
+    // Check if every output port is connected as it should be
+    var correct = true;
+    var ports_iterator = ports.iterator();
+    while (ports_iterator.next()) |entry| {
+        const pos = entry.key_ptr;
+        const from = entry.value_ptr;
+        if (from.direction != .output) continue;
 
-    return true;
+        const supposed = connectivity.getPtr(from.*).?;
+        const connected = try find_connected_ports(pos, S, &ports, gpa);
+
+        var supposed_iterator = supposed.keyIterator();
+        while (supposed_iterator.next()) |to| {
+            if (!connected.contains(to.*)) {
+                correct = false;
+                std.debug.print("MISSING: Port {} not connected to {}\n", .{ from, to });
+            }
+        }
+
+        var connected_iterator = connected.keyIterator();
+        while (connected_iterator.next()) |to| {
+            if (!supposed.contains(to.*)) {
+                correct = false;
+                std.debug.print("  SHORT: Port {} connected to {}\n", .{ from, to });
+            }
+        }
+    }
+
+    return correct;
 }
 
 // TODO: Finish
-pub fn find_connected_ports(start: model.PortPos, S: model.Schematic, ports: std.AutoHashMap(model.Pos, model.Port), gpa: std.mem.Allocator) std.AutoHashMap(model.Port, void) {
-    _ = ports; // autofix
+// TODO: Add logic to keep signal strength into account
+pub fn find_connected_ports(start: *const model.Pos, S: *const model.Schematic, ports: *const std.AutoHashMap(model.Pos, model.Port), gpa: std.mem.Allocator) !std.AutoHashMap(model.Port, void) {
     const xlen = S.size[0];
     const ylen = S.size[1];
     const zlen = S.size[2];
-    var strength: [xlen][ylen][zlen]u8 = .{.{.{0} ** zlen} ** ylen} ** xlen;
+
+    var connected = std.AutoHashMap(model.Port, void).init(gpa);
+
     var Q = std.ArrayList(struct { model.Pos, u8 }).empty;
-    try Q.append(gpa, start);
-    strength[start.pos[0]][start.pos[1]][start.pos[2]] = start.pow;
+    try Q.append(gpa, .{ start.*, 15 });
+    var strength = std.ArrayList(model.PowerLevel).empty;
+    try strength.appendNTimes(gpa, 0, xlen * ylen * zlen);
 
     while (Q.items.len > 0) {
         const pos, const pow = Q.pop().?;
         const x, const y, const z = pos;
         if (pow <= 0) continue;
-        if (strength[x][y][z] >= pow) continue;
-        strength[x][y][z] = pow;
+        if (strength.items[x * ylen * zlen + y * zlen + z] >= pow) continue;
+        strength.items[x * ylen * zlen + y * zlen + z] = pow;
 
-        switch (S.grid[x][y][z]) {
+        if (ports.get(pos)) |port| {
+            try connected.put(port, undefined);
+        }
+
+        switch (S.get(x, y, z)) {
             .wire => {
                 // Condition 1 for connectivity
                 if (x > 0 and S.get(x - 1, y, z) == .wire)
@@ -199,4 +208,6 @@ pub fn find_connected_ports(start: model.PortPos, S: model.Schematic, ports: std
             else => {},
         }
     }
+
+    return connected;
 }
