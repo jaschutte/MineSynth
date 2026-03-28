@@ -34,11 +34,16 @@ pub const RoutePair = struct {
     to: WorldCoord,
 };
 
+pub const Origin = struct {
+    loc: WorldCoord,
+    signal: u8, // The forward signal strength available at this point
+};
+
 const RouteInfo = struct {
     id: usize,
     src: WorldCoord,
     dest: WorldCoord,
-    origins: std.ArrayList(WorldCoord),
+    origins: std.ArrayList(Origin),
     sister_routes: std.ArrayList(usize),
 };
 
@@ -129,33 +134,12 @@ pub fn ripUp(router: *Router, a: Allocator, route_id: usize, forbidden_zone: *Fo
         }
     }
 
-    // 3. Remove this route's generated blocks from sister routes' origins
-    for (result.blocks.items) |block| {
-        for (router.route_infos[route_id].sister_routes.items) |sister_index| {
-            var origins = &router.route_infos[sister_index].origins;
-            for (origins.items, 0..) |origin, idx| {
-                if (vecEq(origin, block.loc)) {
-                    if (idx != 0) {
-                        _ = origins.orderedRemove(idx);
-                    }
-                    break;
-                }
-            }
-        }
-    }
-
-    // reset its origins
+    // 3. Reset origins cleanly (sisters will be handled by their own ripUp calls)
     router.route_infos[route_id].origins.clearRetainingCapacity();
-    // add origins of NON violating sister routes
-    for (router.route_infos[route_id].sister_routes.items) |sister_index| {
-        if (router.route_results[sister_index].violations.items.len == 0) {
-            for (router.route_infos[sister_index].origins.items) |origin| {
-                try router.route_infos[route_id].origins.append(a, origin);
-            }
-        }
-    }
-    // and its original one
-    try router.route_infos[route_id].origins.append(a, router.route_infos[route_id].src);
+    try router.route_infos[route_id].origins.append(a, Origin{
+        .loc = router.route_infos[route_id].src,
+        .signal = 15,
+    });
 
     // 4. Reset the routing result
     result.deinit(a);
@@ -208,7 +192,10 @@ pub fn routeAll(
             .sister_routes = .empty,
         };
         // add the primary origin for this route
-        try router.route_infos[i].origins.append(arena_a, pair.from);
+        try router.route_infos[i].origins.append(arena_a, Origin{
+            .loc = pair.from,
+            .signal = 15,
+        });
         // add routes that have the same origin to sister_routes
         for (pairs, 0..) |other_pair, j| {
             if (i != j and vecEq(pair.from, other_pair.from)) {
@@ -225,7 +212,10 @@ pub fn routeAll(
             // once a result is generated, let the sister routes know that they can use any point along the path as an origin
             for (r.blocks.items) |block| {
                 for (router.route_infos[i].sister_routes.items) |sister_index| {
-                    try router.route_infos[sister_index].origins.append(arena_a, block.loc);
+                    try router.route_infos[sister_index].origins.append(arena_a, Origin{
+                        .loc = block.loc,
+                        .signal = 15,
+                    });
                 }
             }
             router.route_results[i] = r;
@@ -259,31 +249,53 @@ pub fn routeAll(
     // Rip-up and reroute loop
     var iteration: u32 = 0;
     while (iteration < router.config.max_iterations) : (iteration += 1) {
-        var violating_routes: std.ArrayList(usize) = .empty;
+        var violating_set = std.AutoArrayHashMap(usize, void).init(arena_a);
+        defer violating_set.deinit();
+        var raw_violations: usize = 0;
 
         for (router.route_results, 0..) |result, i| {
-            if (result.violations.items.len > 0) {
-                try violating_routes.append(arena_a, i);
-            } else if (result.failed) {
-                std.log.warn("Route {} failed to find a path in the initial routing pass and will be included in rip-up and reroute iterations.", .{i});
-                try violating_routes.append(arena_a, i);
+            if (result.violations.items.len > 0 or result.failed) {
+                raw_violations += 1;
+
+                // Flag the violating route
+                try violating_set.put(i, {});
+
+                // Atomically flag ALL sister routes to prevent orphaning
+                for (router.route_infos[i].sister_routes.items) |sister_idx| {
+                    try violating_set.put(sister_idx, {});
+                }
             }
         }
 
-        if (violating_routes.items.len == 0) {
+        if (raw_violations == 0) {
             std.log.info("Convergence reached: 0 violations after {d} iterations.", .{iteration});
             break;
         }
 
-        std.log.info("Iteration {d}: Ripping up and rerouting {d} violating routes...", .{ iteration, violating_routes.items.len });
+        std.log.info("Iteration {d}: Ripping up and rerouting {d} sub-nets...", .{ iteration, violating_set.count() });
 
-        // Randomly shuffle the order of routes to rip up and reroute
-        random.shuffle(usize, violating_routes.items);
-
-        for (violating_routes.items) |route_id| {
+        // Phase 1: Teardown
+        // Rip up EVERYTHING that is flagged before any routing begins
+        var it = violating_set.iterator();
+        while (it.next()) |entry| {
+            const route_id = entry.key_ptr.*;
             if (!router.route_results[route_id].failed) {
                 try ripUp(router, arena_a, route_id, forbidden_zone);
             }
+        }
+
+        // Extract to array for shuffling
+        var routes_to_reroute: std.ArrayList(usize) = .empty;
+        var keys_it = violating_set.iterator();
+        while (keys_it.next()) |entry| {
+            try routes_to_reroute.append(arena_a, entry.key_ptr.*);
+        }
+
+        // Randomly shuffle the order of routes to reroute to prevent deterministic loops
+        random.shuffle(usize, routes_to_reroute.items);
+
+        // Phase 2: Rebuild
+        for (routes_to_reroute.items) |route_id| {
             const new_result = try routeAStar(router, arena_a, router.route_infos[route_id], forbidden_zone);
 
             if (new_result) |r| {
@@ -292,7 +304,10 @@ pub fn routeAll(
                 // Update sister routes with new valid origins
                 for (r.blocks.items) |block| {
                     for (router.route_infos[route_id].sister_routes.items) |sister_index| {
-                        try router.route_infos[sister_index].origins.append(arena_a, block.loc);
+                        try router.route_infos[sister_index].origins.append(arena_a, Origin{
+                            .loc = block.loc,
+                            .signal = 15,
+                        });
                     }
                 }
             } else {
@@ -547,7 +562,7 @@ fn routeAStar(router: *Router, a: Allocator, info: RouteInfo, forbidden_zone: *F
 
         // Check if current position is in the origins list
         for (info.origins.items) |origin| {
-            if (vecEq(current.coord, origin)) {
+            if (vecEq(current.coord, origin.loc)) {
                 reached_origin = true;
                 break;
             }
@@ -568,9 +583,11 @@ fn routeAStar(router: *Router, a: Allocator, info: RouteInfo, forbidden_zone: *F
 
             // Check if neighbor is an origin
             var is_at_origin = false;
+            var available_origin_signal: u8 = 0;
             for (info.origins.items) |origin| {
-                if (vecEq(neighbor_coord, origin)) {
+                if (vecEq(neighbor_coord, origin.loc)) {
                     is_at_origin = true;
+                    available_origin_signal = origin.signal;
                     break;
                 }
             }
@@ -591,6 +608,10 @@ fn routeAStar(router: *Router, a: Allocator, info: RouteInfo, forbidden_zone: *F
                 .via => 14, // no change in signal strength for normal moves
             };
             if (new_signal_strength == 0) continue; // skip if signal strength has decayed to 0
+            if (is_at_origin) {
+                const required_signal = 15 - new_signal_strength;
+                if (available_origin_signal < required_signal) continue; // Deny merge
+            }
 
             // check validity
             const validity = moveValidity(router, move, forbidden_zone, info.id);
@@ -791,7 +812,7 @@ fn calculateMovementCost(move: Move, forbidden_zone: *ForbiddenZone) f16 {
 
 /// Calculate heuristic (estimated cost to reach any origin)
 /// This uses the minimum Manhattan distance to any origin point
-fn calculateHeuristic(coord: WorldCoord, origins: []WorldCoord) f16 {
+fn calculateHeuristic(coord: WorldCoord, origins: []Origin) f16 {
     if (origins.len == 0) {
         return 0; // No origins, so heuristic is 0
     }
@@ -799,7 +820,7 @@ fn calculateHeuristic(coord: WorldCoord, origins: []WorldCoord) f16 {
     var min_distance: u32 = std.math.maxInt(u32);
 
     for (origins) |origin| {
-        const distance = manhattanDistance(coord, origin);
+        const distance = manhattanDistance(coord, origin.loc);
         if (distance < min_distance) {
             min_distance = distance;
         }
