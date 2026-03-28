@@ -105,7 +105,7 @@ pub const components = [_]ComponentDef{
         .build_blocks = &[_]BuildBlock{
             .{ .offset = .{ 0, 0, 0 }, .cat = .dust },
             .{ .offset = .{ 0, -1, 0 }, .cat = .block },
-            .{ .offset = .{ 1, 0, 0 }, .cat = .repeater, .rot = .east },
+            .{ .offset = .{ 1, 0, 0 }, .cat = .repeater, .rot = .west },
             .{ .offset = .{ 1, -1, 0 }, .cat = .block },
             .{ .offset = .{ 2, 0, 0 }, .cat = .dust },
             .{ .offset = .{ 2, -1, 0 }, .cat = .block },

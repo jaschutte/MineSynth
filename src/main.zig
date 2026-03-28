@@ -47,7 +47,17 @@ pub fn main() !void {
     defer gpa.free(placementBlocks);
     // nbt.block_arr_to_schem(gpa, placementBlocks);
     var forbidden_zone = placement.toForbiddenzone(graph, 0);
-    defer forbidden_zone.deinit();
+    defer {
+        // var iter = forbidden_zone.iterator();
+        // while (iter.next()) |entry| {
+        //     const coord = entry.key_ptr.*;
+        //     _ = coord; // autofix
+        //     var info = entry.value_ptr.*;
+        //     if (info.route_ids.capacity == 0) continue;
+        //     info.route_ids.clearAndFree(gpa);
+        // }
+        forbidden_zone.deinit();
+    }
 
     var allBlocks: std.ArrayList(ms.AbsBlock) = .empty;
     defer allBlocks.deinit(gpa);
@@ -76,18 +86,10 @@ pub fn main() !void {
     defer pairs.deinit(gpa);
     for (tuples) |tuple| {
         try pairs.append(gpa, rt.RoutePair{
-            .to = .{ @as(ms.WorldCoordNum, @intCast(tuple.x[0])), @as(ms.WorldCoordNum, @intCast(tuple.x[1])), @as(ms.WorldCoordNum, @intCast(tuple.x[2])) },
-            .from = .{ @as(ms.WorldCoordNum, @intCast(tuple.y[0])), @as(ms.WorldCoordNum, @intCast(tuple.y[1])), @as(ms.WorldCoordNum, @intCast(tuple.y[2])) },
+            .from = .{ @as(ms.WorldCoordNum, @intCast(tuple.x[0])), @as(ms.WorldCoordNum, @intCast(tuple.x[1])), @as(ms.WorldCoordNum, @intCast(tuple.x[2])) },
+            .to = .{ @as(ms.WorldCoordNum, @intCast(tuple.y[0])), @as(ms.WorldCoordNum, @intCast(tuple.y[1])), @as(ms.WorldCoordNum, @intCast(tuple.y[2])) },
         });
     }
-
-    // Sort pairs by shortest Manhattan distance
-    std.sort.heap(rt.RoutePair, pairs.items, {}, struct {
-        fn lessThan(context: void, a: rt.RoutePair, b: rt.RoutePair) bool {
-            _ = context;
-            return rt.manhattanDistance(a.from, a.to) < rt.manhattanDistance(b.from, b.to);
-        }
-    }.lessThan);
 
     var router = rt.Router{ .config = .{} };
     var route = router.routeAll(gpa, seed, pairs.items, &forbidden_zone) catch |err| {
@@ -95,6 +97,7 @@ pub fn main() !void {
         return;
     };
     defer route.deinit(gpa);
+
     try allBlocks.appendSlice(gpa, route.blocks.items);
 
     // visualize forbidden zone
