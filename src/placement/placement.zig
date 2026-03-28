@@ -12,8 +12,7 @@ const Library = library.Library;
 
 // comptime or private variables:
 pub const postype = model.PosNum;
-const use_accurate_input_pos = false;
-const max_chipsize: u32 = 300;
+const max_chipsize: u32 = 200;
 // in blocks
 const congestion_cell_size = 10;
 // used to avoid reading out of index in the grid
@@ -122,6 +121,7 @@ pub const Placement = struct {
 
     pub fn deinit(self: *Placement, allocator: std.mem.Allocator) void {
         self.locations.deinit();
+        self.variants.deinit();
         self.input_nodes.deinit();
         self.output_nodes.deinit();
         allocator.destroy(self);
@@ -264,6 +264,18 @@ fn colorForGroup(group: u8) u8 {
     return colors[group % colors.len];
 }
 
+pub fn printOccupancyGrid(self: *const Placement, string: *std.io.Writer.Allocating) void {
+    var y: usize = 50;
+    while (y > 0) {
+        y -= 1; // now y goes: 299 → 0
+
+        for (0..100) |x| {
+            string.writer.print("{:>2}", .{self.occupancy_grid[x][y]}) catch {};
+        }
+        string.writer.print("\n", .{}) catch {};
+    }
+}
+
 pub fn printCongestionGrid(grid: Density, string: *std.io.Writer.Allocating) void {
     const max_cost: f32 = 10;
 
@@ -329,7 +341,7 @@ pub fn print(netlist: *const Netlist, placement: *Placement, allocator: std.mem.
 
     try renderAscii(netlist, placement, &string);
 
-    // printGrid(placement, &string);
+    printOccupancyGrid(placement, &string);
     std.debug.print("{s}", .{string.written()});
 
     string.deinit();
@@ -376,7 +388,7 @@ fn getEdgeFromToNodes(the_graph: *const Graph, the_placement: *const Placement, 
 // returns 2 coordinates of the ports connected to this edge, the 'from' port (output port of the input node) , and the 'to' port (input port of the output node)
 // min_pos is to avoid writing in/output ports outside of bounds.
 // vector returned as .{port_pos_from, port_pos_to}
-fn getPortAbsolutePositions(netlist: *const Netlist, the_placement: *const Placement, edge: *const Net, accurate: bool, chip_height_coordinate: postype) ?[2]model.Pos {
+fn getPortAbsolutePositions(netlist: *const Netlist, the_placement: *const Placement, edge: *const Net, chip_height_coordinate: postype) ?[2]model.Pos {
     _ = netlist; // autofix
     // do not allow rotations for now
     const net = edge;
@@ -384,9 +396,6 @@ fn getPortAbsolutePositions(netlist: *const Netlist, the_placement: *const Place
     const from_node = net.output;
     const to_node = net.input;
 
-    // search for correct edge index: expensive :(
-    // no longer expensive :)
-    _ = accurate;
     const schematic_output = the_placement.variants.get(from_node.instance).?.model;
     if (schematic_output.outputs.len <= from_node.port) @panic("cry");
     const port_output = schematic_output.outputs[from_node.port];
@@ -431,6 +440,17 @@ fn initialPlacement(gpa: std.mem.Allocator, netlist: *const Netlist, annealing_c
     // choose variant for each node
     for (netlist.instances, 0..) |*instance, i| {
         const variant = netlist.lib.variants.getPtr(instance.kind).?.items[0];
+        std.debug.assert(!placement.variants.contains(i));
+        if (netlist.numInputPorts(i) == 0) {
+            std.debug.assert(placement.output_nodes.contains(i) == false);
+            std.debug.assert(placement.input_nodes.contains(i) == false);
+            try placement.input_nodes.put(i, {});
+        }
+        if (netlist.numOutputPorts(i) == 0) {
+            std.debug.assert(placement.output_nodes.contains(i) == false);
+            std.debug.assert(placement.input_nodes.contains(i) == false);
+            try placement.output_nodes.put(i, {});
+        }
         try placement.variants.put(i, variant);
     }
 
@@ -440,30 +460,37 @@ fn initialPlacement(gpa: std.mem.Allocator, netlist: *const Netlist, annealing_c
 
     var count: u32 = 0;
 
-    for (0..netlist.instances.len) |i| {
+    var it = placement.input_nodes.iterator();
+    while (it.next()) |entry| {
         // if there are no input edges connected to this node, it is considered an input to the chip
-        if (netlist.numInputPorts(i) == 0) {
-            try place(placement, i, x, y, .North, annealing_config.node_padding);
-            try placement.input_nodes.put(i, {});
-            count += 1;
-            std.debug.assert(placement.locations.count() == count);
-            x = x + spacing;
-        }
+        std.debug.assert(placement.locations.contains(entry.key_ptr.*) == false);
+        try place(placement, entry.key_ptr.*, x, y, .North, annealing_config.node_padding);
+        count += 1;
+
+        std.log.info(
+            "len:{d}",
+            .{placement.locations.count()},
+        );
+        std.debug.assert(placement.locations.count() == count);
+        x = x + spacing;
     }
 
     // place output nodes:
     x = first_x_pos;
     y = placement.output_y;
 
-    for (0..netlist.instances.len) |i| {
+    var it2 = placement.output_nodes.iterator();
+    while (it2.next()) |entry| {
         // if there are no output edges connected to this node, it is considered an output to the chip
-        if (netlist.numOutputPorts(i) == 0) {
-            try place(placement, i, x, y, .North, annealing_config.node_padding);
-            try placement.output_nodes.put(i, {});
-            count += 1;
-            std.debug.assert(placement.locations.count() == count);
-            x = x + spacing;
-        }
+        std.debug.assert(placement.locations.contains(entry.key_ptr.*) == false);
+        try place(placement, entry.key_ptr.*, x, y, .North, annealing_config.node_padding);
+        count += 1;
+        std.log.info(
+            "len:{d}",
+            .{placement.locations.count()},
+        );
+        std.debug.assert(placement.locations.count() == count);
+        x = x + spacing;
     }
 
     x = first_x_pos;
@@ -492,7 +519,7 @@ fn cost(netlist: *const Netlist, the_placement: *const Placement, annealing_conf
 
 // computes wire length estimation of given net
 fn HPWL(netlist: *const Netlist, the_placement: *const Placement, annealing_config: AnnealingConfig, net: *const Net) f32 {
-    const positions = getPortAbsolutePositions(netlist, the_placement, net, use_accurate_input_pos, annealing_config.chip_height_coordinate).?;
+    const positions = getPortAbsolutePositions(netlist, the_placement, net, annealing_config.chip_height_coordinate).?;
 
     const port_pos_from = positions[0];
     const port_pos_to = positions[1];
@@ -544,7 +571,7 @@ fn computeCongestionRUDY(netlist: *const Netlist, the_placement: *const Placemen
 }
 
 fn computeNetDensity(netlist: *const Netlist, the_placement: *const Placement, annealing_config: AnnealingConfig, net: *const Net, grid: *Density) void {
-    const positions = getPortAbsolutePositions(netlist, the_placement, net, use_accurate_input_pos, annealing_config.chip_height_coordinate).?;
+    const positions = getPortAbsolutePositions(netlist, the_placement, net, annealing_config.chip_height_coordinate).?;
 
     const port_pos_from = positions[0];
     const port_pos_to = positions[1];
@@ -599,8 +626,13 @@ fn computeNetDensity(netlist: *const Netlist, the_placement: *const Placement, a
 fn place(the_placement: *Placement, id: Id, new_x: postype, new_y: postype, orientation: Orientation, node_padding: u8) !void {
     const variant = the_placement.variants.get(id).?;
     const rect = variant.model.brect();
+    std.debug.assert(rect.w >= 1);
+    std.debug.assert(rect.h >= 1);
+
     for (new_x - node_padding..new_x + rect.w) |x| {
         for (new_y - node_padding..new_y + rect.h) |y| {
+            const assertion = (the_placement.occupancy_grid[x][y] == 0 or the_placement.occupancy_grid[x][y] == id);
+            std.debug.assert(assertion);
             the_placement.occupancy_grid[x][y] = id;
         }
     }
@@ -616,21 +648,41 @@ fn tryMove(the_placement: *Placement, id: Id, last_pos: *const Position, new_x: 
     const variant = the_placement.variants.get(id).?;
     const rect = variant.model.brect();
 
+    for (last_pos.x - node_padding..last_pos.x + rect.w) |x| {
+        for (last_pos.y - node_padding..last_pos.y + rect.h) |y| {
+            const assertion = (the_placement.occupancy_grid[x][y] == id);
+            std.debug.assert(assertion);
+        }
+    }
+
     const collision_result = try checkCollision(the_placement, id, rect, new_x, new_y, node_padding);
     if (collision_result != 0) return collision_result;
 
     // No collision, so move rectangle
     for (last_pos.x - node_padding..last_pos.x + rect.w) |x| {
         for (last_pos.y - node_padding..last_pos.y + rect.h) |y| {
+            const assertion = (the_placement.occupancy_grid[x][y] == 0 or the_placement.occupancy_grid[x][y] == id);
+            std.debug.assert(assertion);
             the_placement.occupancy_grid[x][y] = 0;
         }
     }
 
     try place(the_placement, id, new_x, new_y, last_pos.orientation, node_padding);
+
+    // std.debug.assert(the_placement.occupancy_grid[new_x][new_y] == id);
+
+    for (new_x - node_padding..new_x + rect.w) |x| {
+        for (new_y - node_padding..new_y + rect.h) |y| {
+            std.debug.assert(the_placement.occupancy_grid[x][y] == id);
+        }
+    }
     return 0;
 }
 
 fn checkCollision(the_placement: *const Placement, node_id: glib.NodeId, size: model.Rect, new_x: postype, new_y: postype, node_padding: u8) !glib.NodeId {
+    std.debug.assert(size.w >= 1);
+    std.debug.assert(size.h >= 1);
+
     for (new_x - node_padding..new_x + size.w) |x| {
         for (new_y - node_padding..new_y + size.h) |y| {
             if (the_placement.occupancy_grid[x][y] != 0 and the_placement.occupancy_grid[x][y] != node_id) {
@@ -734,13 +786,15 @@ fn swap(netlist: *const Netlist, the_placement: *Placement, node_a_id: glib.Node
 
     // both fit, so proceed the swap:
     // set both old positions to 0:
-    for (unsigned_new_x_b - node_padding..unsigned_new_x_b + rect_a.w) |x| {
-        for (unsigned_new_y_b - node_padding..unsigned_new_y_b + rect_a.h) |y| {
+    for (pos_a.x - node_padding..pos_a.x + rect_a.w) |x| {
+        for (pos_a.y - node_padding..pos_a.y + rect_a.h) |y| {
+            std.debug.assert(the_placement.occupancy_grid[x][y] == 0 or the_placement.occupancy_grid[x][y] == node_a_id);
             the_placement.occupancy_grid[x][y] = 0;
         }
     }
-    for (unsigned_new_x_a - node_padding..unsigned_new_x_a + rect_b.w) |x| {
-        for (unsigned_new_y_a - node_padding..unsigned_new_y_a + rect_b.h) |y| {
+    for (pos_b.x - node_padding..pos_b.x + rect_b.w) |x| {
+        for (pos_b.y - node_padding..pos_b.y + rect_b.h) |y| {
+            std.debug.assert(the_placement.occupancy_grid[x][y] == 0 or the_placement.occupancy_grid[x][y] == node_b_id);
             the_placement.occupancy_grid[x][y] = 0;
         }
     }
@@ -801,6 +855,7 @@ fn moveInputOrOutputAxis(netlist: *const Netlist, the_placement: *Placement, win
         const pos = the_placement.locations.getPtr(id).?;
         const variant = the_placement.variants.get(id).?;
         const rect = variant.model.brect();
+        // confirmed to have thrown an error at least once fsr:
         std.debug.assert(0 == try checkCollision(the_placement, id, rect, pos.x, new_y, node_padding));
         const result = try tryMove(the_placement, id, pos, pos.x, new_y, node_padding);
         // std.debug.print("moved once {d},{d}", .{ before, result });
