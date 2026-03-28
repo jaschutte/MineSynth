@@ -3,6 +3,40 @@ const model = @import("model.zig");
 const library = @import("library.zig");
 const nbt = @import("visualization/nbt.zig");
 
+pub fn main() !void {
+    // Initialize allocator
+    // var real_gpa: std.heap.DebugAllocator(.{}) = .init;
+    var real_gpa: std.heap.GeneralPurposeAllocator(.{}) = .init;
+    const gpa = real_gpa.allocator();
+    // defer _ = real_gpa.deinit();
+
+    // Read AIGER file
+    const content = try std.fs.cwd().readFileAlloc(gpa, "aiger-examples/serial-adder.aag", std.math.maxInt(usize));
+    defer _ = gpa.free(content);
+
+    // Apply normalization to AIGER file
+    // and generate netlist tuple
+    const netlist = try normalization_stage(gpa, content);
+
+    // Perform placement
+    const placement = try placement_stage(gpa, &netlist);
+
+    // Convert to schematic and wires
+    const placed_schematic = try placement.toSchematic(gpa);
+    const wires = try placement.getWires(gpa);
+
+    // Perform routing
+    const schematic = try routing_stage(gpa, &placed_schematic, wires);
+
+    // Perform validation
+    const result = try validation_stage(gpa, &schematic, &netlist, &placement);
+    if (!result) @panic("Validation failed");
+
+    // Visualize schematic
+    const visualization = try visualization_stage(gpa, &schematic, &placement);
+    nbt.write_nbt_file("circuit.schematic", visualization);
+}
+
 fn normalization_stage(gpa: std.mem.Allocator, aiger_file: []u8) !model.Netlist {
     // Construct library
     const lib = try library.Library.init(gpa);
@@ -66,13 +100,19 @@ fn routing_stage(gpa: std.mem.Allocator, schem: *const model.Schematic, wires: [
     return schem.*;
 }
 
-fn validation(gpa: std.mem.Allocator, schem: *const model.Schematic, netlist: *const model.Netlist, placement: *const model.Placement) !bool {
-    _ = gpa; // autofix
-    _ = schem; // autofix
-    _ = netlist; // autofix
-    _ = placement; // autofix
-    // TODO: Perform validation
+fn validation_stage(gpa: std.mem.Allocator, schematic: *const model.Schematic, netlist: *const model.Netlist, placement: *const model.Placement) !bool {
+    const validation = @import("validation/validation.zig");
+
+    // Validate that the schematic is valid
+    const schematic_valid = validation.validate_grid(schematic);
+    if (!schematic_valid) @panic("Generated schematic is not valid");
+
+    // Validate that logical equivalence is preserved
+    const logical_equivalence = try validation.validate_logical_equivalence(netlist, schematic, placement, gpa);
+    if (!logical_equivalence) @panic("Generated schematic is not logically equivalent");
+
     // TODO: Perform static timing analysis
+
     return true;
 }
 
@@ -88,38 +128,4 @@ fn visualization_stage(gpa: std.mem.Allocator, schematic: *const model.Schematic
     try blocks.appendSlice(gpa, place_blocks);
 
     return nbt.block_arr_to_schem(gpa, try blocks.toOwnedSlice(gpa));
-}
-
-pub fn main() !void {
-    // Initialize allocator
-    // var real_gpa: std.heap.DebugAllocator(.{}) = .init;
-    var real_gpa: std.heap.GeneralPurposeAllocator(.{}) = .init;
-    const gpa = real_gpa.allocator();
-    defer _ = real_gpa.deinit();
-
-    // Read AIGER file
-    const content = try std.fs.cwd().readFileAlloc(gpa, "aiger-examples/serial-adder.aag", std.math.maxInt(usize));
-    defer _ = gpa.free(content);
-
-    // Apply normalization to AIGER file
-    // and generate netlist tuple
-    const netlist = try normalization_stage(gpa, content);
-
-    // Perform placement
-    const placement = try placement_stage(gpa, &netlist);
-
-    // Convert to schematic and wires
-    const placed_schematic = try placement.toSchematic(gpa);
-    const wires = try placement.getWires(gpa);
-
-    // Perform routing
-    const schematic = try routing_stage(gpa, &placed_schematic, wires);
-
-    // Perform validation
-    const result = try validation(gpa, &schematic, &netlist, &placement);
-    if (!result) @panic("Validation failed");
-
-    // Visualize schematic
-    const visualization = try visualization_stage(gpa, &schematic, &placement);
-    nbt.write_nbt_file("circuit.schematic", visualization);
 }
