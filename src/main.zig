@@ -13,21 +13,21 @@ fn normalization_stage(gpa: std.mem.Allocator, aiger_file: []u8) !model.Netlist 
     defer _ = aig.deinit();
 
     // Extract netlist form AIGER
-    const nl = @import("netlist.zig");
+    const nl = @import("normalization/netlist.zig");
     var netlist = try nl.Netlist.fromAiger(gpa, aig);
     defer _ = netlist.deinit();
 
     // Construct Graph from netlit and apply normalization
-    const glib = @import("graph/graph.zig");
-    const preprocessor = @import("graph/preprocessor.zig");
-    const sta = @import("sta.zig");
+    const glib = @import("normalization/graph.zig");
+    const preprocessor = @import("normalization/preprocessor.zig");
+    const sta = @import("normalization/sta.zig");
     const graph = glib.GraphConstructors.fromNetlist(gpa, &netlist);
     defer graph.deinit();
     preprocessor.PreProcessor(glib.GateBody).preprocess(graph);
     sta.AAT(graph, &lib); // Perform static timing analysis
 
     // Print graph
-    const graphviz = @import("graph/graphviz.zig");
+    const graphviz = @import("normalization/graphviz.zig");
     graphviz.GraphVisualizer(glib.GateBody).print(gpa, graph);
 
     // Convert graph into model type
@@ -43,7 +43,7 @@ fn placement_stage(gpa: std.mem.Allocator, netlist: *const model.Netlist) !model
 
     std.debug.print("Early netlist {any}\n", .{netlist});
 
-    const plc = @import("placement.zig");
+    const plc = @import("placement/placement.zig");
     const annealing_config: plc.AnnealingConfig = .{
         .initial_temperature = 3,
         .moves_per_temperature = 1000,

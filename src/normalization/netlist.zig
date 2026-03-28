@@ -1,7 +1,7 @@
 const std = @import("std");
-const aiger = @import("normalization/aiger.zig");
-const model = @import("model.zig");
-const library = @import("library.zig");
+const aiger = @import("aiger.zig");
+const model = @import("../model.zig");
+const library = @import("../library.zig");
 const InstanceKind = library.InstanceKind;
 
 const Error = error{

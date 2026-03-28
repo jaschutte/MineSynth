@@ -1,6 +1,6 @@
 const std = @import("std");
 const model = @import("../model.zig");
-const plc = @import("../placement.zig");
+const plc = @import("placement.zig");
 
 pub fn convertPlacement(gpa: std.mem.Allocator, plc_orig: *const plc.Placement) !model.Placement {
     var instances = std.ArrayList(model.InstancePlacement).empty;

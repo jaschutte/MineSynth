@@ -1,5 +1,5 @@
 const std = @import("std");
-const glib = @import("../graph/graph.zig");
+const glib = @import("graph.zig");
 const model = @import("../model.zig");
 const library = @import("../library.zig");
 

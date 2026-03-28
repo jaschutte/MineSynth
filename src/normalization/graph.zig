@@ -1,5 +1,5 @@
 const std = @import("std");
-const nl = @import("../netlist.zig");
+const nl = @import("netlist.zig");
 const model = @import("../model.zig");
 
 var _global_id_counter: model.Id = 0;

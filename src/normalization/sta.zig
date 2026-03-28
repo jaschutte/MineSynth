@@ -1,6 +1,6 @@
 const std = @import("std");
-const glib = @import("graph/graph.zig");
-const library = @import("library.zig");
+const glib = @import("graph.zig");
+const library = @import("../library.zig");
 const Graph = glib.Graph;
 
 // set metadata to timing
