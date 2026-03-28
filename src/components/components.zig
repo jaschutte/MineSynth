@@ -6,7 +6,8 @@ pub fn rotateCoord(coord: WorldCoord, dir: WorldCoord) WorldCoord {
     if (dir[0] > 0) return coord;
     if (dir[0] < 0) return .{ -coord[0], coord[1], -coord[2] };
     if (dir[2] > 0) return .{ -coord[2], coord[1], coord[0] };
-    return .{ coord[2], coord[1], -coord[0] };
+    if (dir[2] < 0) return .{ coord[2], coord[1], -coord[0] };
+    return coord; // Fallback for zero or strictly vertical vectors
 }
 
 pub fn rotateOrientation(rot: ms.Orientation, dir: WorldCoord) ms.Orientation {

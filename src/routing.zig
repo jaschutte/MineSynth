@@ -15,11 +15,13 @@ pub const Router = @This();
 pub const Config = struct {
     max_iterations: u32 = 20,
     violation_cost_multiplier: f16 = 5.0,
-    violation_cost_increase: f16 = 1.0,
+    violation_cost_increase: f16 = 5.0,
     max_length: u32 = 1000,
     max_astar_iterations: u32 = 100000,
-    astar_iterations_increase: u32 = 100000,
-    path_length_bound_multiplier: f16 = 8.0,
+    astar_iterations_increase: u32 = 10000,
+    path_length_bound_multiplier: f16 = 80.0,
+    heuristic_weight: f16 = 1.0,
+    directional_bias: f16 = 2.0,
 };
 
 config: Config = .{},
@@ -31,7 +33,7 @@ route_infos: []RouteInfo = undefined,
 route_results: []RoutingResult = undefined,
 
 const MIN_Y = 1;
-const MAX_Y = 10;
+const MAX_Y = 20;
 
 pub const RoutePair = struct {
     from: WorldCoord,
@@ -171,9 +173,13 @@ pub fn routeAll(
     pairs: []RoutePair,
     forbidden_zone: *ForbiddenZone,
 ) !RoutingResult {
-    var arena = std.heap.ArenaAllocator.init(a);
-    const arena_a = arena.allocator();
-    defer arena.deinit();
+    // var arena = std.heap.ArenaAllocator.init(a);
+    // const arena_a = arena.allocator();
+    const buf: []u8 = a.alloc(u8, 10000 * 1024 * 1024) catch @panic("Failed to allocate arena buffer");
+    defer a.free(buf);
+    var sba = std.heap.FixedBufferAllocator.init(buf);
+    const arena_a = sba.allocator();
+
     router.a = arena_a;
     router.external_a = a;
     router.var_config = router.config; // copy config to mutable var
@@ -181,6 +187,8 @@ pub fn routeAll(
     // initiate rng
     var rng = std.Random.DefaultPrng.init(seed);
     const random = rng.random();
+
+    std.log.info("Starting routing with seed {d} and {d} pairs", .{ seed, pairs.len });
 
     // sort pairs
     std.sort.block(RoutePair, pairs, false, sortPairsManhattan);
@@ -277,7 +285,7 @@ pub fn routeAll(
             break;
         }
 
-        std.log.info("Iteration {d}: Rerouting {d} sub-nets...", .{ iteration, violating_set.count() });
+        std.log.info("Iteration {d}: Rerouting {d} sub-nets with vio cost {d} and max iter {d}...", .{ iteration, violating_set.count(), router.var_config.violation_cost_multiplier, router.var_config.max_astar_iterations });
 
         // Phase 1: Teardown
         // Rip up EVERYTHING that is flagged before any routing begins
@@ -332,6 +340,9 @@ pub fn routeAll(
                 try router.route_results[route_id].blocks.append(arena_a, Block{ .loc = to, .block = .block3, .rot = .center });
             }
         }
+        // increase configs
+        router.var_config.violation_cost_multiplier += router.config.violation_cost_increase;
+        router.var_config.max_astar_iterations += router.config.astar_iterations_increase;
     }
 
     var total_result = RoutingResult{
@@ -374,6 +385,7 @@ const AStarQueueItem = struct {
     signal_strength: u8,
     g_cost: f16,
     f_cost: f16,
+    last_heading: WorldCoord, // Add this
 
     pub fn compare(router: *Router, self: AStarQueueItem, other: AStarQueueItem) std.math.Order {
         _ = router; // autofix
@@ -392,6 +404,7 @@ const AStarNode = struct {
     visited: bool = false,
     cost_so_far: f16 = std.math.inf(f16),
     parent: ?ParentInfo = null,
+    last_heading: WorldCoord = .{ 0, 0, 0 },
 };
 
 const Validity = union(enum) {
@@ -407,9 +420,68 @@ fn moveValidity(router: *Router, move: Move, forbidden_zone: *ForbiddenZone, cur
         const rotated_offset = comp.rotateCoord(build_block.offset, move.heading);
         const loc = move.from + rotated_offset;
 
+        // Enforce 1-block clearance around non-sister destinations
+        for (router.route_infos) |other_info| {
+            if (other_info.id == current_route_id) continue;
+
+            var is_sister = false;
+            for (router.route_infos[current_route_id].sister_routes.items) |sister_id| {
+                if (other_info.id == sister_id) {
+                    is_sister = true;
+                    break;
+                }
+            }
+
+            if (!is_sister) {
+                var dx = if (loc[0] > other_info.dest[0]) loc[0] - other_info.dest[0] else other_info.dest[0] - loc[0];
+                var dy = if (loc[1] > other_info.dest[1]) loc[1] - other_info.dest[1] else other_info.dest[1] - loc[1];
+                var dz = if (loc[2] > other_info.dest[2]) loc[2] - other_info.dest[2] else other_info.dest[2] - loc[2];
+
+                if (dx <= 1 and dy <= 1 and dz <= 1) {
+                    violation = .{
+                        .loc = loc,
+                        .violated_routes = .empty,
+                    };
+                    violation.?.violated_routes.append(router.a, other_info.id) catch @panic("oom");
+                    return .{ .violation = violation.? };
+                }
+
+                // and also from any src of non-sister routes
+                dx = if (loc[0] > other_info.src[0]) loc[0] - other_info.src[0] else other_info.src[0] - loc[0];
+                dy = if (loc[1] > other_info.src[1]) loc[1] - other_info.src[1] else other_info.src[1] - loc[1];
+                dz = if (loc[2] > other_info.src[2]) loc[2] - other_info.src[2] else other_info.src[2] - loc[2];
+
+                if (dx <= 1 and dy <= 1 and dz <= 1) {
+                    violation = .{
+                        .loc = loc,
+                        .violated_routes = .empty,
+                    };
+                    violation.?.violated_routes.append(router.a, other_info.id) catch @panic("oom");
+                    return .{ .violation = violation.? };
+                }
+            }
+        }
+
         const conflict = forbidden_zone.get(loc) orelse continue;
 
         if (conflict.ftype == .gate) return .invalid;
+
+        // Allow anything that is not the move's center coordinate to pass through other wires' padding
+        if (!vecEq(loc, move.from) and conflict.ftype == .wire_padding) {
+            var on_route = false;
+            for (conflict.route_ids.items) |id| {
+                for (router.route_results[id].moves.items) |other_move| {
+                    if (vecEq(loc, other_move.to)) {
+                        on_route = true;
+                        break;
+                    }
+                }
+                if (on_route) {
+                    continue;
+                }
+            }
+            if (!on_route) continue;
+        }
 
         for (conflict.route_ids.items) |id| {
             if (id == current_route_id) continue;
@@ -431,13 +503,16 @@ fn moveValidity(router: *Router, move: Move, forbidden_zone: *ForbiddenZone, cur
                 // Condition B: Conflict is with a sister's block AND is on the route
                 if (conflict.ftype == .wire) {
                     var on_route = false;
+                    var cat = comp.ComponentType.dust;
                     for (router.route_results[id].moves.items) |sister_move| {
                         if (vecEq(loc, sister_move.to)) {
                             on_route = true;
+                            cat = sister_move.def.cat;
                             break;
                         }
                     }
-                    if (on_route) {
+                    // only dust otherwise stairs kill
+                    if (on_route and cat == comp.ComponentType.dust and move.def.cat == comp.ComponentType.dust) {
                         continue;
                     }
                 }
@@ -446,7 +521,7 @@ fn moveValidity(router: *Router, move: Move, forbidden_zone: *ForbiddenZone, cur
             // Initialize violation lazily on first conflict
             if (violation == null) {
                 violation = Violation{
-                    .loc = move.to, // Keep move.to as the representative A* step coordinate
+                    .loc = loc,
                     .violated_routes = .empty,
                 };
                 violation.?.violated_routes.append(router.a, current_route_id) catch @panic("oom");
@@ -549,10 +624,11 @@ fn routeAStar(router: *Router, a: Allocator, info: RouteInfo, forbidden_zone: *F
         .g_cost = 0,
         .f_cost = 0, // heuristic is 0 for the destination
         .signal_strength = 15, // start with max signal strength at the destination, will decay as we move towards origins
+        .last_heading = .{ 0, 0, 0 }, //
     });
     try nodes.put(info.dest, AStarNode{ .cost_so_far = 0 });
 
-    const min_heuristic = calculateHeuristic(info.dest, info.origins.items);
+    const min_heuristic = calculateHeuristic(router, info.dest, info.origins.items);
     const max_allowed_cost = @max(min_heuristic * router.config.path_length_bound_multiplier, 50.0);
 
     var iterations: u32 = 0;
@@ -560,7 +636,7 @@ fn routeAStar(router: *Router, a: Allocator, info: RouteInfo, forbidden_zone: *F
     var final_coord: WorldCoord = undefined;
 
     // Main A* loop
-    while (queue.count() > 0 and iterations < router.config.max_astar_iterations) {
+    while (queue.count() > 0 and iterations < router.var_config.max_astar_iterations) {
         iterations += 1;
 
         const current = queue.remove();
@@ -596,6 +672,23 @@ fn routeAStar(router: *Router, a: Allocator, info: RouteInfo, forbidden_zone: *F
         for (moves) |move| {
             const neighbor_coord = current.coord + move.offset;
             if (neighbor_coord[1] < MIN_Y or neighbor_coord[1] > MAX_Y) continue; // skip out of bounds neighbors
+            // disallow 180 degree turns
+            // Explicitly guard against the initial {0,0,0} state
+            if (current.last_heading[0] != 0 or current.last_heading[1] != 0 or current.last_heading[2] != 0) {
+                if (move.heading[0] + current.last_heading[0] == 0 and
+                    move.heading[1] + current.last_heading[1] == 0 and
+                    move.heading[2] + current.last_heading[2] == 0)
+                {
+                    continue;
+                }
+                // no staircases on corners
+                // this is sad but the fix is hard
+                if (move.def.cat == .staircase_up or move.def.cat == .staircase_down) {
+                    if (!vecEq(move.heading, current.last_heading)) {
+                        continue;
+                    }
+                }
+            }
 
             // Check if neighbor is an origin
             var is_at_origin = false;
@@ -636,8 +729,8 @@ fn routeAStar(router: *Router, a: Allocator, info: RouteInfo, forbidden_zone: *F
             if (checkSelfIntersection(&nodes, current.coord, move)) continue;
 
             // Calculate movement cost
-            const calculated_cost = calculateMovementCost(move, forbidden_zone);
-            const movement_cost = if (validity == .violation) calculated_cost * router.config.violation_cost_multiplier else calculated_cost;
+            const calculated_cost = calculateMovementCost(router, move, current_node, forbidden_zone);
+            const movement_cost = if (validity == .violation) calculated_cost * router.var_config.violation_cost_multiplier else calculated_cost;
             const new_cost = current.g_cost + movement_cost;
 
             if (new_cost > max_allowed_cost) continue;
@@ -645,6 +738,7 @@ fn routeAStar(router: *Router, a: Allocator, info: RouteInfo, forbidden_zone: *F
 
             // Update neighbor with better path
             neighbor_node.cost_so_far = new_cost;
+            neighbor_node.last_heading = move.heading;
             neighbor_node.parent = .{
                 .parent = current.coord,
                 .move = move,
@@ -652,7 +746,7 @@ fn routeAStar(router: *Router, a: Allocator, info: RouteInfo, forbidden_zone: *F
             };
 
             // Calculate heuristic (distance to nearest origin)
-            const heuristic = calculateHeuristic(neighbor_coord, info.origins.items);
+            const heuristic = calculateHeuristic(router, neighbor_coord, info.origins.items);
             const estimated_total = new_cost + heuristic;
 
             // Add to queue
@@ -661,6 +755,7 @@ fn routeAStar(router: *Router, a: Allocator, info: RouteInfo, forbidden_zone: *F
                 .g_cost = new_cost,
                 .f_cost = estimated_total,
                 .signal_strength = new_signal_strength,
+                .last_heading = move.heading,
             });
         }
     }
@@ -683,6 +778,7 @@ fn routeAStar(router: *Router, a: Allocator, info: RouteInfo, forbidden_zone: *F
         }
         for (comp.components[0].padding) |pad_offset| {
             const pad_loc = final_coord + pad_offset;
+            // skip if its w
             try markForbidden(forbidden_zone, router.a, pad_loc, .wire_padding, info.id);
         }
         result.length += 1;
@@ -796,10 +892,11 @@ inline fn getMoves(from: WorldCoord) [4 * comp.components.len]Move {
 
     for (&comp.components) |*component| {
         for ([_]WorldCoord{ .{ 1, 0, 0 }, .{ 0, 0, 1 }, .{ -1, 0, 0 }, .{ 0, 0, -1 } }) |cdir| {
+            const rotated_offset = comp.rotateCoord(component.base_dir, cdir);
             moves[index] = .{
                 .from = from,
-                .to = from + cdir,
-                .offset = comp.rotateCoord(component.base_dir, cdir),
+                .to = from + rotated_offset,
+                .offset = rotated_offset,
                 .heading = cdir,
                 .signal_behavior = component.signal_behavior,
                 .def = component,
@@ -813,7 +910,7 @@ inline fn getMoves(from: WorldCoord) [4 * comp.components.len]Move {
 
 /// Calculate the cost of moving from one coordinate to another
 /// This is a placeholder that can be customized based on routing requirements
-fn calculateMovementCost(move: Move, forbidden_zone: *ForbiddenZone) f16 {
+fn calculateMovementCost(router: *Router, move: Move, current_node: *AStarNode, forbidden_zone: *ForbiddenZone) f16 {
     _ = forbidden_zone; // autofix
 
     // Basic movement cost - can be enhanced later with:
@@ -822,13 +919,22 @@ fn calculateMovementCost(move: Move, forbidden_zone: *ForbiddenZone) f16 {
     // - Congestion costs
     // - Layer change costs
     // etc.
-    const cost = move.def.delay + move.def.length; // base cost from component definition
-    return @as(f16, @floatFromInt(cost));
+    var cost: f16 = @floatFromInt(move.def.delay + move.def.length);
+
+    // Apply penalty if changing direction (ignore initial {0,0,0} state)
+    if (current_node.last_heading[0] != 0 or current_node.last_heading[1] != 0 or current_node.last_heading[2] != 0) {
+        if (!vecEq(move.heading, current_node.last_heading)) {
+            cost += router.config.directional_bias;
+        }
+    }
+    // const cost = move.def.delay + move.def.length; // base cost from component definition
+    // return @as(f16, @floatFromInt(cost));
+    return cost;
 }
 
 /// Calculate heuristic (estimated cost to reach any origin)
 /// This uses the minimum Manhattan distance to any origin point
-fn calculateHeuristic(coord: WorldCoord, origins: []Origin) f16 {
+fn calculateHeuristic(router: *Router, coord: WorldCoord, origins: []Origin) f16 {
     if (origins.len == 0) {
         return 0; // No origins, so heuristic is 0
     }
@@ -842,7 +948,7 @@ fn calculateHeuristic(coord: WorldCoord, origins: []Origin) f16 {
         }
     }
 
-    return @as(f16, @floatFromInt(min_distance));
+    return @as(f16, @floatFromInt(min_distance)) * router.config.heuristic_weight;
 }
 
 fn markForbidden(
@@ -858,11 +964,9 @@ fn markForbidden(
             .ftype = ftype,
             .route_ids = .empty,
         };
-    } else if (entry.value_ptr.ftype != .gate) {
+    } else if (entry.value_ptr.ftype == .wire_padding and ftype == .wire) {
         // A physical wire overrides wire_padding for the cell's primary type
-        if (ftype == .wire and entry.value_ptr.ftype == .wire_padding) {
-            entry.value_ptr.ftype = .wire;
-        }
+        entry.value_ptr.ftype = .wire;
     }
 
     // Append the route_id if it isn't already in the list

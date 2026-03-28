@@ -206,6 +206,11 @@ const outputBlocks = [_]structures.AbsBlock{
         .loc = .{ 0, 0, 0 },
         .rot = .center,
     },
+    .{
+        .block = .block2,
+        .loc = .{ 0, -1, 0 },
+        .rot = .center,
+    },
 };
 
 const outputForbiddenCords = [_]structures.WorldCoord{};

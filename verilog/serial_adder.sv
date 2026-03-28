@@ -31,7 +31,7 @@ endmodule
 
 // Multibit serial adder
 module top_level
-#(parameter WIDTH = 4)(
+#(parameter WIDTH = 8)(
    input [WIDTH-1:0] a,
    input [WIDTH-1:0] b,
    output [WIDTH:0]  o

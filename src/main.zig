@@ -15,7 +15,7 @@ pub fn main() !void {
     const gpa = real_gpa.allocator();
     defer _ = real_gpa.deinit();
 
-    const content = try std.fs.cwd().readFileAlloc(gpa, "aiger-examples/serial-adder.aag", std.math.maxInt(usize));
+    const content = try std.fs.cwd().readFileAlloc(gpa, "aiger-examples/2-adder.aag", std.math.maxInt(usize));
     defer _ = gpa.free(content);
 
     const aig = try aiger.Aiger.parseAag(gpa, content);
@@ -97,6 +97,17 @@ pub fn main() !void {
         return;
     };
     defer route.deinit(gpa);
+    // get duplicates
+    // var seenCoords = std.AutoHashMap(ms.WorldCoord, void).init(gpa);
+    // defer seenCoords.deinit();
+    // for (route.blocks.items) |*block| {
+    //     if (seenCoords.contains(block.loc)) {
+    //         std.debug.print("Duplicate block at: ({}, {}, {})\n", .{ block.loc[0], block.loc[1], block.loc[2] });
+    //         block.block = .block2;
+    //     } else {
+    //         try seenCoords.put(block.loc, {});
+    //     }
+    // }
 
     try allBlocks.appendSlice(gpa, route.blocks.items);
 
