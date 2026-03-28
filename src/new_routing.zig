@@ -11,6 +11,7 @@ pub const PersistentCell = struct {
     padding: bool,
 
     pub fn passable(self: *const Self, our_source: glib.NodeId) bool {
+        // return !self.forbidden and (self.node_origin == null or self.node_origin == our_source or self.overlap <= 1);
         return !self.forbidden and (self.node_origin == null or self.node_origin == our_source);
     }
 };
@@ -53,6 +54,34 @@ const Direction = enum {
     upright,
     downleft,
     downright,
+
+    pub fn onlyVertical(self: *const Self) Direction {
+        return switch (self.*) {
+            .up => .up,
+            .down => .down,
+            .upleft => .up,
+            .upright => .up,
+            .downleft => .down,
+            .downright => .down,
+            else => @panic("Invalid usage, left/right has no vertical-only counterpart"),
+        };
+    }
+
+    pub fn onlyHorizontal(self: *const Self) Direction {
+        return switch (self.*) {
+            .left => .left,
+            .right => .right,
+            .upleft => .left,
+            .upright => .right,
+            .downleft => .left,
+            .downright => .right,
+            else => @panic("Invalid usage, up/down has no horizontal-only counterpart"),
+        };
+    }
+
+    pub fn cost(_: *const Self) i64 {
+        return 1;
+    }
 
     pub fn asUnitCoord(self: *const Self) Coord {
         return switch (self.*) {
@@ -102,9 +131,6 @@ pub const Routing = struct {
     max_coord: Coord,
     min_coord: Coord,
 
-    current_goal: Coord,
-    current_edge_id: glib.EdgeId,
-
     fn sortEdgesOnDistance(self: *const Self, a_id: glib.EdgeId, b_id: glib.EdgeId) bool {
         const a_dist = self.edge_locations.get(a_id).?.manhattenDistance2D();
         const b_dist = self.edge_locations.get(b_id).?.manhattenDistance2D();
@@ -130,97 +156,37 @@ pub const Routing = struct {
         }
     }
 
-    pub fn isCellPassable(self: *Self, coord: Coord) bool {
-        return self.getCell(coord).passable(self.current_edge_id);
-    }
-
-    pub fn hasForcedNeighbour(self: *Self, from: Coord, direction: Direction) bool {
-        const dir_unit = direction.asUnitCoord();
-        if (dir_unit[0] != 0) {
-            const direct_up = from + Coord{ 0, 0, 1 };
-            const moved_up = from - dir_unit + Coord{ 0, 0, 1 };
-            if (self.isCellPassable(direct_up) and !self.isCellPassable(moved_up)) return true;
-
-            const direct_down = from + Coord{ 0, 0, -1 };
-            const moved_down = from - dir_unit + Coord{ 0, 0, -1 };
-            if (self.isCellPassable(direct_down) and !self.isCellPassable(moved_down)) return true;
+    pub fn sameNetDiscount(self: *Self, coord: Coord, node_origin: glib.NodeId) i64 {
+        if (self.getCell(coord).node_origin == node_origin) {
+            return -1;
+        } else {
+            return 0;
         }
-        if (dir_unit[2] != 0) {
-            const direct_right = from + Coord{ 1, 0, 0 };
-            const moved_right = from - dir_unit + Coord{ 1, 0, 0 };
-            if (self.isCellPassable(direct_right) and !self.isCellPassable(moved_right)) return true;
-
-            const direct_left = from + Coord{ -1, 0, 0 };
-            const moved_left = from - dir_unit + Coord{ -1, 0, 0 };
-            if (self.isCellPassable(direct_left) and !self.isCellPassable(moved_left)) return true;
-        }
-        return false;
-    }
-
-    pub fn jump(self: *Self, from: Coord) ?JPSCell {
-        if (self.checkHorizontalVertical(from)) |found| return found;
-
-        const diagonals = [4]Direction{ .upright, .upleft, .downright, .downleft };
-        for (diagonals) |diagonal| {
-            if (self.checkDiagonal(from, diagonal)) |found| return found;
-        }
-
-        return null;
-    }
-
-    pub fn checkHorizontalVertical(self: *Self, from: Coord) ?JPSCell {
-        if (self.checkDirection(from, Direction.left)) |found| return found;
-        if (self.checkDirection(from, Direction.right)) |found| return found;
-        if (self.checkDirection(from, Direction.up)) |found| return found;
-        if (self.checkDirection(from, Direction.down)) |found| return found;
-        return null;
-    }
-
-    pub fn checkDiagonal(self: *Self, from: Coord, direction: Direction) ?JPSCell {
-        var moving = from + direction.asUnitCoord();
-
-        while (self.withinBounds(moving)) {
-            if (!self.getCell(moving).passable(self.current_edge_id)) return null;
-            if (self.checkHorizontalVertical(from)) |found| {
-                return found;
-                // return JPSCell.new(0, coordManhattenDistance2D(moving, self.current_goal), moving, null);
-            }
-
-            moving += direction.asUnitCoord();
-        }
-
-        return null;
-    }
-
-    pub fn checkDirection(self: *Self, from: Coord, direction: Direction) ?JPSCell {
-        var moving = from + direction.asUnitCoord();
-
-        while (self.withinBounds(moving)) {
-            if (!self.getCell(moving).passable(self.current_edge_id)) return null;
-            if (coordExact(moving, self.current_goal)) {
-                return JPSCell.new(0, coordManhattenDistance2D(moving, self.current_goal), moving, null);
-            }
-
-            if (self.hasForcedNeighbour(moving, direction)) {
-                return JPSCell.new(0, coordManhattenDistance2D(moving, self.current_goal), moving, null);
-            }
-
-            moving += direction.asUnitCoord();
-        }
-        return null;
     }
 
     pub fn routeEdge(self: *Self, edge_id: glib.EdgeId) ?[]Coord {
-        // https://every-algorithm.github.io/2024/03/22/jump_point_search.html
-
         errdefer @panic("out of memory");
 
-        const start = self.edge_locations.get(edge_id).?.a;
-        const goal = self.edge_locations.get(edge_id).?.b;
-        self.current_goal = goal;
-        self.current_edge_id = edge_id;
+        const edge = self.graph.getEdge(edge_id).?;
 
-        std.log.info("Pathfinding for edge {}, from {} to {}", .{ edge_id, start, goal });
+        var source_node_id: glib.NodeId = undefined;
+        var start: Coord = undefined;
+        if (edge.a_relation == .output) {
+            start = self.edge_locations.get(edge_id).?.a;
+            source_node_id = edge.a;
+        } else {
+            start = self.edge_locations.get(edge_id).?.b;
+            source_node_id = edge.b;
+        }
+
+        var goal: Coord = undefined;
+        if (edge.a_relation == .input) {
+            goal = self.edge_locations.get(edge_id).?.a;
+        } else {
+            goal = self.edge_locations.get(edge_id).?.b;
+        }
+
+        std.log.info("Pathfinding for edge {}, from {} to {} with source {}", .{ edge_id, start, goal, source_node_id });
 
         var open = std.PriorityQueue(JPSCell, void, JPSCell.compareFunc).init(self.gpa, undefined);
         var closed = std.AutoHashMap(Coord, JPSCell).init(self.gpa);
@@ -236,41 +202,69 @@ pub const Routing = struct {
                 break;
             }
             try closed.put(current.position, current);
-            std.debug.print("Considering {}\n", .{current.position});
+            // std.debug.print("Considering {}\n", .{current.position});
 
-            const directions = [8]Direction{ .left, .right, .up, .down, .upleft, .upright, .downleft, .downright };
+            const directions = [4]Direction{ .left, .right, .up, .down };
             for (directions) |neighbour_dir| {
                 const neighbour_coord = current.position + neighbour_dir.asUnitCoord();
 
                 if (!self.withinBounds(neighbour_coord)) continue;
-                if (closed.contains(neighbour_coord)) continue;
+                if (!self.getCell(neighbour_coord).passable(source_node_id)) continue;
 
-                var jump_cell = self.jump(neighbour_coord) orelse continue;
-                if (closed.contains(jump_cell.position)) continue;
-                jump_cell.parent = current.position;
-                std.debug.print(" -> ADDING {} TO OPEN\n", .{jump_cell.position});
-                try open.add(jump_cell);
+                const next_g = current.g + neighbour_dir.cost() + self.sameNetDiscount(neighbour_coord, source_node_id);
+                var next_old_g: i64 = std.math.maxInt(i64);
+                if (closed.get(neighbour_coord)) |existing| {
+                    next_old_g = existing.g;
+                }
+
+                if (next_g < next_old_g) {
+                    const next_h = coordManhattenDistance2D(neighbour_coord, goal);
+                    const neighbour = JPSCell.new(next_g, next_h, neighbour_coord, current.position);
+                    try closed.put(neighbour_coord, neighbour);
+
+                    var open_contains = false;
+                    for (open.items) |in_open| {
+                        if (coordExact(in_open.position, neighbour_coord)) {
+                            open_contains = true;
+                            break;
+                        }
+                    }
+
+                    if (!open_contains) {
+                        try open.add(neighbour);
+                    }
+                }
+            }
+        }
+
+
+        var backtrack = found orelse {
+            std.log.err("Failed to find routable path for edge {}", .{edge_id});
+            return null;
+        };
+
+        var trace = std.array_list.Managed(Coord).init(self.gpa);
+        defer trace.deinit();
+        while (true) {
+            var overlap: u8 = 0;
+            if (self.persistent_grid.get(backtrack.position)) |persistent| {
+                overlap = persistent.overlap;
+            }
+
+            try trace.append(backtrack.position + Coord{ 0, 3 * overlap, 0 });
+            if (backtrack.parent) |parent| {
+                backtrack = closed.get(parent).?;
+            } else {
+                break;
             }
         }
 
         std.log.info("Found: {any}", .{found});
-
-        var backtrack = found orelse @panic("TODO: No route found!");
-        var trace = std.array_list.Managed(Coord).init(self.gpa);
-        while (true) {
-            std.debug.print("> {}\n", .{ backtrack.position });
-            try trace.append(backtrack.position);
-            if (backtrack.parent) |parent| {
-                backtrack = closed.get(parent).?;
-            }
-            break;
-        }
-
         for (0.., trace.items) |i, location| {
             std.log.info("  {}: {}", .{ i, location });
         }
 
-        @panic(":)");
+        return try trace.toOwnedSlice();
     }
 
     pub fn route(self: *Self) [][]Coord {
@@ -280,18 +274,59 @@ pub const Routing = struct {
         defer self.gpa.free(most_expensive_edges);
         std.mem.sort(glib.EdgeId, most_expensive_edges, self, sortEdgesOnDistance);
 
-        self.min_coord = Coord{ 0, 0, 0 };
-        self.max_coord = Coord{ 20, 0, 20 };
-        try self.edge_locations.put(69420, EdgeLocations{
-            .a = Coord{ 2, 0, 5 },
-            .b = Coord{ 8, 0, 6 },
-        });
-        _ = self.routeEdge(69420);
+        // self.min_coord = Coord{ 0, 0, 0 };
+        // self.max_coord = Coord{ 20, 0, 20 };
+        // try self.edge_locations.put(69420, EdgeLocations{
+        //     .a = Coord{ 2, 0, 5 },
+        //     .b = Coord{ 8, 0, 6 },
+        // });
+        // _ = self.routeEdge(69420);
 
         var routes = std.array_list.Managed([]Coord).init(self.gpa);
         defer routes.deinit();
         for (most_expensive_edges) |edge_id| {
-            const path = self.routeEdge(edge_id) orelse @panic("TODO");
+            // const path = self.routeEdge(edge_id) orelse @panic("TODO");
+            const path = self.routeEdge(edge_id) orelse {
+                std.log.err("TODO: Skipping for now.", .{});
+                continue;
+            };
+
+            const edge = self.graph.getEdge(edge_id).?;
+            var source_node_id: glib.NodeId = undefined;
+            if (edge.a_relation == .output) {
+                source_node_id = edge.a;
+            } else {
+                source_node_id = edge.b;
+            }
+
+            for (path) |node| {
+                var overlap: u8 = 1;
+                if (self.persistent_grid.get(node)) |cell| {
+                    overlap = cell.overlap + 1;
+                }
+
+                try self.persistent_grid.put(node, PersistentCell {
+                    .node_origin = source_node_id,
+                    .forbidden = false,
+                    .overlap = overlap,
+                    .padding = false,
+                });
+
+                const neighbours = [8]Direction{ .left, .right, .up, .down, .downleft, .downright, .upleft, .upright };
+                for (neighbours) |neighbour_dir| {
+                    const neighbour_coord = node + neighbour_dir.asUnitCoord();
+
+                    if (!self.persistent_grid.contains(neighbour_coord)) {
+                        try self.persistent_grid.put(neighbour_coord, PersistentCell {
+                            .node_origin = source_node_id,
+                            .forbidden = false,
+                            .overlap = overlap,
+                            .padding = true,
+                        });
+                    }
+                }
+            }
+
             try routes.append(path);
         }
 
@@ -315,10 +350,6 @@ pub const Routing = struct {
 
             .edge_locations = .init(gpa),
             .persistent_grid = .init(gpa),
-
-            // teehee
-            .current_goal = undefined,
-            .current_edge_id = undefined,
         };
 
         // Calculate the maximum bounding box, so that A* has limits
@@ -384,6 +415,24 @@ pub const Routing = struct {
             const node = graph.getConstNode(node_id).?;
             if (amount != 2 and node.body.kind == .and_gate) {
                 std.debug.print("Node ID {} ({s}) has {}\n", .{ node_id, node.body.symbol, amount });
+            }
+        }
+
+        // Add forbidden zones
+        for (graph.nodes.values()) |*node| {
+            // TODO: support orientation!
+            const position = placement.locations.get(node.id) orelse @panic("Node A has no location assigned, run placement first?");
+            const corner = Coord{ position.x, 0, position.y };
+            const forbidden = node.body.kind.forbiddenCoordsRelative();
+
+            for (forbidden) |filled| {
+                const absolute = corner + filled;
+                try self.persistent_grid.put(absolute, .{
+                    .node_origin = null,
+                    .forbidden = true,
+                    .overlap = 0,
+                    .padding = false,
+                });
             }
         }
 

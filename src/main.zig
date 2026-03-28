@@ -60,6 +60,23 @@ pub fn main() !void {
     const routes = routing.route();
     std.debug.print("ROUTED ALL {}!\n", .{routes.len});
 
+    for (routes) |route| {
+        for (route) |block| {
+            try allBlocks.append(gpa, ms.AbsBlock{
+                .block = .dust,
+                .rot = .center,
+                .loc = @intCast(block),
+            });
+            try allBlocks.append(gpa, ms.AbsBlock{
+                .block = .block,
+                .rot = .center,
+                .loc = @intCast(block - @Vector(3, i64){ 0, 1, 0 }),
+            });
+        }
+        gpa.free(route);
+    }
+    gpa.free(routes);
+
     // var iter = forbidden_zone.iterator();
     // while (iter.next()) |entry| {
     //     const coord = entry.key_ptr.*;
@@ -80,18 +97,18 @@ pub fn main() !void {
         });
     }
 
-    for (routing.edge_locations.values()) |locations| {
-        try allBlocks.append(gpa, ms.AbsBlock{
-            .block = .block3,
-            .rot = .center,
-            .loc = @truncate(locations.a),
-        });
-        try allBlocks.append(gpa, ms.AbsBlock{
-            .block = .block3,
-            .rot = .center,
-            .loc = @truncate(locations.b),
-        });
-    }
+    // for (routing.edge_locations.values()) |locations| {
+    //     try allBlocks.append(gpa, ms.AbsBlock{
+    //         .block = .block3,
+    //         .rot = .center,
+    //         .loc = @truncate(locations.a),
+    //     });
+    //     try allBlocks.append(gpa, ms.AbsBlock{
+    //         .block = .block3,
+    //         .rot = .center,
+    //         .loc = @truncate(locations.b),
+    //     });
+    // }
 
     // std.debug.print("{} <--> {}\n", .{routing.min_coord, routing.max_coord});
     // var x = routing.min_coord[0];
