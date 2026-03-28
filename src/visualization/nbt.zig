@@ -2,9 +2,16 @@ const std = @import("std");
 pub const c = @cImport({
     @cInclude("nbt.h");
 });
-pub const ms = @import("abstract/structures.zig");
+pub const library = @import("../library.zig");
+pub const BlockType = library.BlockType;
+pub const SchemBlock = library.SchemBlock;
+pub const Orientation = library.Orientation;
+pub const SchemPos = library.SchemPos;
+pub const SchemPosNum = library.SchemPosNum;
 
-pub fn blockcat_to_id(cat: ms.BlockCat) i8 {
+pub const NbtTag = [*c]c.nbt_tag_t;
+
+pub fn blockcat_to_id(cat: BlockType) i8 {
     return switch (cat) {
         .air => 0,
         .dust => 55,
@@ -16,7 +23,7 @@ pub fn blockcat_to_id(cat: ms.BlockCat) i8 {
     };
 }
 
-pub fn torch_orientation_to_data(ori: ms.Orientation) i8 {
+pub fn torch_orientation_to_data(ori: Orientation) i8 {
     return switch (ori) {
         .north => 4,
         .east => 1,
@@ -26,7 +33,7 @@ pub fn torch_orientation_to_data(ori: ms.Orientation) i8 {
     };
 }
 
-pub fn repeater_orientation_to_data(ori: ms.Orientation) i8 {
+pub fn repeater_orientation_to_data(ori: Orientation) i8 {
     const delay = 1;
     var orientation_value: i8 = 0;
     switch (ori) {
@@ -39,103 +46,40 @@ pub fn repeater_orientation_to_data(ori: ms.Orientation) i8 {
     return (delay - 1) * 4 + orientation_value;
 }
 
-// const and_gate = [_]ms.SchemBlock{
-//     .{
-//         .block = .dust,
-//         .loc = .{ 0, 0, 0 },
-//         .rot = .center,
-//     },
-//     .{
-//         .block = .dust,
-//         .loc = .{ 2, 0, 0 },
-//         .rot = .center,
-//     },
-//     .{
-//         .block = .repeater,
-//         .loc = .{ 0, 0, 1 },
-//         .rot = .south,
-//     },
-//     .{
-//         .block = .repeater,
-//         .loc = .{ 2, 0, 1 },
-//         .rot = .south,
-//     },
-//     .{
-//         .block = .block,
-//         .loc = .{ 0, 0, 2 },
-//         .rot = .center,
-//     },
-//     .{
-//         .block = .block,
-//         .loc = .{ 1, 0, 2 },
-//         .rot = .center,
-//     },
-//     .{
-//         .block = .block,
-//         .loc = .{ 2, 0, 2 },
-//         .rot = .center,
-//     },
-//     .{
-//         .block = .torch,
-//         .loc = .{ 1, 0, 3 },
-//         .rot = .south,
-//     },
-//     .{
-//         .block = .dust,
-//         .loc = .{ 1, 0, 4 },
-//         .rot = .center,
-//     },
-//     .{
-//         .block = .dust,
-//         .loc = .{ 1, 1, 2 },
-//         .rot = .center,
-//     },
-//     .{
-//         .block = .torch,
-//         .loc = .{ 0, 1, 2 },
-//         .rot = .center,
-//     },
-//     .{
-//         .block = .torch,
-//         .loc = .{ 2, 1, 2 },
-//         .rot = .center,
-//     },
-// };
+// pub fn abs_block_arr_to_schem(a: std.mem.Allocator, blocks: []SchemBlock) void {
+//     var min_coord = @as(SchemPos, @splat(std.math.maxInt(i32)));
+//     for (blocks) |b| {
+//         min_coord[0] = @min(min_coord[0], b.loc[0]);
+//         min_coord[1] = @min(min_coord[1], b.loc[1]);
+//         min_coord[2] = @min(min_coord[2], b.loc[2]);
+//     }
+//     var schem_blocks = a.alloc(SchemBlock, blocks.len) catch @panic("oom");
+//     errdefer a.free(schem_blocks);
+//     defer a.free(schem_blocks);
 
-pub fn abs_block_arr_to_schem(a: std.mem.Allocator, blocks: []ms.AbsBlock) void {
-    var min_coord = @as(ms.WorldCoord, @splat(std.math.maxInt(i32)));
-    for (blocks) |b| {
-        min_coord[0] = @min(min_coord[0], b.loc[0]);
-        min_coord[1] = @min(min_coord[1], b.loc[1]);
-        min_coord[2] = @min(min_coord[2], b.loc[2]);
-    }
-    var schem_blocks = a.alloc(ms.SchemBlock, blocks.len) catch @panic("oom");
-    errdefer a.free(schem_blocks);
-    defer a.free(schem_blocks);
+//     for (blocks, 0..) |b, i| {
+//         schem_blocks[i] = .{
+//             .block = b.block,
+//             .loc = @intCast(b.loc - min_coord),
+//             .rot = b.rot,
+//         };
+//     }
+//     block_arr_to_schem(a, schem_blocks);
+// }
 
-    for (blocks, 0..) |b, i| {
-        schem_blocks[i] = .{
-            .block = b.block,
-            .loc = @intCast(b.loc - min_coord),
-            .rot = b.rot,
-        };
-    }
-    block_arr_to_schem(a, schem_blocks);
-}
-
-pub fn block_arr_to_schem(a: std.mem.Allocator, blocks: []const ms.SchemBlock) void {
+pub fn block_arr_to_schem(a: std.mem.Allocator, blocks: []const SchemBlock) NbtTag {
     const out = c.nbt_new_tag_compound();
     c.nbt_set_tag_name(out, "Schematic", c.strlen("Schematic"));
 
     // get length and width
-    var length: ms.SchemCoordNum = 1;
-    var width: ms.SchemCoordNum = 1;
-    var height: ms.SchemCoordNum = 1;
+    var length: u16 = 1;
+    var width: u16 = 1;
+    var height: u16 = 1;
     for (blocks) |block| {
         std.debug.assert(block.loc[1] <= 255);
-        if (block.loc[0] + 1 > width) width = block.loc[0] + 1;
-        if (block.loc[1] + 1 > height) height = block.loc[1] + 1;
-        if (block.loc[2] + 1 > length) length = block.loc[2] + 1;
+        if (block.loc[0] + 1 > width) width = @intCast(block.loc[0] + 1);
+        if (block.loc[1] + 1 > height) height = @intCast(block.loc[1] + 1);
+        if (block.loc[2] + 1 > length) length = @intCast(block.loc[2] + 1);
     }
     const tag_length = c.nbt_new_tag_short(length);
     c.nbt_set_tag_name(tag_length, "Length", c.strlen("Length"));
@@ -204,17 +148,19 @@ pub fn block_arr_to_schem(a: std.mem.Allocator, blocks: []const ms.SchemBlock) v
     c.nbt_tag_compound_append(out, tag_blocks);
     c.nbt_tag_compound_append(out, tag_data);
     // print_nbt_tree(out, 0);
-    write_nbt_file("out.schematic", out, c.NBT_WRITE_FLAG_USE_GZIP);
+    // write_nbt_file("out.schematic", out);
 
-    c.nbt_free_tag(out);
+    // c.nbt_free_tag(out);
     // write_nbt_file("out.schematic", out, c.NBT_WRITE_FLAG_USE_RAW);
+    return out;
 }
 
 fn writer_write(userdata: ?*anyopaque, data: [*c]const u8, size: usize) callconv(.c) usize {
     return c.fwrite(data, 1, size, @ptrCast(@alignCast(userdata)));
 }
 
-pub fn write_nbt_file(filename: [*:0]const u8, tag: *c.nbt_tag_t, flags: c_int) void {
+pub fn write_nbt_file(filename: [*:0]const u8, tag: *c.nbt_tag_t) void {
+    const flags = c.NBT_WRITE_FLAG_USE_GZIP;
     const file = c.fopen(filename, "wb");
     if (file == null) {
         std.debug.print("Failed to open file: {s}\n", .{filename});

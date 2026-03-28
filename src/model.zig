@@ -1,3 +1,4 @@
+const std = @import("std");
 const library = @import("library.zig");
 
 // The block types as in the report
@@ -14,7 +15,7 @@ pub const BasicBlock = enum {
 };
 
 // A position in the grid is just three usizes
-pub const Pos = @Vector(3, isize);
+pub const Pos = @Vector(3, usize);
 pub const Size = @Vector(3, usize);
 pub const PowerLevel = u8;
 pub const Id = usize;
@@ -82,6 +83,14 @@ pub const Netlist = struct {
     }
 };
 
+pub const Wire = struct {
+    net: Id,
+    from: Pos,
+    from_power: PowerLevel,
+    to: Pos,
+    to_power: PowerLevel,
+};
+
 pub const PortPos = struct { pos: Pos, pow: u8 };
 
 // Describes a schematic as in the report
@@ -114,4 +123,67 @@ pub const Schematic = struct {
 // Describes a placement of the instances of a netlist.
 // Together with a netlist D, Placement[i] indicates the chosen
 // variant and position for instance i in netlist D.
-pub const Placement = []InstancePlacement;
+pub const padding: Pos = .{ 5, 10, 5 };
+
+pub const Placement = struct {
+    placement: []InstancePlacement,
+
+    pub fn toSchematic(self: *const Placement, gpa: std.mem.Allocator) !Schematic {
+        if (self.placement.len == 0) @panic("Must have at least one instance");
+        const first = self.placement[0];
+        var xmin, var xmax, var ymin, var ymax, var zmin, var zmax = .{
+            first.pos[0],
+            first.pos[0] + first.variant.model.size[0],
+            first.pos[1],
+            first.pos[1] + first.variant.model.size[1],
+            first.pos[2],
+            first.pos[2] + first.variant.model.size[2],
+        };
+
+        for (self.placement) |*placement| {
+            const pos, const variant = .{ placement.pos, placement.variant.model };
+            xmin = @min(xmin, pos[0]);
+            xmax = @max(xmax, pos[0] + variant.size[0]);
+            ymin = @min(ymin, pos[1]);
+            ymax = @max(ymax, pos[1] + variant.size[1]);
+            zmin = @min(zmin, pos[2]);
+            zmax = @max(zmax, pos[2] + variant.size[2]);
+        }
+
+        const xlen = xmax - xmin + 1 + padding[0] * 2;
+        const ylen = ymax - ymin + 1 + padding[1] * 2;
+        const zlen = zmax - zmin + 1 + padding[2] * 2;
+
+        var grid = std.ArrayList(BasicBlock).empty;
+        try grid.appendNTimes(gpa, .undef, xlen * ylen * zlen);
+
+        var ret = Schematic{
+            .delay = 0,
+            .inputs = &.{},
+            .outputs = &.{},
+            .size = .{ xlen, ylen, zlen },
+            .grid = try grid.toOwnedSlice(gpa),
+        };
+
+        for (self.placement) |*placement| {
+            const pos, const variant = .{ placement.pos, placement.variant.model };
+            for (0..variant.size[0]) |x| {
+                for (0..variant.size[1]) |y| {
+                    for (0..variant.size[2]) |z| {
+                        if (variant.get(x, y, z) != .undef)
+                            ret.getPtr(pos[0] + x, pos[1] + y, pos[2] + z).* = variant.get(x, y, z);
+                    }
+                }
+            }
+        }
+
+        return ret;
+    }
+
+    pub fn getWires(self: *const Placement, gpa: std.mem.Allocator) ![]Wire {
+        _ = self; // autofix
+        _ = gpa; // autofix
+        // TODO: Implement
+        return &.{};
+    }
+};

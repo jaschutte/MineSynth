@@ -1,5 +1,7 @@
 const std = @import("std");
 const model = @import("model.zig");
+const library = @import("library.zig");
+const nbt = @import("visualization/nbt.zig");
 
 fn normalization_stage(gpa: std.mem.Allocator, aiger_file: []u8) !model.Netlist {
     // Parse AIGER file
@@ -40,29 +42,55 @@ fn placement_stage(gpa: std.mem.Allocator, netlist: *const model.Netlist) !model
 
     const plc = @import("placement.zig");
     const annealing_config: plc.AnnealingConfig = .{
-        .initial_temperature = 64 + 1,
-        .moves_per_temperature = 8000,
+        .initial_temperature = 3,
+        .moves_per_temperature = 1000,
         .initial_window_size = 80,
         .alpha = 0.5,
-        .node_padding = 0,
+        .node_padding = 1,
     };
-    const placement = plc.placement_annealing(gpa, netlist, seed, annealing_config);
+    const placement = plc.placement_annealing(gpa, netlist, seed, annealing_config).?;
 
     // return placement;
-    _ = placement;
-    @panic("finished placement");
+    const conversion = @import("placement/conversion.zig");
+    const plac = try conversion.convertPlacement(gpa, placement);
+
+    return plac;
 }
 
-// fn routing_stage(schem: model.Schematic, wires: []model.Wire) model.Schematic {}
+fn routing_stage(gpa: std.mem.Allocator, schem: *const model.Schematic, wires: []model.Wire) !model.Schematic {
+    _ = gpa; // autofix
+    _ = wires; // autofix
+    // TODO: Perform routing
+    return schem.*;
+}
 
-// fn validation(schem: model.Schematic, netlist: model.Netlist, placement: model.Placement) bool {}
+fn validation(gpa: std.mem.Allocator, schem: *const model.Schematic, netlist: *const model.Netlist, placement: *const model.Placement) !bool {
+    _ = gpa; // autofix
+    _ = schem; // autofix
+    _ = netlist; // autofix
+    _ = placement; // autofix
+    // TODO: Perform validation
+    return true;
+}
 
-// fn visualization_stage(schem: model.Schematic nbt.NbtTag {}
+fn visualization_stage(gpa: std.mem.Allocator, schematic: *const model.Schematic, placement: *const model.Placement) !nbt.NbtTag {
+    const visualization = @import("visualization/visualization.zig");
+
+    // Convert schematic and placement to minecraft blocks
+    const schem_blocks = try visualization.blockListFromSchematic(gpa, schematic);
+    const place_blocks = try visualization.blockListFromPlacement(gpa, placement);
+
+    // Combine the two block lists
+    var blocks = std.ArrayList(library.SchemBlock).fromOwnedSlice(schem_blocks);
+    try blocks.appendSlice(gpa, place_blocks);
+
+    return nbt.block_arr_to_schem(gpa, try blocks.toOwnedSlice(gpa));
+}
 
 pub fn main() !void {
     // Initialize allocator
-    var real_gpa: std.heap.DebugAllocator(.{}) = .init;
-    // var real_gpa: std.heap.GeneralPurposeAllocator(.{}) = .init;
+    // var real_gpa: std.heap.DebugAllocator(.{}) = .init;
+    var real_gpa: std.heap.GeneralPurposeAllocator(.{}) = .init;
     const gpa = real_gpa.allocator();
     defer _ = real_gpa.deinit();
 
@@ -77,66 +105,18 @@ pub fn main() !void {
     // Perform placement
     const placement = try placement_stage(gpa, &netlist);
 
-    _ = placement;
+    // Convert to schematic and wires
+    const placed_schematic = try placement.toSchematic(gpa);
+    const wires = try placement.getWires(gpa);
 
-    // // get random generator:
-    // var seed: u32 = undefined;
-    // try std.posix.getrandom(std.mem.asBytes(&seed));
+    // Perform routing
+    const schematic = try routing_stage(gpa, &placed_schematic, wires);
 
-    // var placement = plc.placement_annealing(graph, seed, .{ .initial_temperature = 3, .moves_per_temperature = 8000, .initial_window_size = 80, .alpha = 0.5, .node_padding = 5 }).?;
-    // defer placement.deinit(gpa);
-    // plc.print(graph, placement, graph.gpa);
-    // graphviz.printPlacement(graph.gpa, graph, placement);
-    // const tuples = plc.getThoseTuples(graph, placement, 0);
-    // defer gpa.free(tuples);
-    // // plc.printThoseTuples(gpa, tuples);
-    // // gpa.free(tuples);
-    // const placementBlocks = placement.toBlocklist(graph, 0);
-    // defer gpa.free(placementBlocks);
-    // // nbt.block_arr_to_schem(gpa, placementBlocks);
-    // var forbidden_zone = placement.toForbiddenzone(graph, 0);
-    // defer forbidden_zone.deinit();
+    // Perform validation
+    const result = try validation(gpa, &schematic, &netlist, &placement);
+    if (!result) @panic("Validation failed");
 
-    // var allBlocks: std.ArrayList(ms.AbsBlock) = .empty;
-    // defer allBlocks.deinit(gpa);
-
-    // // var iter = forbidden_zone.iterator();
-    // // while (iter.next()) |entry| {
-    // //     const coord = entry.key_ptr.*;
-    // //     const info = entry.value_ptr.*;
-    // //     _ = info; // autofix
-    // //     try allBlocks.append(gpa, ms.AbsBlock{
-    // //         .block = .block2,
-    // //         .rot = .center,
-    // //         .loc = .{ @as(ms.WorldCoordNum, coord[0]), @as(ms.WorldCoordNum, coord[1]), @as(ms.WorldCoordNum, coord[2]) },
-    // //     });
-    // // }
-
-    // for (placementBlocks) |block| {
-    //     try allBlocks.append(gpa, ms.AbsBlock{
-    //         .block = block.block,
-    //         .rot = block.rot,
-    //         .loc = block.loc,
-    //     });
-    // }
-
-    // var pairs: std.ArrayList(rt.RoutePair) = .empty;
-    // defer pairs.deinit(gpa);
-    // for (tuples) |tuple| {
-    //     try pairs.append(gpa, rt.RoutePair{
-    //         .from = .{ @as(ms.WorldCoordNum, @intCast(tuple.x[0])), @as(ms.WorldCoordNum, @intCast(tuple.x[1])), @as(ms.WorldCoordNum, @intCast(tuple.x[2])) },
-    //         .to = .{ @as(ms.WorldCoordNum, @intCast(tuple.y[0])), @as(ms.WorldCoordNum, @intCast(tuple.y[1])), @as(ms.WorldCoordNum, @intCast(tuple.y[2])) },
-    //     });
-    // }
-
-    // var route = rt.routeAll(gpa, seed, pairs.items, &forbidden_zone, .{}) catch |err| {
-    //     std.debug.print("Routing failed: {}\n", .{err});
-    //     return;
-    // };
-    // defer route.deinit(gpa);
-    // try allBlocks.appendSlice(gpa, route.route.items);
-
-    // // visualize forbidden zone
-
-    // nbt.abs_block_arr_to_schem(gpa, allBlocks.items);
+    // Visualize schematic
+    const visualization = try visualization_stage(gpa, &schematic, &placement);
+    nbt.write_nbt_file("circuit.schematic", visualization);
 }

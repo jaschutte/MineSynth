@@ -1,7 +1,11 @@
 const std = @import("std");
 const model = @import("model.zig");
 
-pub const InstanceVariant = struct { model: *const model.Schematic, minecraft: *const MinecraftSchematic };
+pub const InstanceVariant = struct {
+    model: *const model.Schematic, // The schematic of the instance as in the report
+    offset: WorldPos, // The offset applied to the mc to get the model (minimum coordinate)
+    minecraft: *const MinecraftSchematic, // The blocks that make up the schematic
+};
 
 pub const Library = struct {
     variants: std.AutoHashMap(InstanceKind, std.ArrayList(InstanceVariant)),
@@ -18,18 +22,10 @@ pub const Library = struct {
 
             // TODO: Add rotations to the library
             // TODO: Add flipped versions to the library
-            const schem = try getSchematic(base.*, gpa);
-            try v.append(gpa, .{ .minecraft = base, .model = schem });
+            const schem, const offset = try getSchematic(base.*, gpa);
+            try v.append(gpa, .{ .minecraft = base, .offset = offset, .model = schem });
 
             try library.variants.put(kind, v);
-        }
-
-        {
-            std.debug.print("Even even earlier results\n", .{});
-            const variants = library.variants.get(.input).?;
-            const variant = variants.items[0];
-            std.debug.print("num variants: {}\n", .{variants.items.len});
-            std.debug.print("chosen: {}\n", .{variant.model});
         }
 
         return library;
@@ -44,7 +40,10 @@ pub const InstanceKind = enum {
     output,
 };
 
-pub const WorldPos = @Vector(3, isize);
+pub const SchemPosNum = u16;
+pub const SchemPos = @Vector(3, SchemPosNum);
+pub const WorldPosNum = isize;
+pub const WorldPos = @Vector(3, WorldPosNum);
 
 pub const BlockType = enum {
     air,
@@ -64,11 +63,22 @@ pub const Orientation = enum {
     center,
 };
 
-pub const MinecraftBlock = struct {
-    loc: WorldPos, // Location of the block
-    block: BlockType, // Type of the block
-    rot: Orientation, // Orientation of the block
-};
+fn MCBlockType(comptime B: type) type {
+    return struct {
+        loc: B, // Location of the block
+        block: BlockType, // Type of the block
+        rot: Orientation, // Orientation of the block
+    };
+}
+
+pub const MinecraftBlock = MCBlockType(WorldPos);
+pub const SchemBlock = MCBlockType(SchemPos);
+
+// pub const MinecraftBlock = struct {
+//     loc: WorldPos, // Location of the block
+//     block: BlockType, // Type of the block
+//     rot: Orientation, // Orientation of the block
+// };
 
 pub const WorldPortPos = struct { WorldPos, model.PowerLevel };
 
@@ -79,7 +89,7 @@ pub const MinecraftSchematic = struct {
     blocks: []const MinecraftBlock,
 };
 
-fn getSchematic(self: MinecraftSchematic, gpa: std.mem.Allocator) !*const model.Schematic {
+fn getSchematic(self: MinecraftSchematic, gpa: std.mem.Allocator) !struct { *const model.Schematic, WorldPos } {
     if (self.blocks.len == 0) @panic("cry");
     const first = self.blocks[0];
     var xmin, var xmax, var ymin, var ymax, var zmin, var zmax = .{ first.loc[0], first.loc[0], first.loc[1], first.loc[1], first.loc[2], first.loc[2] };
@@ -91,6 +101,24 @@ fn getSchematic(self: MinecraftSchematic, gpa: std.mem.Allocator) !*const model.
         ymax = @max(ymax, block.loc[1]);
         zmax = @max(zmax, block.loc[2]);
     }
+    for (self.inputs) |port| {
+        const pos = port.@"0";
+        xmin = @min(xmin, pos[0]);
+        ymin = @min(ymin, pos[1]);
+        zmin = @min(zmin, pos[2]);
+        xmax = @max(xmax, pos[0]);
+        ymax = @max(ymax, pos[1]);
+        zmax = @max(zmax, pos[2]);
+    }
+    for (self.outputs) |port| {
+        const pos = port.@"0";
+        xmin = @min(xmin, pos[0]);
+        ymin = @min(ymin, pos[1]);
+        zmin = @min(zmin, pos[2]);
+        xmax = @max(xmax, pos[0]);
+        ymax = @max(ymax, pos[1]);
+        zmax = @max(zmax, pos[2]);
+    }
 
     const xlen: usize = @intCast(xmax - xmin + 1);
     const ylen: usize = @intCast(ymax - ymin + 1);
@@ -98,7 +126,6 @@ fn getSchematic(self: MinecraftSchematic, gpa: std.mem.Allocator) !*const model.
 
     var grid = std.ArrayList(model.BasicBlock).empty;
     try grid.appendNTimes(gpa, .undef, xlen * ylen * zlen);
-    // var grid = .{.{.{model.BasicBlock.undef} ** zlen} ** ylen} ** xlen;
 
     for (self.blocks) |*block| {
         const xpos: usize = @intCast(block.loc[0] - xmin);
@@ -110,9 +137,14 @@ fn getSchematic(self: MinecraftSchematic, gpa: std.mem.Allocator) !*const model.
     var inputs = std.ArrayList(model.PortPos).empty;
     for (self.inputs) |port| {
         const pos, const pow = port;
-        const shifted: model.Pos = .{ pos[0] - xmin, pos[1] - ymin, pos[2] - zmin };
+        const xpos: usize = @intCast(pos[0] - xmin);
+        const ypos: usize = @intCast(pos[1] - ymin);
+        const zpos: usize = @intCast(pos[2] - zmin);
+
+        grid.items[xpos * ylen * zlen + ypos * zlen + zpos] = .wire;
+        grid.items[xpos * ylen * zlen + (ypos - 1) * zlen + zpos] = .block;
         try inputs.append(gpa, .{
-            .pos = shifted,
+            .pos = .{ xpos, ypos, zpos },
             .pow = pow,
         });
     }
@@ -120,9 +152,14 @@ fn getSchematic(self: MinecraftSchematic, gpa: std.mem.Allocator) !*const model.
     var outputs = std.ArrayList(model.PortPos).empty;
     for (self.outputs) |port| {
         const pos, const pow = port;
-        const shifted: model.Pos = .{ pos[0] - xmin, pos[1] - ymin, pos[2] - zmin };
+        const xpos: usize = @intCast(pos[0] - xmin);
+        const ypos: usize = @intCast(pos[1] - ymin);
+        const zpos: usize = @intCast(pos[2] - zmin);
+
+        grid.items[xpos * ylen * zlen + ypos * zlen + zpos] = .wire;
+        grid.items[xpos * ylen * zlen + (ypos - 1) * zlen + zpos] = .block;
         try outputs.append(gpa, .{
-            .pos = shifted,
+            .pos = .{ xpos, ypos, zpos },
             .pow = pow,
         });
     }
@@ -137,7 +174,7 @@ fn getSchematic(self: MinecraftSchematic, gpa: std.mem.Allocator) !*const model.
     ret.outputs = try outputs.toOwnedSlice(gpa);
     ret.size = .{ xlen, ylen, zlen };
     ret.grid = try grid.toOwnedSlice(gpa);
-    return ret;
+    return .{ ret, .{ xmin, ymin, zmin } };
 }
 
 const Input: MinecraftSchematic = .{

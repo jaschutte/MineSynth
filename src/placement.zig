@@ -367,8 +367,8 @@ fn isInput(the_placement: *const Placement, node_id: glib.NodeId) bool {
 fn getAbsolutePosition(position: *const Position, port_pos_relative: model.Pos, min_pos: postype, chip_height_coordinate: postype) physical.Coordinate {
     // do not allow rotations for now
     // this would cause pain for computewirelength if negative:
-    std.debug.assert(@as(i32, @intCast(position.x)) + port_pos_relative[0] >= 0);
-    std.debug.assert(@as(i32, @intCast(position.x)) + port_pos_relative[2] >= 0);
+    std.debug.assert(position.x + port_pos_relative[0] >= 0);
+    std.debug.assert(position.x + port_pos_relative[2] >= 0);
 
     const new_x = clampU32WithDelta(position.x, @as(i32, @intCast(port_pos_relative[0])), max_chipsize, min_pos);
     const new_y = clampU32WithDelta(position.y, @as(i32, @intCast(port_pos_relative[2])), max_chipsize, min_pos);
