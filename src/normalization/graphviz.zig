@@ -1,7 +1,7 @@
 const std = @import("std");
-const nl = @import("../netlist.zig");
+const nl = @import("netlist.zig");
 const glib = @import("graph.zig");
-const placement = @import("../placement.zig");
+const placement = @import("../placement/placement.zig");
 
 // https://magjac.com/graphviz-visual-editor/
 
@@ -44,7 +44,7 @@ pub fn printEdge(graph: *const glib.GateGraph, string: *std.io.Writer.Allocating
     };
 
     try string.writer.print("    {} {s} {} [label=\"", .{ order.from, order.arrow, order.to });
-    try string.writer.print("{s}", .{ edge.body.symbol });
+    try string.writer.print("{s}", .{edge.body.symbol});
     try string.writer.print("\", color={s}, tooltip=\"{}\"]\n", .{ color, edge.id });
 }
 

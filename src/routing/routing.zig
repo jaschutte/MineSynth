@@ -1,8 +1,8 @@
 const std = @import("std");
 const phys = @import("physical.zig");
-const nbt = @import("nbt.zig");
-const comp = @import("components/components.zig");
-const ms = @import("abstract/structures.zig");
+const nbt = @import("../nbt.zig");
+const comp = @import("components.zig");
+const ms = @import("structures.zig");
 
 const Router = @This();
 

@@ -1,93 +1,131 @@
 const std = @import("std");
-const aiger = @import("aiger.zig");
-const nl = @import("netlist.zig");
-const glib = @import("abstract/graph.zig");
-const glibopt = @import("abstract/preprocessor.zig");
-const graphviz = @import("abstract/graphviz.zig");
-const rt = @import("routing.zig");
-const nbt = @import("nbt.zig");
-const ms = @import("abstract/structures.zig");
-const sta = @import("sta.zig");
-const plc = @import("placement.zig");
+const model = @import("model.zig");
+const library = @import("library.zig");
+const nbt = @import("visualization/nbt.zig");
 
 pub fn main() !void {
-    var real_gpa: std.heap.DebugAllocator(.{}) = .init;
+    // Initialize allocator
+    // var real_gpa: std.heap.DebugAllocator(.{}) = .init;
+    var real_gpa: std.heap.GeneralPurposeAllocator(.{}) = .init;
     const gpa = real_gpa.allocator();
-    defer _ = real_gpa.deinit();
+    // defer _ = real_gpa.deinit();
 
-    const content = try std.fs.cwd().readFileAlloc(gpa, "aiger-examples/4bit-adder.aag", std.math.maxInt(usize));
+    // Read AIGER file
+    const content = try std.fs.cwd().readFileAlloc(gpa, "aiger-examples/serial-adder.aag", std.math.maxInt(usize));
     defer _ = gpa.free(content);
 
-    const aig = try aiger.Aiger.parseAag(gpa, content);
+    // Apply normalization to AIGER file
+    // and generate netlist tuple
+    const netlist = try normalization_stage(gpa, content);
+
+    // Perform placement
+    const placement = try placement_stage(gpa, &netlist);
+
+    // Convert to schematic and wires
+    const placed_schematic = try placement.toSchematic(gpa);
+    const wires = try placement.getWires(gpa);
+
+    // Perform routing
+    const schematic = try routing_stage(gpa, &placed_schematic, wires);
+
+    // Perform validation
+    const result = try validation_stage(gpa, &schematic, &netlist, &placement);
+    if (!result) @panic("Validation failed");
+
+    // Visualize schematic
+    const visualization = try visualization_stage(gpa, &schematic, &placement);
+    nbt.write_nbt_file("circuit.schematic", visualization);
+}
+
+fn normalization_stage(gpa: std.mem.Allocator, aiger_file: []u8) !model.Netlist {
+    // Construct library
+    const lib = try library.Library.init(gpa);
+
+    // Parse AIGER file
+    const aiger = @import("normalization/aiger.zig");
+    const aig = try aiger.Aiger.parseAag(gpa, aiger_file);
     defer _ = aig.deinit();
 
+    // Extract netlist form AIGER
+    const nl = @import("normalization/netlist.zig");
     var netlist = try nl.Netlist.fromAiger(gpa, aig);
     defer _ = netlist.deinit();
 
-    var graph = glib.GraphConstructors.fromNetlist(gpa, &netlist);
+    // Construct Graph from netlit and apply normalization
+    const glib = @import("normalization/graph.zig");
+    const preprocessor = @import("normalization/preprocessor.zig");
+    const sta = @import("normalization/sta.zig");
+    const graph = glib.GraphConstructors.fromNetlist(gpa, &netlist);
     defer graph.deinit();
-    graphviz.GraphVisualizer(glib.GateBody).print(gpa, graph);
-    glibopt.PreProcessor(glib.GateBody).preprocess(graph);
-    sta.AAT(graph);
-    graphviz.GraphVisualizer(glib.GateBody).printDFS(gpa, graph);
+    preprocessor.PreProcessor(glib.GateBody).preprocess(graph);
+    sta.AAT(graph, &lib); // Perform static timing analysis
 
-    // get random generator:
+    // Print graph
+    const graphviz = @import("normalization/graphviz.zig");
+    graphviz.GraphVisualizer(glib.GateBody).print(gpa, graph);
+
+    // Convert graph into model type
+    const conversion = @import("normalization/conversion.zig");
+    const nets = try conversion.convertGraphToModel(gpa, graph, lib);
+
+    return nets;
+}
+
+fn placement_stage(gpa: std.mem.Allocator, netlist: *const model.Netlist) !model.Placement {
     var seed: u32 = undefined;
     try std.posix.getrandom(std.mem.asBytes(&seed));
 
-    var placement = plc.placement_annealing(graph, seed, .{ .initial_temperature = 30, .moves_per_temperature = 3000, .initial_window_size = 80, .alpha = 0.95, .node_padding = 3 }).?;
-    defer placement.deinit(gpa);
-    plc.print(graph, placement, graph.gpa);
-    graphviz.printPlacement(graph.gpa, graph, placement);
-    const tuples = plc.getThoseTuples(graph, placement, 0);
-    defer gpa.free(tuples);
-    // plc.printThoseTuples(gpa, tuples);
-    // gpa.free(tuples);
-    const placementBlocks = placement.toBlocklist(graph, 0);
-    defer gpa.free(placementBlocks);
-    // nbt.block_arr_to_schem(gpa, placementBlocks);
-    var forbidden_zone = placement.toForbiddenzone(graph, 0);
-    defer forbidden_zone.deinit();
-    var allBlocks: std.ArrayList(ms.AbsBlock) = .empty;
-    defer allBlocks.deinit(gpa);
+    std.debug.print("Early netlist {any}\n", .{netlist});
 
-    // var iter = forbidden_zone.iterator();
-    // while (iter.next()) |entry| {
-    //     const coord = entry.key_ptr.*;
-    //     const info = entry.value_ptr.*;
-    //     _ = info; // autofix
-    //     try allBlocks.append(gpa, ms.AbsBlock{
-    //         .block = .block2,
-    //         .rot = .center,
-    //         .loc = .{ @as(ms.WorldCoordNum, coord[0]), @as(ms.WorldCoordNum, coord[1]), @as(ms.WorldCoordNum, coord[2]) },
-    //     });
-    // }
-
-    for (placementBlocks) |block| {
-        try allBlocks.append(gpa, ms.AbsBlock{
-            .block = block.block,
-            .rot = block.rot,
-            .loc = block.loc,
-        });
-    }
-
-    var pairs: std.ArrayList(rt.RoutePair) = .empty;
-    defer pairs.deinit(gpa);
-    for (tuples) |tuple| {
-        try pairs.append(gpa, rt.RoutePair{
-            .from = .{ @as(ms.WorldCoordNum, @intCast(tuple.x[0])), @as(ms.WorldCoordNum, @intCast(tuple.x[1])), @as(ms.WorldCoordNum, @intCast(tuple.x[2])) },
-            .to = .{ @as(ms.WorldCoordNum, @intCast(tuple.y[0])), @as(ms.WorldCoordNum, @intCast(tuple.y[1])), @as(ms.WorldCoordNum, @intCast(tuple.y[2])) },
-        });
-    }
-
-    var route = rt.routeAll(gpa, seed, pairs.items, &forbidden_zone, .{}) catch |err| {
-        std.debug.print("Routing failed: {}\n", .{err});
-        return;
+    const plc = @import("placement/placement.zig");
+    const annealing_config: plc.AnnealingConfig = .{
+        .initial_temperature = 3,
+        .moves_per_temperature = 1000,
+        .initial_window_size = 80,
+        .alpha = 0.5,
+        .node_padding = 1,
     };
-    defer route.deinit(gpa);
-    try allBlocks.appendSlice(gpa, route.route.items);
+    const placement = plc.placement_annealing(gpa, netlist, seed, annealing_config).?;
 
-    // visualize forbidden zone
+    const conversion = @import("placement/conversion.zig");
+    const plac = try conversion.convertPlacement(gpa, placement);
 
-    nbt.abs_block_arr_to_schem(gpa, allBlocks.items);
+    return plac;
+}
+
+fn routing_stage(gpa: std.mem.Allocator, schem: *const model.Schematic, wires: []model.Wire) !model.Schematic {
+    _ = gpa; // autofix
+    _ = wires; // autofix
+    // TODO: Perform routing
+    return schem.*;
+}
+
+fn validation_stage(gpa: std.mem.Allocator, schematic: *const model.Schematic, netlist: *const model.Netlist, placement: *const model.Placement) !bool {
+    const validation = @import("validation/validation.zig");
+
+    // Validate that the schematic is valid
+    const schematic_valid = validation.validate_grid(schematic);
+    if (!schematic_valid) @panic("Generated schematic is not valid");
+
+    // Validate that logical equivalence is preserved
+    const logical_equivalence = try validation.validate_logical_equivalence(netlist, schematic, placement, gpa);
+    if (!logical_equivalence) @panic("Generated schematic is not logically equivalent");
+
+    // TODO: Perform static timing analysis
+
+    return true;
+}
+
+fn visualization_stage(gpa: std.mem.Allocator, schematic: *const model.Schematic, placement: *const model.Placement) !nbt.NbtTag {
+    const visualization = @import("visualization/visualization.zig");
+
+    // Convert schematic and placement to minecraft blocks
+    const schem_blocks = try visualization.blockListFromSchematic(gpa, schematic);
+    const place_blocks = try visualization.blockListFromPlacement(gpa, placement);
+
+    // Combine the two block lists
+    var blocks = std.ArrayList(library.SchemBlock).fromOwnedSlice(schem_blocks);
+    try blocks.appendSlice(gpa, place_blocks);
+
+    return nbt.block_arr_to_schem(gpa, try blocks.toOwnedSlice(gpa));
 }

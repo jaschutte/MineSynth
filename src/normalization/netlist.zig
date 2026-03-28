@@ -1,0 +1,250 @@
+const std = @import("std");
+const aiger = @import("aiger.zig");
+const model = @import("../model.zig");
+const library = @import("../library.zig");
+const InstanceKind = library.InstanceKind;
+
+const Error = error{
+    MalorderedAiger,
+};
+
+pub const Net = struct {
+    literal: aiger.Literal,
+    tag: u64,
+    binds: std.ArrayList(GatePtr),
+    has_inverted_net: bool,
+
+    fn deinit(self: *Net, gpa: std.mem.Allocator) void {
+        self.binds.deinit(gpa);
+    }
+
+    fn createFromLiteral(literal: aiger.Literal) Net {
+        const tag = Net.tagFromLiteral(literal);
+        return Net{
+            .literal = literal,
+            .tag = tag,
+            .binds = .empty,
+            .has_inverted_net = false,
+        };
+    }
+
+    fn tagFromLiteral(literal: aiger.Literal) u64 {
+        return switch (literal) {
+            .false => 0,
+            .true => 1,
+            .negated => |item| item.value << 1,
+            .unnegated => |item| (item.value << 1) | 0b1,
+        };
+    }
+};
+
+pub const Gate = struct {
+    inputs: std.ArrayList(NetPtr),
+    outputs: std.ArrayList(NetPtr),
+    symbol: aiger.Symbol,
+    kind: InstanceKind,
+
+    var gate_number: u64 = 0;
+
+    fn deinit(self: *Gate, gpa: std.mem.Allocator) void {
+        self.inputs.deinit(gpa);
+        self.outputs.deinit(gpa);
+        gpa.free(self.symbol);
+    }
+
+    fn new(kind: InstanceKind, symbol: ?aiger.Symbol) Gate {
+        return Gate{
+            .inputs = .empty,
+            .outputs = .empty,
+            .kind = kind,
+            .symbol = symbol orelse "#UNNAMED_GATE",
+        };
+    }
+
+    fn netInOutSymbol(gpa: std.mem.Allocator, input: bool, lit: aiger.Literal) !aiger.Symbol {
+        var writer = std.io.Writer.Allocating.init(gpa);
+        defer _ = writer.deinit();
+        try writer.writer.print("{s}", .{switch (input) {
+            true => "in.",
+            false => "out.",
+        }});
+        try lit.writeSymbol(&writer.writer);
+        return writer.toOwnedSlice();
+    }
+
+    fn newGateSymbol(allocator: std.mem.Allocator) aiger.Symbol {
+        const symbol = std.fmt.allocPrint(allocator, "gate.{}", .{gate_number}) catch "gate.???";
+        gate_number += 1;
+        return symbol;
+    }
+};
+
+pub const NetPtr = usize;
+pub const GatePtr = usize;
+
+pub const Netlist = struct {
+    const Self = @This();
+
+    allocator: std.mem.Allocator,
+    nets: std.ArrayList(Net),
+    nets_check: std.AutoHashMap(u64, NetPtr),
+    gates: std.ArrayList(Gate),
+
+    pub inline fn getNet(self: *const Self, ptr: NetPtr) *Net {
+        return @ptrCast(self.nets.items.ptr + ptr);
+    }
+
+    pub inline fn getGate(self: *const Self, ptr: GatePtr) *Gate {
+        return @ptrCast(self.gates.items.ptr + ptr);
+    }
+
+    pub inline fn getGateDelay(self: *const Self, ptr: GatePtr) u32 {
+        return self.gates.items[ptr].kind.delay();
+    }
+
+    // Creates a net if it does not exist yet, if the net does exist, simply return the pointer to it
+    fn addOrGetNet(self: *Self, literal: aiger.Literal) !NetPtr {
+        const tag = Net.tagFromLiteral(literal);
+        if (self.nets_check.get(tag)) |net| {
+            return net;
+        }
+        try self.nets.append(self.allocator, Net.createFromLiteral(literal));
+
+        const net_ptr = self.nets.items.len - 1;
+        try self.nets_check.put(tag, net_ptr);
+        return net_ptr;
+    }
+
+    // Creates the negated net of a literal, ensuring an inverter (and only 1!) gets placed between
+    // the base and negated net
+    fn addNegatedNet(self: *Self, base_literal: aiger.Literal) !void {
+        if (!base_literal.isNegated()) return undefined;
+        const inv_literal = (base_literal.getInverted()) orelse return;
+
+        const base_ptr = try self.addOrGetNet(base_literal);
+        const negated_ptr = try self.addOrGetNet(inv_literal);
+        const base = self.getNet(base_ptr);
+        const negated = self.getNet(negated_ptr);
+        // Don't create gates if we already have them
+        if (base.has_inverted_net) {
+            return;
+        }
+
+        var inverter = Gate.new(InstanceKind.inverter, Gate.newGateSymbol(self.allocator));
+        try inverter.outputs.append(self.allocator, base_ptr);
+        try inverter.inputs.append(self.allocator, negated_ptr);
+        try self.gates.append(self.allocator, inverter);
+        const gate_ptr: GatePtr = self.gates.items.len - 1;
+
+        base.has_inverted_net = true;
+        try base.binds.append(self.allocator, gate_ptr);
+        negated.has_inverted_net = true;
+        try negated.binds.append(self.allocator, gate_ptr);
+    }
+
+    fn hasLiteral(self: *const Self, literal: aiger.Literal) ?*Net {
+        const tag = Net.tagFromLiteral(literal);
+        return self.nets_check.get(tag);
+    }
+
+    pub fn deinit(self: *Self) void {
+        for (self.nets.items) |*net| {
+            net.deinit(self.allocator);
+        }
+        for (self.gates.items) |*gate| {
+            gate.deinit(self.allocator);
+        }
+
+        self.nets.deinit(self.allocator);
+        self.nets_check.deinit();
+        self.gates.deinit(self.allocator);
+    }
+
+    pub fn fromAiger(allocator: std.mem.Allocator, aig: aiger.Aiger) !Self {
+        var netlist = Netlist{
+            .allocator = allocator,
+            .nets = .empty,
+            .nets_check = .init(allocator),
+            .gates = .empty,
+        };
+        for (aig.inputs) |item| {
+            const input_ptr = try netlist.addOrGetNet(item.input);
+            try netlist.addNegatedNet(item.input);
+
+            var input = Gate.new(InstanceKind.input, try Gate.netInOutSymbol(allocator, true, item.input));
+            try input.outputs.append(allocator, input_ptr);
+            try netlist.gates.append(allocator, input);
+            const gate_ptr = netlist.gates.items.len - 1;
+            try netlist.getNet(input_ptr).binds.append(allocator, gate_ptr);
+        }
+        for (aig.outputs) |item| {
+            const output_ptr = try netlist.addOrGetNet(item.output);
+            try netlist.addNegatedNet(item.output);
+
+            var output = Gate.new(InstanceKind.output, try Gate.netInOutSymbol(allocator, false, item.output));
+            try output.inputs.append(allocator, output_ptr);
+            try netlist.gates.append(allocator, output);
+            const gate_ptr = netlist.gates.items.len - 1;
+            try netlist.getNet(output_ptr).binds.append(allocator, gate_ptr);
+        }
+
+        for (aig.and_gates) |item| {
+            const out_ptr = try netlist.addOrGetNet(item.and_gate.out);
+            const a_ptr = try netlist.addOrGetNet(item.and_gate.a);
+            const b_ptr = try netlist.addOrGetNet(item.and_gate.b);
+
+            // Both inputs may be negated
+            // Note that the AIGER format does not allow an output to be negated
+            try netlist.addNegatedNet(item.and_gate.a);
+            try netlist.addNegatedNet(item.and_gate.b);
+
+            var and_gate = Gate.new(InstanceKind.and_gate, Gate.newGateSymbol(allocator));
+            try and_gate.outputs.append(allocator, out_ptr);
+            try and_gate.inputs.append(allocator, a_ptr);
+            try and_gate.inputs.append(allocator, b_ptr);
+            try netlist.gates.append(allocator, and_gate);
+
+            const gate_ptr = netlist.gates.items.len - 1;
+            try netlist.getNet(a_ptr).binds.append(allocator, gate_ptr);
+            try netlist.getNet(b_ptr).binds.append(allocator, gate_ptr);
+            try netlist.getNet(out_ptr).binds.append(allocator, gate_ptr);
+        }
+        return netlist;
+    }
+
+    pub fn printNets(self: *const Self) !void {
+        for (self.nets.items) |*net| {
+            var writer = std.io.Writer.Allocating.init(self.allocator);
+            defer _ = writer.deinit();
+            try net.literal.writeSymbol(&writer.writer);
+            std.debug.print("\nNET {s}:\n", .{writer.written()});
+            for (net.binds.items) |gate_ptr| {
+                const gate = self.getGate(gate_ptr);
+                std.debug.print(" -> {s}: {any}\n", .{ gate.symbol, gate.kind });
+                std.debug.print("Delay: {any}\n", .{self.getGateDelay(gate_ptr)});
+            }
+        }
+    }
+
+    pub fn printGates(self: *const Self) !void {
+        for (self.gates.items) |*gate| {
+            std.debug.print("\nGATE {s} ({any}):\n", .{ gate.symbol, gate.kind });
+            std.debug.print(" INPUTS:\n", .{});
+            for (gate.inputs.items) |net_ptr| {
+                const net = self.getNet(net_ptr);
+                var writer = std.io.Writer.Allocating.init(self.allocator);
+                defer _ = writer.deinit();
+                try net.literal.writeSymbol(&writer.writer);
+                std.debug.print(" -> {s}:\n", .{writer.written()});
+            }
+            std.debug.print(" OUTPUTS:\n", .{});
+            for (gate.outputs.items) |net_ptr| {
+                const net = self.getNet(net_ptr);
+                var writer = std.io.Writer.Allocating.init(self.allocator);
+                defer _ = writer.deinit();
+                try net.literal.writeSymbol(&writer.writer);
+                std.debug.print(" -> {s}:\n", .{writer.written()});
+            }
+        }
+    }
+};

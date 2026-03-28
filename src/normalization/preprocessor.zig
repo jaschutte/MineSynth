@@ -1,5 +1,5 @@
 const std = @import("std");
-const nl = @import("../netlist.zig");
+const nl = @import("netlist.zig");
 const glib = @import("graph.zig");
 
 // Enforce that all INPUTS have are registered as OUTPUT on the other end and vice versa
