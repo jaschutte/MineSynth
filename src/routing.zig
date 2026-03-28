@@ -7,7 +7,7 @@ const ms = @import("abstract/structures.zig");
 const Router = @This();
 
 max_iterations: u32 = 20,
-violation_cost_multiplier: u32 = 15.0,
+violation_cost_multiplier: u32 = 10.0,
 heuristic_weight: f32 = 1.0,
 delay_cost_multiplier: u32 = 1.0,
 max_length: u32 = 1000,
@@ -23,7 +23,7 @@ const NodeState = struct {
 
 const Parent = struct {
     prev: NodeState,
-    def: *const comp.ComponentDef,
+    def: ?*const comp.ComponentDef,
     violating: bool,
     heading: WorldCoord,
 };
@@ -94,11 +94,15 @@ fn moveIntersectsPath(new_u: WorldCoord, new_move: Move, start_state: NodeState,
         if (coordEq(curr.coord, new_coord)) return true;
 
         if (parents.get(curr)) |p| {
+            if (p.def == null) {
+                curr = p.prev;
+                continue;
+            }
             const prev_u = p.prev.coord;
             const past_move = Move{
                 .dir = curr.coord - prev_u,
                 .heading = p.heading,
-                .def = p.def,
+                .def = p.def.?,
             };
             const dx = @abs(prev_u[0] - new_u[0]);
             const dy = @abs(prev_u[1] - new_u[1]);
@@ -247,9 +251,11 @@ fn isHost(branch_net: *const Net, potential_host: *const Net) bool {
     return false;
 }
 
-fn updateViolations(a: std.mem.Allocator, nets: []Net) !void {
+fn updateViolations(a: std.mem.Allocator, nets: []Net, violating_points: *std.AutoHashMap(WorldCoord, void)) !void {
     var owners = std.AutoHashMap(WorldCoord, CellInfo).init(a);
     defer owners.deinit();
+
+    violating_points.clearRetainingCapacity();
 
     var one_violation = false;
     for (nets) |*net| {
@@ -334,12 +340,13 @@ fn updateViolations(a: std.mem.Allocator, nets: []Net) !void {
                             }
                             if (is_violation) {
                                 net.is_violating = true;
+                                try violating_points.put(fp.coord, {});
                                 break;
                             }
                         }
                     }
                 }
-                if (net.is_violating) break;
+                // if (net.is_violating) break;
             }
         }
     }
@@ -355,6 +362,7 @@ fn sortNetsSortWeight(context: Router, lhs: Net, rhs: Net) bool {
 }
 
 pub fn routeAll(a: std.mem.Allocator, seed: u32, pairs: []RoutePair, forbidden_zone: *ms.ForbiddenZone, config: Router) !Route {
+    var var_config = config;
     var nets = try a.alloc(Net, pairs.len);
 
     defer {
@@ -363,6 +371,8 @@ pub fn routeAll(a: std.mem.Allocator, seed: u32, pairs: []RoutePair, forbidden_z
         }
         a.free(nets);
     }
+    var violating_points = std.AutoHashMap(WorldCoord, void).init(a);
+    defer violating_points.deinit();
 
     var v_nets: std.ArrayList(*Net) = .empty;
     defer v_nets.deinit(a);
@@ -406,14 +416,14 @@ pub fn routeAll(a: std.mem.Allocator, seed: u32, pairs: []RoutePair, forbidden_z
                         }
 
                         // 2. Register the padding as immediate merge points
-                        for (SURROUNDING_OFFSETS) |offset| {
-                            const pad_coord = fp.coord + offset;
-                            if (!targets.contains(pad_coord)) {
-                                // Signal degrades by 1 across the adjacency gap
-                                const pad_signal = if (fp.signal > 0) fp.signal - 1 else 0;
-                                try targets.put(pad_coord, .{ .cost_to_root = (accumulated_cost + 1) * config.delay_cost_multiplier, .signal_at_node = pad_signal });
-                            }
-                        }
+                        // for (SURROUNDING_OFFSETS) |offset| {
+                        //     const pad_coord = fp.coord + offset;
+                        //     if (!targets.contains(pad_coord)) {
+                        //         // Signal degrades by 1 across the adjacency gap
+                        //         const pad_signal = if (fp.signal > 0) fp.signal - 1 else 0;
+                        //         try targets.put(pad_coord, .{ .cost_to_root = (accumulated_cost + 1) * config.delay_cost_multiplier, .signal_at_node = pad_signal });
+                        //     }
+                        // }
                     }
                 }
             }
@@ -422,8 +432,7 @@ pub fn routeAll(a: std.mem.Allocator, seed: u32, pairs: []RoutePair, forbidden_z
         std.log.info("Routing net {} from {any} to {any}", .{ net.id, net.from, net.to });
         net.route = routeToUpdateForbiddenZone(a, net.from, net.from_signal, targets, forbidden_zone, config, net.id) catch null;
     }
-
-    try updateViolations(a, nets);
+    try updateViolations(a, nets, &violating_points); // pass the map here
     for (nets) |*net| {
         if (net.route) |r| {
             std.log.info("Initial route for net from {any} to {any} has delay {d} and violating={any}", .{ net.from, net.to, r.delay, net.is_violating });
@@ -441,7 +450,7 @@ pub fn routeAll(a: std.mem.Allocator, seed: u32, pairs: []RoutePair, forbidden_z
         for (v_nets.items) |net| {
             const base_weight = net.failures * 1000;
             const dist = heuristic(net.from, net.to, config.delay_cost_multiplier) * 100;
-            const random_jitter = random.intRangeLessThan(u32, 0, 200);
+            const random_jitter = random.intRangeLessThan(u32, 0, 10000);
             net.sort_weight = base_weight + dist + random_jitter;
         }
 
@@ -449,6 +458,7 @@ pub fn routeAll(a: std.mem.Allocator, seed: u32, pairs: []RoutePair, forbidden_z
         const num_v_nets_this_pass = v_nets.items.len;
 
         std.log.info("Iteration {}: Routing {} violating nets", .{ iters, num_v_nets_this_pass });
+        var_config.violation_cost_multiplier += 5;
 
         for (0..num_v_nets_this_pass) |_| {
             var net = v_nets.orderedRemove(0);
@@ -474,14 +484,14 @@ pub fn routeAll(a: std.mem.Allocator, seed: u32, pairs: []RoutePair, forbidden_z
                             }
 
                             // 2. Register the padding as immediate merge points
-                            for (SURROUNDING_OFFSETS) |offset| {
-                                const pad_coord = fp.coord + offset;
-                                if (!targets.contains(pad_coord)) {
-                                    // Signal degrades by 1 across the adjacency gap
-                                    const pad_signal = if (fp.signal > 0) fp.signal - 1 else 0;
-                                    try targets.put(pad_coord, .{ .cost_to_root = (accumulated_cost + 1) * config.delay_cost_multiplier, .signal_at_node = pad_signal });
-                                }
-                            }
+                            // for (SURROUNDING_OFFSETS) |offset| {
+                            //     const pad_coord = fp.coord + offset;
+                            //     if (!targets.contains(pad_coord)) {
+                            //         // Signal degrades by 1 across the adjacency gap
+                            //         const pad_signal = if (fp.signal > 0) fp.signal - 1 else 0;
+                            //         try targets.put(pad_coord, .{ .cost_to_root = (accumulated_cost + 1) * config.delay_cost_multiplier, .signal_at_node = pad_signal });
+                            //     }
+                            // }
                         }
                     }
                 }
@@ -491,7 +501,7 @@ pub fn routeAll(a: std.mem.Allocator, seed: u32, pairs: []RoutePair, forbidden_z
             net.route = routeToUpdateForbiddenZone(a, net.from, net.from_signal, targets, forbidden_zone, config, net.id) catch null;
         }
 
-        try updateViolations(a, nets);
+        try updateViolations(a, nets, &violating_points); // pass the map here
 
         v_nets.clearRetainingCapacity();
         for (nets) |*net| {
@@ -521,7 +531,13 @@ pub fn routeAll(a: std.mem.Allocator, seed: u32, pairs: []RoutePair, forbidden_z
             if (net.is_violating) {
                 for (0..r.route.items.len) |i| {
                     if (r.route.items[i].block == .block) {
-                        r.route.items[i].block = .block3;
+                        const loc = r.route.items[i].loc;
+                        const loc_above = loc + WorldCoord{ 0, 1, 0 }; // Handle structural blocks under logic footprints
+                        if (violating_points.contains(loc) or violating_points.contains(loc_above)) {
+                            r.route.items[i].block = .block3;
+                        } else {
+                            r.route.items[i].block = .block2;
+                        }
                     }
                 }
             }
@@ -670,8 +686,28 @@ pub fn routeTo(a: std.mem.Allocator, from: WorldCoord, from_signal: u5, targets:
 
         if (targets.get(u)) |merge_pt| {
             if (u_state.signal >= 15 - merge_pt.signal_at_node) {
-                final_state = u_state;
-                final_merge_cost = merge_pt.cost_to_root;
+                if (merge_pt.cost_to_root == 0) {
+                    // Evaluate the implicit terminal support block
+                    const support_coord = u + WorldCoord{ 0, -1, 0 };
+                    const support_val = check_validity(support_coord, forbidden_zone, from, false, host_route_id, &targets);
+
+                    if (support_val == .invalid) continue; // Obstruction prevents termination here
+
+                    // Inject a virtual state to represent the terminal placement
+                    const term_state = NodeState{ .coord = u, .signal = 0, .heading = u_state.heading };
+                    parents.put(term_state, .{
+                        .prev = u_state,
+                        .def = null, // Null def indicates terminal placement
+                        .violating = (support_val != .valid),
+                        .heading = u_state.heading,
+                    }) catch @panic("oom");
+
+                    final_state = term_state;
+                    final_merge_cost = 0;
+                } else {
+                    final_state = u_state;
+                    final_merge_cost = merge_pt.cost_to_root;
+                }
                 break;
             }
         }
@@ -683,7 +719,7 @@ pub fn routeTo(a: std.mem.Allocator, from: WorldCoord, from_signal: u5, targets:
                 }
             }
             const coord = u + move.dir;
-            // if (moveIntersectsPath(u, move, u_state, &parents)) continue;
+            if (moveIntersectsPath(u, move, u_state, &parents)) continue;
 
             const is_first_move = (item.g == 0);
             if (is_first_move and move.def.cat != .dust) continue;
@@ -740,6 +776,7 @@ pub fn routeTo(a: std.mem.Allocator, from: WorldCoord, from_signal: u5, targets:
                     .prev = u_state,
                     .def = move.def,
                     .violating = is_violating,
+                    // .violating_who = your_mom,
                     .heading = move.heading,
                 }) catch @panic("oom");
 
@@ -783,35 +820,50 @@ fn buildRouteBlocks(a: std.mem.Allocator, start_state: NodeState, final_state: N
         curr_state = p.prev;
         vec = curr_state.coord;
 
-        if (p.violating) violating = true;
+        if (p.violating) {
+            violating = true;
+        }
         const move_dir = p.heading;
 
-        for (p.def.build_blocks) |block_def| {
-            const rotated_coord = rotateCoord(block_def.offset, move_dir);
-            const rotated_rot = rotateOrientation(block_def.rot, move_dir);
+        if (p.def) |def| {
+            for (def.build_blocks) |block_def| {
+                const rotated_coord = rotateCoord(block_def.offset, move_dir);
+                const rotated_rot = rotateOrientation(block_def.rot, move_dir);
 
-            try abs_blocks.append(a, .{
-                .block = block_def.cat,
-                .loc = vec + rotated_coord,
-                .rot = rotated_rot,
-            });
+                var cat = block_def.cat;
+                if (cat == .block and p.violating) {
+                    cat = .block3;
+                }
 
-            try footprints.append(a, .{
-                .coord = vec + rotated_coord,
-                .signal = p.prev.signal,
-                .heading = move_dir,
-            });
+                try abs_blocks.append(a, .{
+                    .block = cat,
+                    .loc = vec + rotated_coord,
+                    .rot = rotated_rot,
+                });
+
+                try footprints.append(a, .{
+                    .coord = vec + rotated_coord,
+                    .signal = p.prev.signal,
+                    .heading = move_dir,
+                });
+            }
+            length += def.length;
+            delay += def.delay;
+        } else {
+            // Unpack the virtual terminal move
+            try abs_blocks.append(a, .{ .block = .dust, .loc = vec, .rot = .center });
+            try abs_blocks.append(a, .{ .block = .block, .loc = vec + WorldCoord{ 0, -1, 0 }, .rot = .center });
+
+            try footprints.append(a, .{ .coord = vec, .signal = p.prev.signal, .heading = move_dir });
+            try footprints.append(a, .{ .coord = vec + WorldCoord{ 0, -1, 0 }, .signal = p.prev.signal, .heading = move_dir });
         }
-
-        length += p.def.length;
-        delay += p.def.delay;
     }
 
-    try abs_blocks.append(a, .{ .block = .dust, .loc = final_state.coord, .rot = .center });
-    try abs_blocks.append(a, .{ .block = .block, .loc = final_state.coord + WorldCoord{ 0, -1, 0 }, .rot = .center });
+    // try abs_blocks.append(a, .{ .block = .dust, .loc = final_state.coord, .rot = .center });
+    // try abs_blocks.append(a, .{ .block = .block, .loc = final_state.coord + WorldCoord{ 0, -1, 0 }, .rot = .center });
 
-    try footprints.append(a, final_state);
-    try footprints.append(a, .{ .coord = final_state.coord + WorldCoord{ 0, -1, 0 }, .signal = final_state.signal, .heading = final_state.heading });
+    // try footprints.append(a, final_state);
+    // try footprints.append(a, .{ .coord = final_state.coord + WorldCoord{ 0, -1, 0 }, .signal = final_state.signal, .heading = final_state.heading });
 
     return .{
         .route = abs_blocks,
