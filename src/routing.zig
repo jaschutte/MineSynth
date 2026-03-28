@@ -138,11 +138,19 @@ const MoveValidity = union(enum) {
     violation: u32,
 };
 
-fn check_validity(coord: WorldCoord, forbidden_zone: ms.ForbiddenZone, current_from: WorldCoord, is_first_move: bool, host_route_id: ?usize) MoveValidity {
+fn check_validity(coord: WorldCoord, forbidden_zone: ms.ForbiddenZone, current_from: WorldCoord, is_first_move: bool, host_route_id: ?usize, targets: *const std.AutoHashMap(WorldCoord, MergePoint)) MoveValidity {
     _ = current_from;
+
+    if (targets.contains(coord)) return .valid;
+
     if (forbidden_zone.get(coord)) |conflict| {
         if (conflict.ftype == .gate) return .invalid;
         if (is_first_move) return .valid;
+
+        // Exempt the padding of target routes by checking adjacency to known target centers
+        for (SURROUNDING_OFFSETS) |offset| {
+            if (targets.contains(coord + offset)) return .valid;
+        }
 
         if (conflict.ftype == .wire_padding) {
             if (host_route_id != null and conflict.route_id == host_route_id.? and conflict.foreign_ref_count == 0) {
@@ -156,14 +164,22 @@ fn check_validity(coord: WorldCoord, forbidden_zone: ms.ForbiddenZone, current_f
     return .valid;
 }
 
-fn isMoveValid(u: WorldCoord, move: Move, forbidden_zone: ms.ForbiddenZone, current_from: WorldCoord, is_first_move: bool, host_route_id: ?usize) MoveValidity {
+fn isMoveValid(
+    u: WorldCoord,
+    move: Move,
+    forbidden_zone: ms.ForbiddenZone,
+    current_from: WorldCoord,
+    is_first_move: bool,
+    host_route_id: ?usize,
+    targets: *const std.AutoHashMap(WorldCoord, MergePoint), // Added
+) MoveValidity {
     const target_coord = u + move.dir;
     if (target_coord[1] > phys.MAX_Y_LEVEL or target_coord[1] < phys.MIN_Y_LEVEL) return .invalid;
 
     var total_refs: u32 = 0;
     for (move.def.build_blocks) |bb| {
         const rotated = rotateCoord(bb.offset, move.heading);
-        switch (check_validity(u + rotated, forbidden_zone, current_from, is_first_move, host_route_id)) {
+        switch (check_validity(u + rotated, forbidden_zone, current_from, is_first_move, host_route_id, targets)) {
             .invalid => return .invalid,
             .valid => {},
             .violation => |refs| total_refs += refs,
@@ -177,7 +193,6 @@ fn isMoveValid(u: WorldCoord, move: Move, forbidden_zone: ms.ForbiddenZone, curr
 const Net = struct {
     id: usize,
     from: WorldCoord,
-    original_from: WorldCoord,
     from_signal: u5,
     to: WorldCoord,
     route: ?Route,
@@ -201,7 +216,7 @@ fn ripUp(net: *Net, forbidden_zone: *ms.ForbiddenZone, a: std.mem.Allocator) voi
                     if (existing.ftype == .wire or existing.ftype == .wire_padding) {
                         existing.ref_count -= 1;
 
-                        if (!coordEq(existing.source_coord, net.from)) {
+                        if (existing.route_id != net.id) {
                             existing.foreign_ref_count -= 1;
                         }
 
@@ -236,11 +251,14 @@ fn updateViolations(a: std.mem.Allocator, nets: []Net) !void {
     var owners = std.AutoHashMap(WorldCoord, CellInfo).init(a);
     defer owners.deinit();
 
+    var one_violation = false;
     for (nets) |*net| {
         net.is_violating = false;
 
         if (net.route) |*r| {
+            if (net.route.?.violating) one_violation = true;
             r.violating = false;
+            // net.is_violating = r.violating;
             for (r.footprints.items) |fp| {
                 for (SURROUNDING_OFFSETS) |offset| {
                     const target = fp.coord + offset;
@@ -270,6 +288,7 @@ fn updateViolations(a: std.mem.Allocator, nets: []Net) !void {
             }
         }
     }
+    if (!one_violation) return;
 
     for (nets) |*net| {
         if (net.route) |*r| {
@@ -281,9 +300,14 @@ fn updateViolations(a: std.mem.Allocator, nets: []Net) !void {
 
                             const net_is_branch = isHost(net, existing_net);
                             const existing_is_branch = isHost(existing_net, net);
-                            const shares_origin = coordEq(net.original_from, existing_net.original_from);
+                            const shares_destination = coordEq(net.to, existing_net.to); // Added
 
-                            if (net_is_branch or existing_is_branch or shares_origin) {
+                            // Nets targeting the same destination can merge absolutely anywhere along their length.
+                            if (shares_destination) {
+                                is_violation = false;
+                            }
+                            // Standard branching logic remains strictly limited to valid endpoints.
+                            else if (net_is_branch or existing_is_branch) {
                                 var net_is_center = false;
                                 for (info.nets[0..info.count], 0..) |n, j| {
                                     if (n == net) {
@@ -297,13 +321,11 @@ fn updateViolations(a: std.mem.Allocator, nets: []Net) !void {
                                     is_violation = false;
                                 } else {
                                     const bp1 = net.from;
-                                    const bp2 = existing_net.from;
-                                    const orig = net.original_from;
+                                    const dest = net.to;
 
                                     const is_valid_overlap =
                                         coordEq(fp.coord, bp1) or coordEq(fp.coord, bp1 + WorldCoord{ 0, -1, 0 }) or
-                                        coordEq(fp.coord, bp2) or coordEq(fp.coord, bp2 + WorldCoord{ 0, -1, 0 }) or
-                                        coordEq(fp.coord, orig) or coordEq(fp.coord, orig + WorldCoord{ 0, -1, 0 });
+                                        coordEq(fp.coord, dest) or coordEq(fp.coord, dest + WorldCoord{ 0, -1, 0 });
 
                                     if (is_valid_overlap) {
                                         is_violation = false;
@@ -352,7 +374,6 @@ pub fn routeAll(a: std.mem.Allocator, seed: u32, pairs: []RoutePair, forbidden_z
         nets[i] = .{
             .id = i,
             .from = pair.from,
-            .original_from = pair.from,
             .to = pair.to,
             .route = null,
             .failures = 0,
@@ -379,7 +400,20 @@ pub fn routeAll(a: std.mem.Allocator, seed: u32, pairs: []RoutePair, forbidden_z
                         const fp = r.footprints.items[rev_idx];
                         accumulated_cost += 1;
 
-                        try targets.put(fp.coord, .{ .cost_to_root = accumulated_cost * config.delay_cost_multiplier, .signal_at_node = fp.signal });
+                        // 1. Register the center
+                        if (!targets.contains(fp.coord)) {
+                            try targets.put(fp.coord, .{ .cost_to_root = accumulated_cost * config.delay_cost_multiplier, .signal_at_node = fp.signal });
+                        }
+
+                        // 2. Register the padding as immediate merge points
+                        for (SURROUNDING_OFFSETS) |offset| {
+                            const pad_coord = fp.coord + offset;
+                            if (!targets.contains(pad_coord)) {
+                                // Signal degrades by 1 across the adjacency gap
+                                const pad_signal = if (fp.signal > 0) fp.signal - 1 else 0;
+                                try targets.put(pad_coord, .{ .cost_to_root = (accumulated_cost + 1) * config.delay_cost_multiplier, .signal_at_node = pad_signal });
+                            }
+                        }
                     }
                 }
             }
@@ -433,7 +467,21 @@ pub fn routeAll(a: std.mem.Allocator, seed: u32, pairs: []RoutePair, forbidden_z
                             rev_idx -= 1;
                             const fp = r.footprints.items[rev_idx];
                             accumulated_cost += 1;
-                            try targets.put(fp.coord, .{ .cost_to_root = accumulated_cost * config.delay_cost_multiplier, .signal_at_node = fp.signal });
+
+                            // 1. Register the center
+                            if (!targets.contains(fp.coord)) {
+                                try targets.put(fp.coord, .{ .cost_to_root = accumulated_cost * config.delay_cost_multiplier, .signal_at_node = fp.signal });
+                            }
+
+                            // 2. Register the padding as immediate merge points
+                            for (SURROUNDING_OFFSETS) |offset| {
+                                const pad_coord = fp.coord + offset;
+                                if (!targets.contains(pad_coord)) {
+                                    // Signal degrades by 1 across the adjacency gap
+                                    const pad_signal = if (fp.signal > 0) fp.signal - 1 else 0;
+                                    try targets.put(pad_coord, .{ .cost_to_root = (accumulated_cost + 1) * config.delay_cost_multiplier, .signal_at_node = pad_signal });
+                                }
+                            }
                         }
                     }
                 }
@@ -621,7 +669,7 @@ pub fn routeTo(a: std.mem.Allocator, from: WorldCoord, from_signal: u5, targets:
         if (item.g > best_g) continue;
 
         if (targets.get(u)) |merge_pt| {
-            if (u_state.signal >= merge_pt.signal_at_node) {
+            if (u_state.signal >= 15 - merge_pt.signal_at_node) {
                 final_state = u_state;
                 final_merge_cost = merge_pt.cost_to_root;
                 break;
@@ -635,12 +683,15 @@ pub fn routeTo(a: std.mem.Allocator, from: WorldCoord, from_signal: u5, targets:
                 }
             }
             const coord = u + move.dir;
-            if (moveIntersectsPath(u, move, u_state, &parents)) continue;
+            // if (moveIntersectsPath(u, move, u_state, &parents)) continue;
 
             const is_first_move = (item.g == 0);
             if (is_first_move and move.def.cat != .dust) continue;
 
-            const validity = isMoveValid(u, move, forbidden_zone, from, is_first_move, host_route_id);
+            const g_length = item.length + move.def.length;
+            if (g_length > config.max_length) continue;
+
+            const validity = isMoveValid(u, move, forbidden_zone, from, is_first_move, host_route_id, &targets);
             if (validity == .invalid) continue;
 
             var next_signal = u_state.signal;
@@ -648,7 +699,7 @@ pub fn routeTo(a: std.mem.Allocator, from: WorldCoord, from_signal: u5, targets:
 
             switch (move.def.signal_behavior) {
                 .decay => {
-                    if (next_signal == 1 and targets.contains(coord)) continue;
+                    // if (next_signal == 1 and targets.contains(coord)) continue;
                     next_signal -= move.def.min_signal;
                 },
                 .reset => next_signal = 15,
@@ -670,10 +721,7 @@ pub fn routeTo(a: std.mem.Allocator, from: WorldCoord, from_signal: u5, targets:
             }
 
             const g_cost = item.g + move_cost;
-            const g_length = item.length + move.def.length;
             const g_delay = item.delay + move.def.delay;
-
-            if (g_length > config.max_length) continue;
 
             var dominated = false;
             var s_check: u5 = next_signal;
@@ -712,8 +760,8 @@ pub fn routeTo(a: std.mem.Allocator, from: WorldCoord, from_signal: u5, targets:
         return error.PathNotFound;
     }
 
-    std.log.info("A* completed with {d} iterations, violating={}", .{ counter, is_violating });
     var final_route = try buildRouteBlocks(a, start_state, final_state.?, parents);
+    std.log.info("A* completed with {d} iterations, violating={}", .{ counter, final_route.violating });
     final_route.delay += final_merge_cost;
     return final_route;
 }
