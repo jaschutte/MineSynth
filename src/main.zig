@@ -11,7 +11,7 @@ pub fn main() !void {
     // defer _ = real_gpa.deinit();
 
     // Read AIGER file
-    const content = try std.fs.cwd().readFileAlloc(gpa, "aiger-examples/serial-adder.aag", std.math.maxInt(usize));
+    const content = try std.fs.cwd().readFileAlloc(gpa, "aiger-examples/4-adder.aag", std.math.maxInt(usize));
     defer _ = gpa.free(content);
 
     // Apply normalization to AIGER file
@@ -79,11 +79,13 @@ fn placement_stage(gpa: std.mem.Allocator, netlist: *const model.Netlist) !model
 
     const plc = @import("placement/placement.zig");
     const annealing_config: plc.AnnealingConfig = .{
-        .initial_temperature = 8.1,
-        .moves_per_temperature = 2000,
-        .initial_window_size = 80,
-        .alpha = 0.5,
-        .node_padding = 5,
+        .initial_temperature = 40,
+        .moves_per_temperature = 4000,
+        // .moves_per_temperature = 5000,
+        .initial_window_size = 100,
+        .alpha = 0.7,
+        .node_padding = 1,
+        .congestion_cost_weight = 500,
         // .initial_input_y = 20,
         // .initial_output_y = 130,
     };
@@ -103,6 +105,11 @@ fn routing_stage(gpa: std.mem.Allocator, schem: *const model.Schematic, wires: [
 
 fn validation_stage(gpa: std.mem.Allocator, schematic: *const model.Schematic, netlist: *const model.Netlist, placement: *const model.Placement) !bool {
     const validation = @import("validation/validation.zig");
+
+    // Print list of instances for reference
+    for (netlist.instances, 0..) |inst, i| {
+        std.debug.print("Instance {} is a {} placed at {}\n", .{ i, inst.kind, placement.placement[i].pos });
+    }
 
     // Validate that the schematic is valid
     const schematic_valid = validation.validate_grid(schematic);

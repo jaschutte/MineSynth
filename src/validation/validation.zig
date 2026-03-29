@@ -15,7 +15,7 @@ pub fn validate_grid(S: *const model.Schematic) bool {
                     .wire, .repeater_north, .repeater_east, .repeater_south, .repeater_west => {
                         if (y == 0 or S.get(x, y - 1, z) != .block) {
                             correct = false;
-                            std.debug.print("  SCHEM: No block below redstone/repeater\n", .{});
+                            std.debug.print("  SCHEM: No block below redstone/repeater at {}\n", .{.{ x, y, z }});
                         }
                     },
                     else => {},
@@ -25,13 +25,13 @@ pub fn validate_grid(S: *const model.Schematic) bool {
                     .repeater_north, .repeater_south => {
                         if (z == 0 or z == zlen - 1 or S.get(x, y, z - 1) != .wire or S.get(x, y, z + 1) != .wire) {
                             correct = false;
-                            std.debug.print("  SCHEM: No redstone in front of/behind repeater\n", .{});
+                            std.debug.print("  SCHEM: No redstone in front of/behind repeater at {}\n", .{.{ x, y, z }});
                         }
                     },
                     .repeater_east, .repeater_west => {
                         if (x == 0 or x == xlen - 1 or S.get(x - 1, y, z) != .wire or S.get(x + 1, y, z) != .wire) {
                             correct = false;
-                            std.debug.print("  SCHEM: No redstone in front of/behind repeater\n", .{});
+                            std.debug.print("  SCHEM: No redstone in front of/behind repeater at {}\n", .{.{ x, y, z }});
                         }
                     },
                     else => {},

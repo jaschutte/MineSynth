@@ -416,6 +416,16 @@ const AndGate: MinecraftSchematic = .{
             .loc = .{ 2, 0, 1 },
             .rot = .center,
         },
+        .{
+            .block = .air,
+            .loc = .{ 1, 1, 0 },
+            .rot = .center,
+        },
+        .{
+            .block = .air,
+            .loc = .{ 1, 2, 0 },
+            .rot = .center,
+        },
     },
 };
 
