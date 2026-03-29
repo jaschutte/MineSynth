@@ -19,10 +19,11 @@ pub fn blockcat_to_id(cat: BlockType) i8 {
         .torch => 76,
         .block => 42,
         .block2 => 41,
-        .block3 => 125,
+        .block3 => 5,
         .input_block => 112,
         .output_block => 123,
         .sign => 63,
+        .floor => 98,
     };
 }
 

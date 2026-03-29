@@ -57,6 +57,7 @@ pub const BlockType = enum {
     input_block,
     output_block,
     sign,
+    floor,
 };
 
 pub const Orientation = enum {

@@ -135,5 +135,9 @@ fn visualization_stage(gpa: std.mem.Allocator, schematic: *const model.Schematic
     var blocks = std.ArrayList(library.SchemBlock).fromOwnedSlice(schem_blocks);
     try blocks.appendSlice(gpa, place_blocks);
 
+    // Add a floor
+    const floor_blocks = try visualization.addFloor(gpa, &blocks.items);
+    try blocks.appendSlice(gpa, floor_blocks);
+
     return nbt.block_arr_to_schem(gpa, try blocks.toOwnedSlice(gpa));
 }
