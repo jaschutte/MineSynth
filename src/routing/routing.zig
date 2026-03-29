@@ -69,10 +69,10 @@ const QueueNode = struct {
 
 const unowned = std.math.maxInt(usize);
 const BlockOwner = []usize;
+const BlockFixed = []bool;
 
 const dangerous_blocks = [_]@Vector(3, isize){
     .{ 0, -1, 0 },
-    // .{ 0, 0, 0 },
     .{ 0, 1, 0 },
     .{ 1, -1, 0 },
     .{ 1, 0, 0 },
@@ -122,6 +122,7 @@ const search_nodes: usize = 8 * 100000;
 const distance_cost: f32 = 0.65;
 const vertical_cost: f32 = 0.005;
 const repeater_cost: f32 = 0.01;
+const reroute_cost: f32 = -2;
 
 const default_violation_cost: f32 = 1.1;
 const violation_cost_decrement: f32 = 0.22;
@@ -141,7 +142,7 @@ inline fn posIdx(pos: Pos, size: Pos) usize {
     return pos[0] * size[1] * size[2] + pos[1] * size[2] + pos[2];
 }
 
-fn routeSingleRoute(wire: *const Wire, S: *const Schematic, O: *const BlockOwner, comptime violate: bool, violation_cost: f32, gpa: std.mem.Allocator) !?struct { []Move } {
+fn routeSingleRoute(wire: *const Wire, S: *const Schematic, O: *const BlockOwner, comptime violate: bool, violation_cost: f32, fixed: *const BlockFixed, gpa: std.mem.Allocator) !?struct { []Move } {
     const from = wire.from;
     const to = wire.to;
     const net = wire.net;
@@ -224,14 +225,18 @@ fn routeSingleRoute(wire: *const Wire, S: *const Schematic, O: *const BlockOwner
         for (dangerous_blocks) |offset| {
             const i_pos = @as(@Vector(3, isize), @intCast(pos));
             const n_pos = @as(Pos, @intCast(i_pos + offset));
-            const owner = O.*[n_pos[0] * S.size[1] * S.size[2] + n_pos[1] * S.size[2] + n_pos[2]];
+            const n_pos_idx = n_pos[0] * S.size[1] * S.size[2] + n_pos[1] * S.size[2] + n_pos[2];
+            const owner = O.*[n_pos_idx];
             if (S.getPos(n_pos) != .wire) continue;
             if (owner == unowned) continue;
             if (!violate) {
                 if (owner != net) continue :outer;
                 // if (owner == net and !std.meta.eql(n_pos, moveStore.items[move.from].pos)) continue :outer;
             } else {
-                // TODO: Do not allow violations of ports, as they are fixed
+                // If violating block is fixed, we may not violate
+                if (fixed.*[n_pos_idx]) {
+                    if (owner != net) continue :outer;
+                }
                 if (owner != net) {
                     cost += violation_cost;
                     break; // To ensure violation_cost is only applied once
@@ -259,7 +264,8 @@ fn routeSingleRoute(wire: *const Wire, S: *const Schematic, O: *const BlockOwner
             if (pow > 1) {
                 const next_move = Move{ .dir = .north, .type = .flat };
                 const next_pos = next_move.nextPos(pos);
-                const next_cost = cost + distance_cost;
+                var next_cost = cost + distance_cost;
+                if (O.*[posIdx(next_pos, size)] == net) next_cost += reroute_cost;
                 try moveStore.append(gpa, .{
                     .from = next.move,
                     .cost = next_cost,
@@ -275,7 +281,8 @@ fn routeSingleRoute(wire: *const Wire, S: *const Schematic, O: *const BlockOwner
             if (pow > 1 and pos[1] < S.size[1] - 1 and canGoVert(move.move)) {
                 const next_move = Move{ .dir = .north, .type = .up };
                 const next_pos = next_move.nextPos(pos);
-                const next_cost = cost + distance_cost + vertical_cost;
+                var next_cost = cost + distance_cost + vertical_cost;
+                if (O.*[posIdx(next_pos, size)] == net) next_cost += reroute_cost;
                 try moveStore.append(gpa, .{
                     .from = next.move,
                     .cost = next_cost,
@@ -291,7 +298,8 @@ fn routeSingleRoute(wire: *const Wire, S: *const Schematic, O: *const BlockOwner
             if (pow > 1 and pos[1] > 1 and canGoVert(move.move)) {
                 const next_move = Move{ .dir = .north, .type = .down };
                 const next_pos = next_move.nextPos(pos);
-                const next_cost = cost + distance_cost + vertical_cost;
+                var next_cost = cost + distance_cost + vertical_cost;
+                if (O.*[posIdx(next_pos, size)] == net) next_cost += reroute_cost;
                 try moveStore.append(gpa, .{
                     .from = next.move,
                     .cost = next_cost,
@@ -307,7 +315,8 @@ fn routeSingleRoute(wire: *const Wire, S: *const Schematic, O: *const BlockOwner
             if (pow >= 1) {
                 const next_move = Move{ .dir = .north, .type = .repeater };
                 const next_pos = next_move.nextPos(pos);
-                const next_cost = cost + repeater_cost + distance_cost;
+                var next_cost = cost + distance_cost + repeater_cost;
+                if (O.*[posIdx(next_pos, size)] == net) next_cost += reroute_cost;
                 try moveStore.append(gpa, .{
                     .from = next.move,
                     .cost = next_cost,
@@ -326,7 +335,8 @@ fn routeSingleRoute(wire: *const Wire, S: *const Schematic, O: *const BlockOwner
             if (pow > 1) {
                 const next_move = Move{ .dir = .east, .type = .flat };
                 const next_pos = next_move.nextPos(pos);
-                const next_cost = cost + distance_cost;
+                var next_cost = cost + distance_cost;
+                if (O.*[posIdx(next_pos, size)] == net) next_cost += reroute_cost;
                 try moveStore.append(gpa, .{
                     .from = next.move,
                     .cost = next_cost,
@@ -342,7 +352,8 @@ fn routeSingleRoute(wire: *const Wire, S: *const Schematic, O: *const BlockOwner
             if (pow > 1 and pos[1] < S.size[1] - 1 and canGoVert(move.move)) {
                 const next_move = Move{ .dir = .east, .type = .up };
                 const next_pos = next_move.nextPos(pos);
-                const next_cost = cost + distance_cost + vertical_cost;
+                var next_cost = cost + distance_cost + vertical_cost;
+                if (O.*[posIdx(next_pos, size)] == net) next_cost += reroute_cost;
                 try moveStore.append(gpa, .{
                     .from = next.move,
                     .cost = next_cost,
@@ -358,7 +369,8 @@ fn routeSingleRoute(wire: *const Wire, S: *const Schematic, O: *const BlockOwner
             if (pow > 1 and pos[1] > 1 and canGoVert(move.move)) {
                 const next_move = Move{ .dir = .east, .type = .down };
                 const next_pos = next_move.nextPos(pos);
-                const next_cost = cost + distance_cost + vertical_cost;
+                var next_cost = cost + distance_cost + vertical_cost;
+                if (O.*[posIdx(next_pos, size)] == net) next_cost += reroute_cost;
                 try moveStore.append(gpa, .{
                     .from = next.move,
                     .cost = next_cost,
@@ -374,7 +386,8 @@ fn routeSingleRoute(wire: *const Wire, S: *const Schematic, O: *const BlockOwner
             if (pow >= 1) {
                 const next_move = Move{ .dir = .east, .type = .repeater };
                 const next_pos = next_move.nextPos(pos);
-                const next_cost = cost + repeater_cost + distance_cost;
+                var next_cost = cost + distance_cost + repeater_cost;
+                if (O.*[posIdx(next_pos, size)] == net) next_cost += reroute_cost;
                 try moveStore.append(gpa, .{
                     .from = next.move,
                     .cost = next_cost,
@@ -393,7 +406,8 @@ fn routeSingleRoute(wire: *const Wire, S: *const Schematic, O: *const BlockOwner
             if (pow > 1) {
                 const next_move = Move{ .dir = .south, .type = .flat };
                 const next_pos = next_move.nextPos(pos);
-                const next_cost = cost + distance_cost;
+                var next_cost = cost + distance_cost;
+                if (O.*[posIdx(next_pos, size)] == net) next_cost += reroute_cost;
                 try moveStore.append(gpa, .{
                     .from = next.move,
                     .cost = next_cost,
@@ -409,7 +423,8 @@ fn routeSingleRoute(wire: *const Wire, S: *const Schematic, O: *const BlockOwner
             if (pow > 1 and pos[1] < S.size[1] - 1 and canGoVert(move.move)) {
                 const next_move = Move{ .dir = .south, .type = .up };
                 const next_pos = next_move.nextPos(pos);
-                const next_cost = cost + distance_cost + vertical_cost;
+                var next_cost = cost + distance_cost + vertical_cost;
+                if (O.*[posIdx(next_pos, size)] == net) next_cost += reroute_cost;
                 try moveStore.append(gpa, .{
                     .from = next.move,
                     .cost = next_cost,
@@ -425,7 +440,8 @@ fn routeSingleRoute(wire: *const Wire, S: *const Schematic, O: *const BlockOwner
             if (pow > 1 and pos[1] > 1 and canGoVert(move.move)) {
                 const next_move = Move{ .dir = .south, .type = .down };
                 const next_pos = next_move.nextPos(pos);
-                const next_cost = cost + distance_cost + vertical_cost;
+                var next_cost = cost + distance_cost + vertical_cost;
+                if (O.*[posIdx(next_pos, size)] == net) next_cost += reroute_cost;
                 try moveStore.append(gpa, .{
                     .from = next.move,
                     .cost = next_cost,
@@ -441,7 +457,8 @@ fn routeSingleRoute(wire: *const Wire, S: *const Schematic, O: *const BlockOwner
             if (pow >= 1) {
                 const next_move = Move{ .dir = .south, .type = .repeater };
                 const next_pos = next_move.nextPos(pos);
-                const next_cost = cost + repeater_cost + distance_cost;
+                var next_cost = cost + distance_cost + repeater_cost;
+                if (O.*[posIdx(next_pos, size)] == net) next_cost += reroute_cost;
                 try moveStore.append(gpa, .{
                     .from = next.move,
                     .cost = next_cost,
@@ -460,7 +477,8 @@ fn routeSingleRoute(wire: *const Wire, S: *const Schematic, O: *const BlockOwner
             if (pow > 1) {
                 const next_move = Move{ .dir = .west, .type = .flat };
                 const next_pos = next_move.nextPos(pos);
-                const next_cost = cost + distance_cost;
+                var next_cost = cost + distance_cost;
+                if (O.*[posIdx(next_pos, size)] == net) next_cost += reroute_cost;
                 try moveStore.append(gpa, .{
                     .from = next.move,
                     .cost = next_cost,
@@ -476,7 +494,8 @@ fn routeSingleRoute(wire: *const Wire, S: *const Schematic, O: *const BlockOwner
             if (pow > 1 and pos[1] < S.size[1] - 1 and canGoVert(move.move)) {
                 const next_move = Move{ .dir = .west, .type = .up };
                 const next_pos = next_move.nextPos(pos);
-                const next_cost = cost + distance_cost + vertical_cost;
+                var next_cost = cost + distance_cost + vertical_cost;
+                if (O.*[posIdx(next_pos, size)] == net) next_cost += reroute_cost;
                 try moveStore.append(gpa, .{
                     .from = next.move,
                     .cost = next_cost,
@@ -492,7 +511,8 @@ fn routeSingleRoute(wire: *const Wire, S: *const Schematic, O: *const BlockOwner
             if (pow > 1 and pos[1] > 1 and canGoVert(move.move)) {
                 const next_move = Move{ .dir = .west, .type = .down };
                 const next_pos = next_move.nextPos(pos);
-                const next_cost = cost + distance_cost + vertical_cost;
+                var next_cost = cost + distance_cost + vertical_cost;
+                if (O.*[posIdx(next_pos, size)] == net) next_cost += reroute_cost;
                 try moveStore.append(gpa, .{
                     .from = next.move,
                     .cost = next_cost,
@@ -508,7 +528,8 @@ fn routeSingleRoute(wire: *const Wire, S: *const Schematic, O: *const BlockOwner
             if (pow >= 1) {
                 const next_move = Move{ .dir = .west, .type = .repeater };
                 const next_pos = next_move.nextPos(pos);
-                const next_cost = cost + repeater_cost + distance_cost;
+                var next_cost = cost + distance_cost + repeater_cost;
+                if (O.*[posIdx(next_pos, size)] == net) next_cost += reroute_cost;
                 try moveStore.append(gpa, .{
                     .from = next.move,
                     .cost = next_cost,
@@ -637,14 +658,31 @@ fn setPortOwnership(S: *Schematic, O: *std.ArrayList(usize), wires: *const []Wir
     }
 }
 
+fn setFixedBlocks(F: *std.ArrayList(bool), S: *const Schematic) void {
+    for (0..S.grid.len) |i| {
+        F.items[i] = switch (S.grid[i]) {
+            .predef => true,
+            .wire => true,
+            .block => true,
+            else => false,
+        };
+    }
+}
+
 pub fn route(wires: []Wire, schem: *const Schematic, gpa: std.mem.Allocator) !Schematic {
     var S = try cloneSchematic(schem, gpa);
 
     var O = std.ArrayList(usize).empty;
     try O.appendNTimes(gpa, unowned, S.size[0] * S.size[1] * S.size[2]);
 
+    var F = std.ArrayList(bool).empty;
+    try F.appendNTimes(gpa, false, S.size[0] * S.size[1] * S.size[2]);
+
     // Assign ownership for all ports
     setPortOwnership(&S, &O, &wires, S.size);
+
+    // Set which blocks are fixed
+    setFixedBlocks(&F, &S);
 
     // Initialize the queue for the routing process
     Q = .init(gpa, undefined);
@@ -668,24 +706,35 @@ pub fn route(wires: []Wire, schem: *const Schematic, gpa: std.mem.Allocator) !Sc
         std.debug.print("#{} Routing net {}, {} queued: {}\n", .{ i, wire.net, wire_queue.items.len - i, wire });
         i += 1;
         // const default_violation_cost = 1.50 - @as(f32, @floatFromInt(i)) / 300.0;
-        var path_rev = try routeSingleRoute(&wire, &S, &O.items, false, default_violation_cost, gpa);
+        var path_rev = try routeSingleRoute(&wire, &S, &O.items, false, default_violation_cost, &F.items, gpa);
         if (path_rev) |path| {
             const violations = try applyRoute(&wire, &S, &O, path.@"0", gpa);
             if (violations.len != 0)
                 std.debug.print("Route in net {} violates others even though routing successfull\n", .{wire.net});
         } else {
             var violation_cost: f32 = default_violation_cost + violation_cost_decrement;
-            while (path_rev == null) {
+            var attempts: usize = 0;
+            var violations: ?[]const usize = null;
+            while (violations == null) {
+                if (attempts > 6) {
+                    // Not possible to route net as it is, maybe if we rip up the entire net
+                    violations = &.{wire.net};
+                    break;
+                }
+                attempts += 1;
                 violation_cost -= violation_cost_decrement;
-                path_rev = try routeSingleRoute(&wire, &S, &O.items, true, violation_cost, gpa);
+                path_rev = try routeSingleRoute(&wire, &S, &O.items, true, violation_cost, &F.items, gpa);
+                if (path_rev) |path| {
+                    violations = try applyRoute(&wire, &S, &O, path.@"0", gpa);
+                }
             }
 
-            const path = path_rev.?;
-            const violations = try applyRoute(&wire, &S, &O, path.@"0", gpa);
+            // const path = path_rev.?;
+            // const violations = try applyRoute(&wire, &S, &O, path.@"0", gpa);
             std.debug.print("Routed {} in violation with {any}\n", .{ i, violations });
             // Randomize order in which wires get added
             rand.shuffle(Wire, wires);
-            for (violations) |net| {
+            for (violations.?) |net| {
                 ripUp(net, &S, &O); // Rip up violating net
                 for (wires) |w| {
                     if (w.net == net) {

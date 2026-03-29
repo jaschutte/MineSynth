@@ -16,7 +16,7 @@ const use_accurate_input_pos = false;
 const max_chipsize: u32 = 300;
 // used to avoid reading out of index in the grid
 const max_cell_size: u32 = 3;
-const extra_size: u32 = 3;
+const extra_size: u32 = 10;
 
 pub const AnnealingConfig = struct {
     // - "The annealing process starts at a high temperature, such as 4*10^6"
@@ -593,7 +593,7 @@ fn tryMove(the_placement: *Placement, id: Id, last_pos: *const Position, new_x: 
     // std.debug.print("Size is {}\n", .{rect});
 
     const collision_result = try checkCollision(the_placement, id, rect, new_x, new_y, node_padding);
-    if (collision_result != 0) return collision_result;
+    if (collision_result != empty) return collision_result;
 
     // No collision, so move rectangle
     for (last_pos.x - node_padding..last_pos.x + rect.w) |x| {
@@ -607,14 +607,14 @@ fn tryMove(the_placement: *Placement, id: Id, last_pos: *const Position, new_x: 
 }
 
 fn checkCollision(the_placement: *const Placement, node_id: glib.NodeId, size: model.Rect, new_x: postype, new_y: postype, node_padding: u8) !glib.NodeId {
-    for (new_x - node_padding..new_x + size.w) |x| {
-        for (new_y - node_padding..new_y + size.h) |y| {
+    for (new_x - node_padding..new_x + size.w + node_padding) |x| {
+        for (new_y - node_padding..new_y + size.h + node_padding) |y| {
             if (the_placement.occupancy_grid[x][y] != empty and the_placement.occupancy_grid[x][y] != node_id) {
                 return the_placement.occupancy_grid[x][y];
             }
         }
     }
-    return 0;
+    return empty;
 }
 
 fn clampU32WithDelta(x: postype, dx: i32, max_pos: postype, min_pos: postype) postype {
@@ -688,25 +688,15 @@ fn swap(netlist: *const Netlist, the_placement: *Placement, node_a_id: glib.Node
     const unsigned_new_y_a = pos_b.y;
 
     // check whether a fits at b position
-    for (unsigned_new_x_a - node_padding..unsigned_new_x_a + rect_a.w) |x| {
-        for (unsigned_new_y_a - node_padding..unsigned_new_y_a + rect_a.h) |y| {
-            if (the_placement.occupancy_grid[x][y] != empty and the_placement.occupancy_grid[x][y] != node_b_id) {
-                return false;
-            }
-        }
-    }
+    const coll_res_a = try checkCollision(the_placement, node_b_id, rect_a, unsigned_new_x_a, unsigned_new_y_a, node_padding);
+    if (coll_res_a != empty) return false;
 
     const unsigned_new_x_b = pos_a.x;
     const unsigned_new_y_b = pos_a.y;
 
     // check whether b fits at a position
-    for (unsigned_new_x_b - node_padding..unsigned_new_x_b + rect_b.w) |x| {
-        for (unsigned_new_y_b - node_padding..unsigned_new_y_b + rect_b.h) |y| {
-            if (the_placement.occupancy_grid[x][y] != empty and the_placement.occupancy_grid[x][y] != node_a_id) {
-                return false;
-            }
-        }
-    }
+    const coll_res_b = try checkCollision(the_placement, node_a_id, rect_b, unsigned_new_x_b, unsigned_new_y_b, node_padding);
+    if (coll_res_b != empty) return false;
 
     // both fit, so proceed the swap:
     // set both old positions to 0:
@@ -767,7 +757,7 @@ fn moveInputOrOutputAxis(netlist: *const Netlist, the_placement: *Placement, win
         std.debug.assert(lasytpos == pos.y);
 
         const collision_result = try checkCollision(the_placement, id, rect, pos.x, new_y, node_padding);
-        if (collision_result != 0) return collision_result;
+        if (collision_result != empty) return collision_result;
     }
 
     // no collision: move all nodes to new position:

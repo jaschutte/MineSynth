@@ -60,7 +60,7 @@ pub fn validate_logical_equivalence(D: *const model.Netlist, S: *const model.Sch
                 for (0..zlen) |z| {
                     if (schem.get(x, y, z) != .undef and S.get(pos[0] + x, pos[1] + y, pos[2] + z) != schem.get(x, y, z)) {
                         correct = false;
-                        std.debug.print("  SCHEM: Synthesized schematic does not correctly contain instance\n", .{});
+                        std.debug.print("  SCHEM: Synthesized schematic does not correctly contain instance at {}\n", .{.{ pos[0] + x, pos[1] + y, pos[2] + z }});
                     }
                 }
             }

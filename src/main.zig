@@ -11,7 +11,7 @@ pub fn main() !void {
     // defer _ = real_gpa.deinit();
 
     // Read AIGER file
-    const content = try std.fs.cwd().readFileAlloc(gpa, "aiger-examples/4-adder.aag", std.math.maxInt(usize));
+    const content = try std.fs.cwd().readFileAlloc(gpa, "aiger-examples/8-adder.aag", std.math.maxInt(usize));
     defer _ = gpa.free(content);
 
     // Apply normalization to AIGER file
@@ -79,13 +79,13 @@ fn placement_stage(gpa: std.mem.Allocator, netlist: *const model.Netlist) !model
 
     const plc = @import("placement/placement.zig");
     const annealing_config: plc.AnnealingConfig = .{
-        .initial_temperature = 40,
+        .initial_temperature = 30,
         .moves_per_temperature = 4000,
         // .moves_per_temperature = 5000,
-        .initial_window_size = 100,
-        .alpha = 0.7,
+        .initial_window_size = 70,
+        .alpha = 0.8,
         .node_padding = 1,
-        .congestion_cost_weight = 500,
+        .congestion_cost_weight = 100,
         // .initial_input_y = 20,
         // .initial_output_y = 130,
     };

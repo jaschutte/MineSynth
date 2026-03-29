@@ -15,8 +15,8 @@ pub const Library = struct {
             .variants = .init(gpa),
         };
 
-        const kinds = [_]InstanceKind{ .inverter, .and_gate, .or_gate, .input, .output };
-        const bases = [_]*const MinecraftSchematic{ &Inverter, &AndGate, &OrGate, &Input, &Output };
+        const kinds = [_]InstanceKind{ .inverter, .and_gate, .or_gate, .input, .output, .pin };
+        const bases = [_]*const MinecraftSchematic{ &Inverter, &AndGate, &OrGate, &Input, &Output, &Pin };
         for (kinds, bases) |kind, base| {
             var v = std.ArrayList(InstanceVariant).empty;
 
@@ -38,6 +38,7 @@ pub const InstanceKind = enum {
     or_gate,
     input,
     output,
+    pin, // Does nothing
 };
 
 pub const SchemPosNum = u16;
@@ -53,6 +54,9 @@ pub const BlockType = enum {
     block,
     block2,
     block3,
+    input_block,
+    output_block,
+    sign,
 };
 
 pub const Orientation = enum {
@@ -167,6 +171,44 @@ fn getSchematic(self: MinecraftSchematic, gpa: std.mem.Allocator) !struct { *con
     return .{ ret, .{ xmin, ymin, zmin } };
 }
 
+const Pin: MinecraftSchematic = .{
+    .delay = 0,
+    .inputs = &.{.{ .{ 0, 1, 0 }, 1 }},
+    .outputs = &.{.{ .{ 0, 1, 2 }, 15 }},
+    .blocks = &.{
+        .{
+            .block = .dust,
+            .loc = .{ 0, 1, 0 },
+            .rot = .center,
+        },
+        .{
+            .block = .repeater,
+            .loc = .{ 0, 1, 1 },
+            .rot = .south,
+        },
+        .{
+            .block = .dust,
+            .loc = .{ 0, 1, 2 },
+            .rot = .center,
+        },
+        .{
+            .block = .block,
+            .loc = .{ 0, 0, 0 },
+            .rot = .center,
+        },
+        .{
+            .block = .block,
+            .loc = .{ 0, 0, 1 },
+            .rot = .center,
+        },
+        .{
+            .block = .block,
+            .loc = .{ 0, 0, 2 },
+            .rot = .center,
+        },
+    },
+};
+
 const Input: MinecraftSchematic = .{
     .delay = 0,
     .inputs = &.{},
@@ -178,13 +220,18 @@ const Input: MinecraftSchematic = .{
             .rot = .center,
         },
         .{
-            .block = .block2,
+            .block = .input_block,
             .loc = .{ 0, 0, 0 },
             .rot = .center,
         },
         .{
-            .block = .block2,
-            .loc = .{ 0, -1, 0 },
+            .block = .input_block,
+            .loc = .{ 0, 3, 0 },
+            .rot = .center,
+        },
+        .{
+            .block = .sign,
+            .loc = .{ 0, 4, 0 },
             .rot = .center,
         },
     },
@@ -201,8 +248,18 @@ const Output: MinecraftSchematic = .{
             .rot = .center,
         },
         .{
-            .block = .block2,
+            .block = .output_block,
             .loc = .{ 0, 0, 0 },
+            .rot = .center,
+        },
+        .{
+            .block = .output_block,
+            .loc = .{ 0, 3, 0 },
+            .rot = .center,
+        },
+        .{
+            .block = .sign,
+            .loc = .{ 0, 4, 0 },
             .rot = .center,
         },
     },

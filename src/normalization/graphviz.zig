@@ -15,6 +15,7 @@ pub fn printNode(string: *std.io.Writer.Allocating, node: *glib.GateGraph.Node, 
         .inverter => "\"#8fb2c9\"",
         .input => "\"#33f747\"",
         .output => "\"#33f7f0\"",
+        .pin => "\"#ffffff\"",
     };
     try string.writer.print("    {} [label=\"{s}", .{ node.id, symbol });
     var timing: f32 = 0;
