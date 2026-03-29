@@ -1,906 +1,757 @@
 const std = @import("std");
-const phys = @import("physical.zig");
-const nbt = @import("../nbt.zig");
-const comp = @import("components.zig");
-const ms = @import("structures.zig");
+const model = @import("../model.zig");
+const Wire = model.Wire;
+const Schematic = model.Schematic;
+const Pos = model.Pos;
+const PowerLevel = model.PowerLevel;
+const BasicBlock = model.BasicBlock;
 
-const Router = @This();
-
-max_iterations: u32 = 20,
-violation_cost_multiplier: u32 = 5.0,
-heuristic_weight: f32 = 1.0,
-delay_cost_multiplier: u32 = 1.0,
-max_length: u32 = 1000,
-max_astar_iterations: u32 = 999999999,
-
-const WorldCoord = ms.WorldCoord;
-
-const NodeState = struct {
-    coord: WorldCoord,
-    signal: u5,
-    heading: WorldCoord,
+const MoveType = enum {
+    up,
+    flat,
+    down,
+    repeater,
 };
+const MoveDir = enum {
+    north, // -Z
+    east, // +X
+    south, // +Z
+    west, // -X
 
-const Parent = struct {
-    prev: NodeState,
-    def: *const comp.ComponentDef,
-    violating: bool,
-    heading: WorldCoord,
-};
-
-pub const RouteStep = struct {
-    coord: WorldCoord,
-    signal: u5,
-    heading: WorldCoord,
-    def: ?*const comp.ComponentDef,
-};
-
-const Route = struct {
-    route: std.ArrayList(ms.AbsBlock) = .empty,
-    steps: std.ArrayList(RouteStep) = .empty,
-    delay: u32 = 0,
-    length: u32 = 0,
-    violating: bool,
-    pub fn deinit(self: *Route, allocator: std.mem.Allocator) void {
-        self.route.deinit(allocator);
-        self.steps.deinit(allocator);
+    inline fn posDir(self: MoveDir, pos: Pos) Pos {
+        return switch (self) {
+            .north => .{ pos[0], pos[1], pos[2] - 1 },
+            .east => .{ pos[0] + 1, pos[1], pos[2] },
+            .south => .{ pos[0], pos[1], pos[2] + 1 },
+            .west => .{ pos[0] - 1, pos[1], pos[2] },
+        };
     }
 };
-
-pub const RoutePair = struct {
-    from: WorldCoord,
-    to: WorldCoord,
-};
-
-const MergePoint = struct {
-    cost_to_root: u32,
-    signal_at_node: u5,
-};
-
-fn coordEq(a: WorldCoord, b: WorldCoord) bool {
-    return a[0] == b[0] and a[1] == b[1] and a[2] == b[2];
-}
-
-const MaxMoveBlocks = 12;
-const MAX_COMPONENT_RADIUS = 2;
-const MoveFootprint = struct {
-    blocks: [MaxMoveBlocks]WorldCoord,
-    count: usize,
-};
-
-fn getMoveFootprint(u: WorldCoord, move: Move) MoveFootprint {
-    var fp: MoveFootprint = .{ .blocks = undefined, .count = 0 };
-    for (move.def.build_blocks) |bb| {
-        fp.blocks[fp.count] = u + rotateCoord(bb.offset, move.heading);
-        fp.count += 1;
-    }
-    return fp;
-}
-
-fn moveIntersectsPath(new_u: WorldCoord, new_move: Move, start_state: NodeState, parents: *const std.AutoHashMap(NodeState, Parent)) bool {
-    const new_fp = getMoveFootprint(new_u, new_move);
-    const new_coord = new_u + new_move.dir;
-
-    var curr = start_state;
-
-    while (true) {
-        if (coordEq(curr.coord, new_coord)) return true;
-
-        if (parents.get(curr)) |p| {
-            const prev_u = p.prev.coord;
-            const past_move = Move{
-                .dir = curr.coord - prev_u,
-                .heading = p.heading,
-                .def = p.def,
-            };
-            const dx = @abs(prev_u[0] - new_u[0]);
-            const dy = @abs(prev_u[1] - new_u[1]);
-            const dz = @abs(prev_u[2] - new_u[2]);
-            const manhattan = dx + dy + dz;
-
-            if (manhattan > MAX_COMPONENT_RADIUS * 2) {
-                curr = p.prev;
-                continue;
-            }
-            const past_fp = getMoveFootprint(prev_u, past_move);
-
-            for (new_fp.blocks[0..new_fp.count]) |b1| {
-                for (past_fp.blocks[0..past_fp.count]) |b2| {
-                    if (coordEq(b1, b2)) {
-                        return true;
-                    }
-                }
-            }
-            curr = p.prev;
-        } else {
-            break;
-        }
-    }
-    return false;
-}
-
 const Move = struct {
-    dir: WorldCoord,
-    heading: WorldCoord,
-    def: *const comp.ComponentDef,
-};
+    type: MoveType,
+    dir: MoveDir,
 
-const MoveValidity = union(enum) {
-    valid,
-    invalid,
-    violation: u32,
-};
-
-fn check_validity(coord: WorldCoord, is_center: bool, forbidden_zone: ms.ForbiddenZone, current_from: WorldCoord, is_first_move: bool, host_route_id: ?usize) MoveValidity {
-    _ = is_first_move; // autofix
-    _ = current_from;
-    if (forbidden_zone.get(coord)) |conflict| {
-        if (conflict.ftype == .gate and is_center) return .invalid;
-
-        // Padding overlapping padding is never a violation
-        if (!is_center and conflict.ftype == .wire_padding) {
-            return .valid;
-        }
-
-        // Allow overlapping with its own route if there are no external dependencies
-        if (host_route_id != null and conflict.route_id == host_route_id.? and conflict.foreign_ref_count == 0) {
-            return .valid;
-        }
-
-        return .{ .violation = conflict.ref_count };
-    }
-    return .valid;
-}
-
-fn isMoveValid(u: WorldCoord, move: Move, forbidden_zone: ms.ForbiddenZone, current_from: WorldCoord, is_first_move: bool, host_route_id: ?usize) MoveValidity {
-    const target_coord = u + move.dir;
-    if (target_coord[1] > phys.MAX_Y_LEVEL or target_coord[1] < phys.MIN_Y_LEVEL) return .invalid;
-
-    var total_refs: u32 = 0;
-
-    // Check build blocks (centers)
-    for (move.def.build_blocks) |bb| {
-        const rotated = rotateCoord(bb.offset, move.heading);
-        switch (check_validity(u + rotated, true, forbidden_zone, current_from, is_first_move, host_route_id)) {
-            .invalid => return .invalid,
-            .valid => {},
-            .violation => |refs| total_refs += refs,
-        }
-    }
-
-    // Check padding blocks
-    for (move.def.padding) |pad| {
-        const rotated = rotateCoord(pad, move.heading);
-        switch (check_validity(u + rotated, false, forbidden_zone, current_from, is_first_move, host_route_id)) {
-            .invalid => return .invalid,
-            .valid => {},
-            .violation => |refs| total_refs += refs,
-        }
-    }
-
-    if (total_refs > 0) return .{ .violation = total_refs };
-    return .valid;
-}
-
-const Net = struct {
-    id: usize,
-    from: WorldCoord,
-    original_from: WorldCoord,
-    from_signal: u5,
-    to: WorldCoord,
-    route: ?Route,
-    failures: u32,
-    is_violating: bool = false,
-    sort_weight: u32 = 0,
-};
-
-fn sortNetPtrsDescending(config: Router, lhs: *Net, rhs: *Net) bool {
-    _ = config;
-    return lhs.sort_weight > rhs.sort_weight;
-}
-
-fn ripUpFzTarget(fz: *ms.ForbiddenZone, target: WorldCoord, net: *Net) void {
-    if (fz.getPtr(target)) |existing| {
-        if (existing.ftype == .wire or existing.ftype == .wire_padding) {
-            existing.ref_count -= 1;
-            if (!coordEq(existing.source_coord, net.from)) {
-                existing.foreign_ref_count -= 1;
-            }
-            if (existing.ref_count == 0) {
-                _ = fz.remove(target);
-            }
-        }
-    }
-}
-
-fn ripUp(net: *Net, forbidden_zone: *ms.ForbiddenZone, a: std.mem.Allocator) void {
-    if (net.route) |*r| {
-        for (r.steps.items) |step| {
-            if (step.def) |def| {
-                for (def.build_blocks) |bb| {
-                    const target = step.coord + rotateCoord(bb.offset, step.heading);
-                    ripUpFzTarget(forbidden_zone, target, net);
-                }
-                for (def.padding) |pad| {
-                    const target = step.coord + rotateCoord(pad, step.heading);
-                    ripUpFzTarget(forbidden_zone, target, net);
-                }
-            } else {
-                ripUpFzTarget(forbidden_zone, step.coord, net);
-            }
-        }
-        r.deinit(a);
-        net.route = null;
-    }
-}
-
-const CellInfo = struct {
-    nets: [16]*Net,
-    is_center: [16]bool,
-    count: usize,
-};
-
-fn recordOwner(owners: *std.AutoHashMap(WorldCoord, CellInfo), target: WorldCoord, net: *Net, is_center: bool) !void {
-    if (owners.getPtr(target)) |existing| {
-        var found = false;
-        for (existing.nets[0..existing.count], 0..) |n, i| {
-            if (n == net) {
-                found = true;
-                if (is_center) existing.is_center[i] = true;
-                break;
-            }
-        }
-        if (!found and existing.count < 4) {
-            existing.nets[existing.count] = net;
-            existing.is_center[existing.count] = is_center;
-            existing.count += 1;
-        }
-    } else {
-        var info = CellInfo{ .nets = undefined, .is_center = undefined, .count = 1 };
-        info.nets[0] = net;
-        info.is_center[0] = is_center;
-        try owners.put(target, info);
-    }
-}
-
-fn isHost(branch_net: *const Net, potential_host: *const Net) bool {
-    if (potential_host.route) |*r| {
-        for (r.steps.items) |step| {
-            if (step.def) |def| {
-                for (def.build_blocks) |bb| {
-                    const target = step.coord + rotateCoord(bb.offset, step.heading);
-                    if (coordEq(target, branch_net.from) or coordEq(target, branch_net.to)) return true;
-                }
-            } else {
-                if (coordEq(step.coord, branch_net.from) or coordEq(step.coord, branch_net.to)) return true;
-            }
-        }
-    }
-    return false;
-}
-
-fn checkTargetViolation(target: WorldCoord, owners: *std.AutoHashMap(WorldCoord, CellInfo), net: *Net) bool {
-    if (owners.get(target)) |info| {
-        for (info.nets[0..info.count], 0..) |existing_net, i| {
-            if (existing_net != net) {
-                var net_is_center = false;
-                for (info.nets[0..info.count], 0..) |n, j| {
-                    if (n == net) {
-                        net_is_center = info.is_center[j];
-                        break;
-                    }
-                }
-                const existing_is_center = info.is_center[i];
-
-                // Padding overlapping padding is never a violation
-                if (!net_is_center and !existing_is_center) continue;
-
-                const net_is_branch = isHost(net, existing_net);
-                const existing_is_branch = isHost(existing_net, net);
-                const shares_origin = coordEq(net.original_from, existing_net.original_from);
-
-                if (net_is_branch or existing_is_branch or shares_origin) {
-                    if (!(net_is_center and existing_is_center)) {
-                        continue; // Center overlapping padding is allowed for branches
-                    } else {
-                        const bp1 = net.from;
-                        const bp2 = existing_net.from;
-                        const orig = net.original_from;
-
-                        const is_valid_overlap =
-                            coordEq(target, bp1) or coordEq(target, bp1 + WorldCoord{ 0, -1, 0 }) or
-                            coordEq(target, bp2) or coordEq(target, bp2 + WorldCoord{ 0, -1, 0 }) or
-                            coordEq(target, orig) or coordEq(target, orig + WorldCoord{ 0, -1, 0 });
-
-                        if (is_valid_overlap) continue;
-                    }
-                }
-
-                return true; // Violation caught
-            }
-        }
-    }
-    return false;
-}
-
-fn updateViolations(a: std.mem.Allocator, nets: []Net) !void {
-    var owners = std.AutoHashMap(WorldCoord, CellInfo).init(a);
-    defer owners.deinit();
-
-    // Pass 1: Populate owners map with both centers and padding
-    for (nets) |*net| {
-        net.is_violating = false;
-
-        if (net.route) |*r| {
-            r.violating = false;
-            for (r.steps.items) |step| {
-                if (step.def) |def| {
-                    for (def.build_blocks) |bb| {
-                        const target = step.coord + rotateCoord(bb.offset, step.heading);
-                        try recordOwner(&owners, target, net, true);
-                    }
-                    for (def.padding) |pad| {
-                        const target = step.coord + rotateCoord(pad, step.heading);
-                        try recordOwner(&owners, target, net, false);
-                    }
-                } else {
-                    try recordOwner(&owners, step.coord, net, true);
-                }
-            }
-        }
-    }
-
-    // Pass 2: Check only build_blocks for violations
-    for (nets) |*net| {
-        if (net.route) |*r| {
-            for (r.steps.items) |step| {
-                var local_violating = false;
-                if (step.def) |def| {
-                    for (def.build_blocks) |bb| {
-                        const target = step.coord + rotateCoord(bb.offset, step.heading);
-                        if (checkTargetViolation(target, &owners, net)) local_violating = true;
-                    }
-                } else {
-                    if (checkTargetViolation(step.coord, &owners, net)) local_violating = true;
-                }
-
-                if (local_violating) {
-                    net.is_violating = true;
-                    break;
-                }
-            }
-        }
-    }
-
-    // Pass 3: Apply state
-    for (nets) |*net| {
-        if (net.route) |*r| r.violating = net.is_violating;
-    }
-}
-
-fn sortNetsSortWeight(context: Router, lhs: Net, rhs: Net) bool {
-    _ = context;
-    return lhs.sort_weight > rhs.sort_weight;
-}
-
-pub fn routeAll(a: std.mem.Allocator, seed: u32, pairs: []RoutePair, forbidden_zone: *ms.ForbiddenZone, config: Router) !Route {
-    var var_config = config;
-    var nets = try a.alloc(Net, pairs.len);
-
-    defer {
-        for (nets) |*net| {
-            if (net.route) |*r| r.deinit(a);
-        }
-        a.free(nets);
-    }
-
-    var v_nets: std.ArrayList(*Net) = .empty;
-    defer v_nets.deinit(a);
-
-    var targets = std.AutoHashMap(WorldCoord, MergePoint).init(a);
-    defer targets.deinit();
-
-    for (pairs, 0..) |pair, i| {
-        nets[i] = .{
-            .id = i,
-            .from = pair.from,
-            .original_from = pair.from,
-            .to = pair.to,
-            .route = null,
-            .failures = 0,
-            .is_violating = false,
-            .from_signal = 15,
-            .sort_weight = heuristic(pair.from, pair.to, config.delay_cost_multiplier),
+    inline fn nextPos(self: Move, pos: Pos) Pos {
+        return switch (self.type) {
+            .up => posAbove(self.dir.posDir(pos)),
+            .flat => self.dir.posDir(pos),
+            .down => posBelow(self.dir.posDir(pos)),
+            .repeater => self.dir.posDir(pos),
         };
     }
 
-    std.sort.block(Net, nets, config, sortNetsSortWeight);
-
-    for (nets, 0..) |*net, i| {
-        targets.clearRetainingCapacity();
-        try targets.put(net.to, .{ .cost_to_root = 0, .signal_at_node = 1 });
-
-        for (nets[0..i]) |*other| {
-            if (other.route) |*r| {
-                if (coordEq(other.to, net.to)) {
-                    var accumulated_cost: u32 = 0;
-                    var rev_idx: usize = r.steps.items.len;
-                    while (rev_idx > 0) {
-                        rev_idx -= 1;
-                        const step = r.steps.items[rev_idx];
-                        if (step.def) |def| {
-                            for (def.build_blocks) |bb| {
-                                const target = step.coord + rotateCoord(bb.offset, step.heading);
-                                accumulated_cost += 1;
-                                try targets.put(target, .{ .cost_to_root = accumulated_cost * config.delay_cost_multiplier, .signal_at_node = step.signal });
-                            }
-                        } else {
-                            accumulated_cost += 1;
-                            try targets.put(step.coord, .{ .cost_to_root = accumulated_cost * config.delay_cost_multiplier, .signal_at_node = step.signal });
-                        }
-                    }
-                }
-            }
-        }
-
-        std.log.info("Routing net {} from {any} to {any}", .{ net.id, net.from, net.to });
-        net.route = routeToUpdateForbiddenZone(a, net.from, net.from_signal, targets, forbidden_zone, config, net.id) catch null;
+    inline fn block(self: Move) BasicBlock {
+        return switch (self.type) {
+            .repeater => switch (self.dir) {
+                .north => .repeater_north,
+                .east => .repeater_east,
+                .south => .repeater_south,
+                .west => .repeater_west,
+            },
+            else => .wire,
+        };
     }
-
-    try updateViolations(a, nets);
-    for (nets) |*net| {
-        if (net.route) |r| {
-            std.log.info("Initial route for net from {any} to {any} has delay {d} and violating={any}", .{ net.from, net.to, r.delay, net.is_violating });
-        }
-        if (net.is_violating or net.route == null) {
-            try v_nets.append(a, net);
-        }
-    }
-
-    var iters: u32 = 0;
-    var prng = std.Random.DefaultPrng.init(seed);
-    const random = prng.random();
-
-    while (v_nets.items.len > 0 and iters < config.max_iterations) : (iters += 1) {
-        for (v_nets.items) |net| {
-            const base_weight = net.failures * 1000;
-            const dist = heuristic(net.from, net.to, config.delay_cost_multiplier) * 100;
-            const random_jitter = random.intRangeLessThan(u32, 0, 1500);
-            net.sort_weight = base_weight + dist + random_jitter;
-        }
-
-        std.sort.block(*Net, v_nets.items, config, sortNetPtrsDescending);
-        const num_v_nets_this_pass = v_nets.items.len;
-
-        std.log.info("Iteration {}: Routing {} violating nets", .{ iters, num_v_nets_this_pass });
-        var_config.violation_cost_multiplier += 0;
-
-        for (0..num_v_nets_this_pass) |_| {
-            var net = v_nets.orderedRemove(0);
-            ripUp(net, forbidden_zone, a);
-
-            targets.clearRetainingCapacity();
-            try targets.put(net.to, .{ .cost_to_root = 0, .signal_at_node = 1 });
-
-            for (nets) |*other| {
-                if (other.id == net.id) continue;
-                if (other.route) |*r| {
-                    if (coordEq(other.to, net.to)) {
-                        var accumulated_cost: u32 = 0;
-                        var rev_idx: usize = r.steps.items.len;
-                        while (rev_idx > 0) {
-                            rev_idx -= 1;
-                            const step = r.steps.items[rev_idx];
-                            if (step.def) |def| {
-                                for (def.build_blocks) |bb| {
-                                    const target = step.coord + rotateCoord(bb.offset, step.heading);
-                                    accumulated_cost += 1;
-                                    try targets.put(target, .{ .cost_to_root = accumulated_cost * config.delay_cost_multiplier, .signal_at_node = step.signal });
-                                }
-                            } else {
-                                accumulated_cost += 1;
-                                try targets.put(step.coord, .{ .cost_to_root = accumulated_cost * config.delay_cost_multiplier, .signal_at_node = step.signal });
-                            }
-                        }
-                    }
-                }
-            }
-
-            std.log.info("Re-routing net from {any} to {any} with {} failures", .{ net.from, net.to, net.failures });
-            net.route = routeToUpdateForbiddenZone(a, net.from, net.from_signal, targets, forbidden_zone, var_config, net.id) catch null;
-        }
-
-        try updateViolations(a, nets);
-
-        v_nets.clearRetainingCapacity();
-        for (nets) |*net| {
-            if (net.is_violating or net.route == null) {
-                net.failures += 1;
-                try v_nets.append(a, net);
-            }
-        }
-    }
-
-    if (v_nets.items.len > 0) {
-        std.log.warn("routeAll finished with {} unresolved violations after {} iterations.", .{ v_nets.items.len, config.max_iterations });
-    }
-
-    var final_route = Route{
-        .route = .empty,
-        .steps = .empty,
-        .delay = 0,
-        .length = 0,
-        .violating = v_nets.items.len > 0,
-    };
-    errdefer final_route.deinit(a);
-
-    std.log.info("Assembling final route with total {} nets, {} violating.", .{ nets.len, v_nets.items.len });
-    for (nets) |*net| {
-        if (net.route) |*r| {
-            if (net.is_violating) {
-                for (0..r.route.items.len) |i| {
-                    if (r.route.items[i].block == .block) {
-                        r.route.items[i].block = .block3;
-                    }
-                }
-            }
-            try final_route.route.appendSlice(a, r.route.items);
-            try final_route.steps.appendSlice(a, r.steps.items);
-            final_route.delay += r.delay;
-            final_route.length += r.length;
-        } else {
-            try final_route.route.append(a, .{ .block = .block3, .rot = .center, .loc = net.to });
-            try final_route.route.append(a, .{ .block = .block3, .rot = .center, .loc = net.from });
-        }
-    }
-
-    return final_route;
-}
-
-const QueueItem = struct {
-    state: NodeState,
-    g: u32,
-    f: u32,
-    length: u32,
-    delay: u32,
+};
+const MoveNode = struct {
+    from: usize, // Previous path node
+    pos: Pos, // End position of path
+    pow: PowerLevel, // Power level at position
+    move: Move, // Type of move performed
+    cost: f32, // Cost of path so far in ticks
 };
 
-fn heuristic(curr: WorldCoord, target: WorldCoord, delay_weight: u32) u32 {
-    const dx = @abs(curr[0] - target[0]);
-    const dy = @abs(curr[1] - target[1]);
-    const dz = @abs(curr[2] - target[2]);
-    const manhattan_f: u32 = (dx + dy + dz);
-    const min_unavoidable_delay_cost = (manhattan_f / 30) * delay_weight;
-    return manhattan_f + min_unavoidable_delay_cost;
+const first_from = std.math.maxInt(usize);
+
+const QueueNode = struct {
+    cost: f32, // Actual cost + heuristic cost
+    move: usize, // Index of the move referenced
+};
+
+const unowned = std.math.maxInt(usize);
+const BlockOwner = []usize;
+const BlockFixed = []bool;
+
+const dangerous_blocks = [_]@Vector(3, isize){
+    .{ 0, -1, 0 },
+    .{ 0, 1, 0 },
+    .{ 1, -1, 0 },
+    .{ 1, 0, 0 },
+    .{ 1, 1, 0 },
+    .{ -1, -1, 0 },
+    .{ -1, 0, 0 },
+    .{ -1, 1, 0 },
+    .{ 0, -1, 1 },
+    .{ 0, 0, 1 },
+    .{ 0, 1, 1 },
+    .{ 0, -1, -1 },
+    .{ 0, 0, -1 },
+    .{ 0, 1, -1 },
+};
+
+fn compareQueueNode(_: void, a: QueueNode, b: QueueNode) std.math.Order {
+    return std.math.order(a.cost, b.cost);
 }
 
-fn minimumHeuristic(curr: WorldCoord, targets: std.AutoHashMap(WorldCoord, MergePoint), delay_weight: u32) u32 {
-    var min_h: u32 = std.math.maxInt(u32);
-    var it = targets.iterator();
-    while (it.next()) |entry| {
-        const h = heuristic(curr, entry.key_ptr.*, delay_weight) + entry.value_ptr.cost_to_root;
-        if (h < min_h) min_h = h;
-    }
-    return min_h;
-}
-
-fn queueOrder(context: void, a: QueueItem, b: QueueItem) std.math.Order {
-    _ = context;
-    const f_order = std.math.order(a.f, b.f);
-    if (f_order == .eq) {
-        return std.math.order(a.g, b.g).invert();
-    }
-    return f_order;
-}
-
-fn updateFzTarget(fz: *ms.ForbiddenZone, target: WorldCoord, target_ftype: ms.ForbiddenZoneType, from: WorldCoord, route_id: usize) !void {
-    if (fz.getPtr(target)) |existing| {
-        if (existing.ftype == .wire or existing.ftype == .wire_padding) {
-            existing.ref_count += 1;
-
-            if (!coordEq(existing.source_coord, from)) {
-                existing.foreign_ref_count += 1;
-            }
-
-            if (target_ftype == .wire and existing.ftype == .wire_padding) {
-                existing.ftype = .wire;
-
-                if (existing.route_id != route_id) {
-                    existing.foreign_ref_count = existing.ref_count - 1;
-                    existing.route_id = route_id;
-                    existing.source_coord = from;
-                }
-            }
-        }
-    } else {
-        try fz.put(target, .{
-            .ftype = target_ftype,
-            .ref_count = 1,
-            .foreign_ref_count = 0,
-            .route_id = route_id,
-            .source_coord = from,
-        });
+// TODO: Check that we do not form loops
+fn checkPath(start: usize, moves: []MoveNode) bool {
+    const spos = moves[start].pos;
+    var curr = start;
+    while (moves[curr].from != first_from) {
+        const cpos = moves[curr].pos;
+        if (cpos == spos or cpos == .{ spos[0], spos[1] - 1, spos[2] } or cpos == .{ spos[0], spos[1] - 2, spos[2] })
+            return false;
+        curr = moves[curr].from;
     }
 }
 
-pub fn routeToUpdateForbiddenZone(a: std.mem.Allocator, from: WorldCoord, from_signal: u5, targets: std.AutoHashMap(WorldCoord, MergePoint), forbidden_zone: *ms.ForbiddenZone, config: Router, route_id: usize) !Route {
-    const route = try routeTo(a, from, from_signal, targets, forbidden_zone.*, config);
-
-    for (route.steps.items) |step| {
-        if (step.def) |def| {
-            for (def.build_blocks) |bb| {
-                const target = step.coord + rotateCoord(bb.offset, step.heading);
-                try updateFzTarget(forbidden_zone, target, .wire, from, route_id);
-            }
-            for (def.padding) |pad| {
-                const target = step.coord + rotateCoord(pad, step.heading);
-                try updateFzTarget(forbidden_zone, target, .wire_padding, from, route_id);
-            }
-        } else {
-            try updateFzTarget(forbidden_zone, step.coord, .wire, from, route_id);
-        }
-    }
-
-    return route;
-}
-
-pub fn routeTo(a: std.mem.Allocator, from: WorldCoord, from_signal: u5, targets: std.AutoHashMap(WorldCoord, MergePoint), forbidden_zone: ms.ForbiddenZone, config: Router) !Route {
-    if (from[1] < phys.MIN_Y_LEVEL or from[1] > phys.MAX_Y_LEVEL) {
-        return error.OutOfBounds;
-    }
-
-    const host_entry = forbidden_zone.get(from);
-    const host_route_id = if (host_entry) |e| e.route_id else null;
-
-    var queue = std.PriorityQueue(QueueItem, void, queueOrder).init(a, {});
-    defer queue.deinit();
-
-    var parents = std.AutoHashMap(NodeState, Parent).init(a);
-    defer parents.deinit();
-
-    var distances = std.AutoHashMap(NodeState, u32).init(a);
-    defer distances.deinit();
-
-    const start_state = NodeState{ .coord = from, .signal = from_signal, .heading = .{ 0, 0, 0 } };
-    try distances.put(start_state, 0);
-    try queue.add(.{ .state = start_state, .g = 0, .f = minimumHeuristic(from, targets, config.delay_cost_multiplier), .length = 0, .delay = 0 });
-
-    const moves = comptime blk: {
-        var m: [comp.components.len * 4]Move = undefined;
-        var idx = 0;
-        for (&comp.components) |*def| {
-            for ([_]WorldCoord{ .{ 1, 0, 0 }, .{ 0, 0, 1 }, .{ -1, 0, 0 }, .{ 0, 0, -1 } }) |cdir| {
-                m[idx] = .{
-                    .dir = rotateCoord(def.base_dir, cdir),
-                    .heading = cdir,
-                    .def = def,
-                };
-                idx += 1;
-            }
-        }
-        break :blk m;
+inline fn canGoDir(move: Move, dir: MoveDir) bool {
+    return switch (move.type) {
+        .repeater => move.dir == dir,
+        else => true,
     };
+}
 
-    var final_state: ?NodeState = null;
-    var final_merge_cost: u32 = 0;
+inline fn canGoVert(move: Move) bool {
+    return switch (move.type) {
+        .repeater => false,
+        else => true,
+    };
+}
+
+const search_nodes: usize = 8 * 100000;
+const distance_cost: f32 = 0.65;
+const vertical_cost: f32 = 0.005;
+const repeater_cost: f32 = 0.01;
+const reroute_cost: f32 = -2;
+
+const default_violation_cost: f32 = 1.1;
+const violation_cost_decrement: f32 = 0.22;
+
+inline fn heuristic(from: Pos, to: Pos) f32 {
+    const dx = @max(from[0], to[0]) - @min(from[0], to[0]);
+    // const dy = @max(from[1], to[1]) - @min(from[1], to[1]);
+    const dz = @max(from[2], to[2]) - @min(from[2], to[2]);
+    const h = @as(f32, @floatFromInt(dx + dz));
+    return h;
+}
+
+var moveStore = std.ArrayList(MoveNode).empty;
+var Q: std.PriorityQueue(QueueNode, void, compareQueueNode) = undefined;
+
+inline fn posIdx(pos: Pos, size: Pos) usize {
+    return pos[0] * size[1] * size[2] + pos[1] * size[2] + pos[2];
+}
+
+fn routeSingleRoute(wire: *const Wire, S: *const Schematic, O: *const BlockOwner, comptime violate: bool, violation_cost: f32, fixed: *const BlockFixed, gpa: std.mem.Allocator) !?struct { []Move } {
+    const from = wire.from;
+    const to = wire.to;
+    const net = wire.net;
+
+    const size = S.size;
+
+    var move_counter: usize = 1;
+    moveStore.clearRetainingCapacity();
+    try moveStore.append(gpa, .{
+        .cost = 0,
+        .from = std.math.maxInt(usize),
+        .pos = from,
+        .pow = 15,
+        .move = .{ .dir = .north, .type = .flat }, // Default initial move, does not actually get used
+    });
+
+    // Initialize queue
+    // var Q = std.PriorityQueue(QueueNode, void, compareQueueNode).init(gpa, undefined);
+    Q.clearRetainingCapacity();
+    try Q.add(.{
+        .cost = heuristic(from, to),
+        .move = 0,
+    });
+
+    // var visited = std.ArrayList(bool).empty;
+    // try visited.appendNTimes(gpa, false, S.size[0] * S.size[1] * S.size[2]);
 
     var counter: usize = 0;
-    var is_violating = false;
 
-    while (queue.count() > 0 and counter < config.max_astar_iterations) {
+    outer: while (Q.removeOrNull()) |next| {
         counter += 1;
-        const item = queue.removeOrNull().?;
-        const u_state = item.state;
-        const u = u_state.coord;
+        if (counter > search_nodes) {
+            std.debug.print("Routing took too long\n", .{});
+            break;
+        }
 
-        const best_g = distances.get(u_state) orelse std.math.maxInt(u32);
-        if (item.g > best_g) continue;
+        const move = moveStore.items[next.move];
+        const pos = move.pos;
+        const pow = move.pow;
+        var cost = move.cost;
 
-        if (targets.get(u)) |merge_pt| {
-            if (u_state.signal >= merge_pt.signal_at_node) {
-                final_state = u_state;
-                final_merge_cost = merge_pt.cost_to_root;
-                break;
+        const above = posAbove(pos);
+        const below = posBelow(pos);
+
+        const pos_idx = posIdx(pos, size);
+        const above_idx = posIdx(above, size);
+        const below_idx = posIdx(below, size);
+
+        // Check that we do not intersect anything
+        // if (S.getPos(above) == .predef) continue;
+        // if (S.getPos(pos) == .predef) continue;
+        // if (S.getPos(below) == .predef) continue;
+        if (O.*[above_idx] != net and S.getPos(above) != .undef) continue;
+        if (O.*[pos_idx] != net and S.getPos(pos) != .undef) continue;
+        if (O.*[below_idx] != net and S.getPos(below) != .undef) continue;
+
+        // Check that the path will not override a previous path on the same net
+        // if (O.*[posIdx(above, size)] == net and S.getPos(above) != .air) continue;
+        if (move.from != first_from and O.*[pos_idx] == net and S.getPos(pos) != moveStore.items[move.from].move.block()) continue;
+        if (O.*[below_idx] == net and S.getPos(below) != .block) continue;
+
+        // A bit overly strict, but we disallow being next to the border, to prevent edge cases
+        if (pos[0] <= 0 or
+            pos[1] <= 0 or
+            pos[2] <= 0 or
+            pos[0] >= S.size[0] - 1 or
+            pos[1] >= S.size[1] - 1 or
+            pos[2] >= S.size[2] - 1) continue;
+
+        // No backtracking
+        if (move.from != first_from) {
+            const prev_move = moveStore.items[move.from];
+            if (prev_move.move.dir == .north and move.move.dir == .south) continue;
+            if (prev_move.move.dir == .east and move.move.dir == .west) continue;
+            if (prev_move.move.dir == .south and move.move.dir == .north) continue;
+            if (prev_move.move.dir == .west and move.move.dir == .east) continue;
+        }
+
+        // Check that there will not be any shorts with committed routes
+        for (dangerous_blocks) |offset| {
+            const i_pos = @as(@Vector(3, isize), @intCast(pos));
+            const n_pos = @as(Pos, @intCast(i_pos + offset));
+            const n_pos_idx = n_pos[0] * S.size[1] * S.size[2] + n_pos[1] * S.size[2] + n_pos[2];
+            const owner = O.*[n_pos_idx];
+            if (S.getPos(n_pos) != .wire) continue;
+            if (owner == unowned) continue;
+            if (!violate) {
+                if (owner != net) continue :outer;
+                // if (owner == net and !std.meta.eql(n_pos, moveStore.items[move.from].pos)) continue :outer;
+            } else {
+                // If violating block is fixed, we may not violate
+                if (fixed.*[n_pos_idx]) {
+                    if (owner != net) continue :outer;
+                }
+                if (owner != net) {
+                    cost += violation_cost;
+                    break; // To ensure violation_cost is only applied once
+                }
             }
         }
 
-        for (moves) |move| {
-            if (parents.get(u_state)) |p| {
-                if (move.heading[0] == -p.heading[0] and move.heading[2] == -p.heading[2]) {
-                    continue;
+        // Check if we have arrived
+        if (std.meta.eql(to, pos)) {
+            // Check that we did not end with a repeater
+            if (move.move.type == .repeater) continue;
+
+            var moves = std.ArrayList(Move).empty;
+            var curr = next.move;
+            while (curr != first_from) {
+                try moves.append(gpa, moveStore.items[curr].move);
+                curr = moveStore.items[curr].from;
+            }
+            return .{try moves.toOwnedSlice(gpa)};
+        }
+
+        // North (-Z)
+        if (pos[2] > 0 and canGoDir(move.move, .north)) {
+            // Horizontal dust
+            if (pow > 1) {
+                const next_move = Move{ .dir = .north, .type = .flat };
+                const next_pos = next_move.nextPos(pos);
+                var next_cost = cost + distance_cost;
+                if (O.*[posIdx(next_pos, size)] == net) next_cost += reroute_cost;
+                try moveStore.append(gpa, .{
+                    .from = next.move,
+                    .cost = next_cost,
+                    .move = next_move,
+                    .pos = next_pos,
+                    .pow = pow - 1,
+                });
+                try Q.add(.{ .cost = next_cost + heuristic(next_pos, to), .move = move_counter });
+                move_counter += 1;
+            }
+
+            // Go up
+            if (pow > 1 and pos[1] < S.size[1] - 1 and canGoVert(move.move)) {
+                const next_move = Move{ .dir = .north, .type = .up };
+                const next_pos = next_move.nextPos(pos);
+                var next_cost = cost + distance_cost + vertical_cost;
+                if (O.*[posIdx(next_pos, size)] == net) next_cost += reroute_cost;
+                try moveStore.append(gpa, .{
+                    .from = next.move,
+                    .cost = next_cost,
+                    .move = next_move,
+                    .pos = next_pos,
+                    .pow = pow - 1,
+                });
+                try Q.add(.{ .cost = next_cost + heuristic(next_pos, to), .move = move_counter });
+                move_counter += 1;
+            }
+
+            // Go down
+            if (pow > 1 and pos[1] > 1 and canGoVert(move.move)) {
+                const next_move = Move{ .dir = .north, .type = .down };
+                const next_pos = next_move.nextPos(pos);
+                var next_cost = cost + distance_cost + vertical_cost;
+                if (O.*[posIdx(next_pos, size)] == net) next_cost += reroute_cost;
+                try moveStore.append(gpa, .{
+                    .from = next.move,
+                    .cost = next_cost,
+                    .move = next_move,
+                    .pos = next_pos,
+                    .pow = pow - 1,
+                });
+                try Q.add(.{ .cost = next_cost + heuristic(next_pos, to), .move = move_counter });
+                move_counter += 1;
+            }
+
+            // Repeater
+            if (pow >= 1) {
+                const next_move = Move{ .dir = .north, .type = .repeater };
+                const next_pos = next_move.nextPos(pos);
+                var next_cost = cost + distance_cost + repeater_cost;
+                if (O.*[posIdx(next_pos, size)] == net) next_cost += reroute_cost;
+                try moveStore.append(gpa, .{
+                    .from = next.move,
+                    .cost = next_cost,
+                    .move = next_move,
+                    .pos = next_pos,
+                    .pow = 16,
+                });
+                try Q.add(.{ .cost = next_cost + heuristic(next_pos, to), .move = move_counter });
+                move_counter += 1;
+            }
+        }
+
+        // East (+X)
+        if (pos[0] < S.size[0] - 1 and canGoDir(move.move, .east)) {
+            // Horizontal dust
+            if (pow > 1) {
+                const next_move = Move{ .dir = .east, .type = .flat };
+                const next_pos = next_move.nextPos(pos);
+                var next_cost = cost + distance_cost;
+                if (O.*[posIdx(next_pos, size)] == net) next_cost += reroute_cost;
+                try moveStore.append(gpa, .{
+                    .from = next.move,
+                    .cost = next_cost,
+                    .move = next_move,
+                    .pos = next_pos,
+                    .pow = pow - 1,
+                });
+                try Q.add(.{ .cost = next_cost + heuristic(next_pos, to), .move = move_counter });
+                move_counter += 1;
+            }
+
+            // Go up
+            if (pow > 1 and pos[1] < S.size[1] - 1 and canGoVert(move.move)) {
+                const next_move = Move{ .dir = .east, .type = .up };
+                const next_pos = next_move.nextPos(pos);
+                var next_cost = cost + distance_cost + vertical_cost;
+                if (O.*[posIdx(next_pos, size)] == net) next_cost += reroute_cost;
+                try moveStore.append(gpa, .{
+                    .from = next.move,
+                    .cost = next_cost,
+                    .move = next_move,
+                    .pos = next_pos,
+                    .pow = pow - 1,
+                });
+                try Q.add(.{ .cost = next_cost + heuristic(next_pos, to), .move = move_counter });
+                move_counter += 1;
+            }
+
+            // Go down
+            if (pow > 1 and pos[1] > 1 and canGoVert(move.move)) {
+                const next_move = Move{ .dir = .east, .type = .down };
+                const next_pos = next_move.nextPos(pos);
+                var next_cost = cost + distance_cost + vertical_cost;
+                if (O.*[posIdx(next_pos, size)] == net) next_cost += reroute_cost;
+                try moveStore.append(gpa, .{
+                    .from = next.move,
+                    .cost = next_cost,
+                    .move = next_move,
+                    .pos = next_pos,
+                    .pow = pow - 1,
+                });
+                try Q.add(.{ .cost = next_cost + heuristic(next_pos, to), .move = move_counter });
+                move_counter += 1;
+            }
+
+            // Repeater
+            if (pow >= 1) {
+                const next_move = Move{ .dir = .east, .type = .repeater };
+                const next_pos = next_move.nextPos(pos);
+                var next_cost = cost + distance_cost + repeater_cost;
+                if (O.*[posIdx(next_pos, size)] == net) next_cost += reroute_cost;
+                try moveStore.append(gpa, .{
+                    .from = next.move,
+                    .cost = next_cost,
+                    .move = next_move,
+                    .pos = next_pos,
+                    .pow = 16,
+                });
+                try Q.add(.{ .cost = next_cost + heuristic(next_pos, to), .move = move_counter });
+                move_counter += 1;
+            }
+        }
+
+        // South (+Z)
+        if (pos[2] < S.size[2] - 1 and canGoDir(move.move, .south)) {
+            // Horizontal dust
+            if (pow > 1) {
+                const next_move = Move{ .dir = .south, .type = .flat };
+                const next_pos = next_move.nextPos(pos);
+                var next_cost = cost + distance_cost;
+                if (O.*[posIdx(next_pos, size)] == net) next_cost += reroute_cost;
+                try moveStore.append(gpa, .{
+                    .from = next.move,
+                    .cost = next_cost,
+                    .move = next_move,
+                    .pos = next_pos,
+                    .pow = pow - 1,
+                });
+                try Q.add(.{ .cost = next_cost + heuristic(next_pos, to), .move = move_counter });
+                move_counter += 1;
+            }
+
+            // Go up
+            if (pow > 1 and pos[1] < S.size[1] - 1 and canGoVert(move.move)) {
+                const next_move = Move{ .dir = .south, .type = .up };
+                const next_pos = next_move.nextPos(pos);
+                var next_cost = cost + distance_cost + vertical_cost;
+                if (O.*[posIdx(next_pos, size)] == net) next_cost += reroute_cost;
+                try moveStore.append(gpa, .{
+                    .from = next.move,
+                    .cost = next_cost,
+                    .move = next_move,
+                    .pos = next_pos,
+                    .pow = pow - 1,
+                });
+                try Q.add(.{ .cost = next_cost + heuristic(next_pos, to), .move = move_counter });
+                move_counter += 1;
+            }
+
+            // Go down
+            if (pow > 1 and pos[1] > 1 and canGoVert(move.move)) {
+                const next_move = Move{ .dir = .south, .type = .down };
+                const next_pos = next_move.nextPos(pos);
+                var next_cost = cost + distance_cost + vertical_cost;
+                if (O.*[posIdx(next_pos, size)] == net) next_cost += reroute_cost;
+                try moveStore.append(gpa, .{
+                    .from = next.move,
+                    .cost = next_cost,
+                    .move = next_move,
+                    .pos = next_pos,
+                    .pow = pow - 1,
+                });
+                try Q.add(.{ .cost = next_cost + heuristic(next_pos, to), .move = move_counter });
+                move_counter += 1;
+            }
+
+            // Repeater
+            if (pow >= 1) {
+                const next_move = Move{ .dir = .south, .type = .repeater };
+                const next_pos = next_move.nextPos(pos);
+                var next_cost = cost + distance_cost + repeater_cost;
+                if (O.*[posIdx(next_pos, size)] == net) next_cost += reroute_cost;
+                try moveStore.append(gpa, .{
+                    .from = next.move,
+                    .cost = next_cost,
+                    .move = next_move,
+                    .pos = next_pos,
+                    .pow = 16,
+                });
+                try Q.add(.{ .cost = next_cost + heuristic(next_pos, to), .move = move_counter });
+                move_counter += 1;
+            }
+        }
+
+        // West (-X)
+        if (pos[0] > 0 and canGoDir(move.move, .west)) {
+            // Horizontal dust
+            if (pow > 1) {
+                const next_move = Move{ .dir = .west, .type = .flat };
+                const next_pos = next_move.nextPos(pos);
+                var next_cost = cost + distance_cost;
+                if (O.*[posIdx(next_pos, size)] == net) next_cost += reroute_cost;
+                try moveStore.append(gpa, .{
+                    .from = next.move,
+                    .cost = next_cost,
+                    .move = next_move,
+                    .pos = next_pos,
+                    .pow = pow - 1,
+                });
+                try Q.add(.{ .cost = next_cost + heuristic(next_pos, to), .move = move_counter });
+                move_counter += 1;
+            }
+
+            // Go up
+            if (pow > 1 and pos[1] < S.size[1] - 1 and canGoVert(move.move)) {
+                const next_move = Move{ .dir = .west, .type = .up };
+                const next_pos = next_move.nextPos(pos);
+                var next_cost = cost + distance_cost + vertical_cost;
+                if (O.*[posIdx(next_pos, size)] == net) next_cost += reroute_cost;
+                try moveStore.append(gpa, .{
+                    .from = next.move,
+                    .cost = next_cost,
+                    .move = next_move,
+                    .pos = next_pos,
+                    .pow = pow - 1,
+                });
+                try Q.add(.{ .cost = next_cost + heuristic(next_pos, to), .move = move_counter });
+                move_counter += 1;
+            }
+
+            // Go down
+            if (pow > 1 and pos[1] > 1 and canGoVert(move.move)) {
+                const next_move = Move{ .dir = .west, .type = .down };
+                const next_pos = next_move.nextPos(pos);
+                var next_cost = cost + distance_cost + vertical_cost;
+                if (O.*[posIdx(next_pos, size)] == net) next_cost += reroute_cost;
+                try moveStore.append(gpa, .{
+                    .from = next.move,
+                    .cost = next_cost,
+                    .move = next_move,
+                    .pos = next_pos,
+                    .pow = pow - 1,
+                });
+                try Q.add(.{ .cost = next_cost + heuristic(next_pos, to), .move = move_counter });
+                move_counter += 1;
+            }
+
+            // Repeater
+            if (pow >= 1) {
+                const next_move = Move{ .dir = .west, .type = .repeater };
+                const next_pos = next_move.nextPos(pos);
+                var next_cost = cost + distance_cost + repeater_cost;
+                if (O.*[posIdx(next_pos, size)] == net) next_cost += reroute_cost;
+                try moveStore.append(gpa, .{
+                    .from = next.move,
+                    .cost = next_cost,
+                    .move = next_move,
+                    .pos = next_pos,
+                    .pow = 16,
+                });
+                try Q.add(.{ .cost = next_cost + heuristic(next_pos, to), .move = move_counter });
+                move_counter += 1;
+            }
+        }
+    }
+
+    std.debug.print("Routing failed\n", .{});
+    return null;
+}
+
+fn cloneSchematic(S: *const Schematic, gpa: std.mem.Allocator) !Schematic {
+    var grid = try std.ArrayList(BasicBlock).fromOwnedSlice(S.grid).clone(gpa);
+    return .{
+        .delay = S.delay,
+        .inputs = &.{},
+        .outputs = &.{},
+        .size = S.size,
+        .grid = try grid.toOwnedSlice(gpa),
+    };
+}
+
+inline fn posBelow(pos: Pos) Pos {
+    return .{ pos[0], pos[1] - 1, pos[2] };
+}
+inline fn posAbove(pos: Pos) Pos {
+    return .{ pos[0], pos[1] + 1, pos[2] };
+}
+
+// Applies the route in the ownership grid and schematic grid
+// If any violations are encountered, they are overwritten and the violating nets are returned
+fn applyRoute(wire: *const Wire, S: *Schematic, O: *std.ArrayList(usize), moves_rev: []Move, gpa: std.mem.Allocator) ![]usize {
+    var curr = wire.from;
+    O.items[curr[0] * S.size[1] * S.size[2] + curr[1] * S.size[2] + curr[2]] = wire.net;
+    O.items[curr[0] * S.size[1] * S.size[2] + (curr[1] - 1) * S.size[2] + curr[2]] = wire.net;
+    O.items[curr[0] * S.size[1] * S.size[2] + (curr[1] + 1) * S.size[2] + curr[2]] = wire.net;
+    S.getPosPtr(curr).* = .wire;
+    S.getPosPtr(posBelow(curr)).* = .block;
+    S.getPosPtr(posAbove(curr)).* = .air;
+    // std.debug.print("Applying route for {}\n", .{wire});
+
+    var violations = std.AutoArrayHashMap(usize, void).init(gpa);
+    for (0..moves_rev.len) |i| {
+        if (i == 0) continue; // Skip initial (undefined) move
+        const move = moves_rev[moves_rev.len - 1 - i];
+        // std.debug.print("Move {}: {}\n", .{ i, move });
+        curr = move.nextPos(curr);
+
+        const pos_idx = curr[0] * S.size[1] * S.size[2] + curr[1] * S.size[2] + curr[2];
+        const below_pos_idx = pos_idx - S.size[2];
+        const above_pos_idx = pos_idx + S.size[2];
+
+        // Test for violations
+        if (O.items[pos_idx] != unowned and O.items[pos_idx] != wire.net)
+            try violations.put(O.items[pos_idx], undefined);
+        if (O.items[below_pos_idx] != unowned and O.items[below_pos_idx] != wire.net)
+            try violations.put(O.items[below_pos_idx], undefined);
+        if (O.items[above_pos_idx] != unowned and O.items[above_pos_idx] != wire.net)
+            try violations.put(O.items[above_pos_idx], undefined);
+        for (dangerous_blocks) |offset| {
+            const i_pos = @as(@Vector(3, isize), @intCast(curr));
+            const n_pos = @as(Pos, @intCast(i_pos + offset));
+            const owner = O.items[n_pos[0] * S.size[1] * S.size[2] + n_pos[1] * S.size[2] + n_pos[2]];
+            if (owner != unowned and owner != wire.net and S.getPos(n_pos) == .wire)
+                try violations.put(owner, undefined);
+        }
+
+        // Apply move to grids
+        O.items[pos_idx] = wire.net;
+        O.items[below_pos_idx] = wire.net;
+        S.getPosPtr(curr).* = move.block();
+        S.getPosPtr(posBelow(curr)).* = .block;
+        if ((i + 2 <= moves_rev.len and moves_rev[moves_rev.len - i - 2].type == .up) or moves_rev[moves_rev.len - i - 1].type == .down) {
+            S.getPosPtr(posAbove(curr)).* = .air;
+            O.items[above_pos_idx] = wire.net;
+        }
+    }
+    return violations.keys();
+}
+
+fn ripUp(net: usize, S: *Schematic, O: *std.ArrayList(usize)) void {
+    for (0..S.size[0]) |x| {
+        for (0..S.size[1]) |y| {
+            for (0..S.size[2]) |z| {
+                const idx = x * S.size[1] * S.size[2] + y * S.size[2] + z;
+                if (O.items[idx] == net) {
+                    O.items[idx] = unowned;
+                    S.getPtr(x, y, z).* = .undef;
+                    // S.getPtr(x, y - 1, z).* = .undef;
                 }
             }
-            const coord = u + move.dir;
-            if (moveIntersectsPath(u, move, u_state, &parents)) continue;
+        }
+    }
+}
 
-            const is_first_move = (item.g == 0);
-            if (is_first_move and move.def.cat != .dust) continue;
+fn compareWire(_: usize, a: Wire, b: Wire) bool {
+    return heuristic(a.from, a.to) > heuristic(b.from, b.to);
+}
 
-            const validity = isMoveValid(u, move, forbidden_zone, from, is_first_move, host_route_id);
-            if (validity == .invalid) continue;
+fn setPortOwnership(S: *Schematic, O: *std.ArrayList(usize), wires: *const []Wire, size: Pos) void {
+    for (wires.*) |wire| {
+        const fp1 = wire.from;
+        const fp2 = posBelow(fp1);
+        const fp3 = posAbove(fp1);
+        O.items[fp1[0] * size[1] * size[2] + fp1[1] * size[2] + fp1[2]] = wire.net;
+        O.items[fp2[0] * size[1] * size[2] + fp2[1] * size[2] + fp2[2]] = wire.net;
+        O.items[fp3[0] * size[1] * size[2] + fp3[1] * size[2] + fp3[2]] = wire.net;
+        S.getPosPtr(fp1).* = .wire;
+        S.getPosPtr(fp2).* = .block;
+        S.getPosPtr(fp3).* = .air;
+        const tp1 = wire.to;
+        const tp2 = posBelow(tp1);
+        const tp3 = posAbove(tp1);
+        O.items[tp1[0] * size[1] * size[2] + tp1[1] * size[2] + tp1[2]] = wire.net;
+        O.items[tp2[0] * size[1] * size[2] + tp2[1] * size[2] + tp2[2]] = wire.net;
+        O.items[tp3[0] * size[1] * size[2] + tp3[1] * size[2] + tp3[2]] = wire.net;
+        S.getPosPtr(tp1).* = .wire;
+        S.getPosPtr(tp2).* = .block;
+        S.getPosPtr(tp3).* = .air;
+    }
+}
 
-            var next_signal = u_state.signal;
-            if (next_signal < move.def.min_signal) continue;
+fn setFixedBlocks(F: *std.ArrayList(bool), S: *const Schematic) void {
+    for (0..S.grid.len) |i| {
+        F.items[i] = switch (S.grid[i]) {
+            .predef => true,
+            .wire => true,
+            .block => true,
+            else => false,
+        };
+    }
+}
 
-            switch (move.def.signal_behavior) {
-                .decay => {
-                    if (next_signal == 1 and targets.contains(coord)) continue;
-                    next_signal -= move.def.min_signal;
-                },
-                .reset => next_signal = 15,
-                .via => next_signal = 14,
+pub fn route(wires: []Wire, schem: *const Schematic, gpa: std.mem.Allocator) !Schematic {
+    var S = try cloneSchematic(schem, gpa);
+
+    var O = std.ArrayList(usize).empty;
+    try O.appendNTimes(gpa, unowned, S.size[0] * S.size[1] * S.size[2]);
+
+    var F = std.ArrayList(bool).empty;
+    try F.appendNTimes(gpa, false, S.size[0] * S.size[1] * S.size[2]);
+
+    // Assign ownership for all ports
+    setPortOwnership(&S, &O, &wires, S.size);
+
+    // Set which blocks are fixed
+    setFixedBlocks(&F, &S);
+
+    // Initialize the queue for the routing process
+    Q = .init(gpa, undefined);
+
+    // Sort wires from short to long
+    std.mem.sort(Wire, wires, @as(usize, 0), compareWire);
+
+    var wire_queue = std.ArrayList(Wire).empty;
+    try wire_queue.appendSlice(gpa, wires);
+
+    var prng: std.Random.DefaultPrng = .init(blk: {
+        var seed: u64 = undefined;
+        try std.posix.getrandom(std.mem.asBytes(&seed));
+        break :blk seed;
+    });
+    const rand = prng.random();
+
+    var i: usize = 0;
+    while (i < wire_queue.items.len) {
+        const wire = wire_queue.items[i];
+        std.debug.print("#{} Routing net {}, {} queued: {}\n", .{ i, wire.net, wire_queue.items.len - i, wire });
+        i += 1;
+        // const default_violation_cost = 1.50 - @as(f32, @floatFromInt(i)) / 300.0;
+        var path_rev = try routeSingleRoute(&wire, &S, &O.items, false, default_violation_cost, &F.items, gpa);
+        if (path_rev) |path| {
+            const violations = try applyRoute(&wire, &S, &O, path.@"0", gpa);
+            if (violations.len != 0)
+                std.debug.print("Route in net {} violates others even though routing successfull\n", .{wire.net});
+        } else {
+            var violation_cost: f32 = default_violation_cost + violation_cost_decrement;
+            var attempts: usize = 0;
+            var violations: ?[]const usize = null;
+            while (violations == null) {
+                if (attempts > 6) {
+                    // Not possible to route net as it is, maybe if we rip up the entire net
+                    violations = &.{wire.net};
+                    break;
+                }
+                attempts += 1;
+                violation_cost -= violation_cost_decrement;
+                path_rev = try routeSingleRoute(&wire, &S, &O.items, true, violation_cost, &F.items, gpa);
+                if (path_rev) |path| {
+                    violations = try applyRoute(&wire, &S, &O, path.@"0", gpa);
+                }
             }
 
-            const next_state = NodeState{ .coord = coord, .signal = next_signal, .heading = move.heading };
-            var move_cost = move.def.delay * config.delay_cost_multiplier + move.def.length;
-
-            switch (validity) {
-                .violation => |refs| {
-                    _ = refs;
-                    move_cost *= config.violation_cost_multiplier * validity.violation;
-                    is_violating = true;
-                },
-                else => {
-                    is_violating = false;
-                },
-            }
-
-            const g_cost = item.g + move_cost;
-            const g_length = item.length + move.def.length;
-            const g_delay = item.delay + move.def.delay;
-
-            if (g_length > config.max_length) continue;
-
-            var dominated = false;
-            var s_check: u5 = next_signal;
-            while (s_check <= 15) : (s_check += 1) {
-                if (distances.get(.{ .coord = coord, .signal = s_check, .heading = move.heading })) |better_g| {
-                    if (better_g <= g_cost) {
-                        dominated = true;
-                        break;
+            // const path = path_rev.?;
+            // const violations = try applyRoute(&wire, &S, &O, path.@"0", gpa);
+            std.debug.print("Routed {} in violation with {any}\n", .{ i, violations });
+            // Randomize order in which wires get added
+            rand.shuffle(Wire, wires);
+            for (violations.?) |net| {
+                ripUp(net, &S, &O); // Rip up violating net
+                for (wires) |w| {
+                    if (w.net == net) {
+                        var found = false;
+                        for (wire_queue.items[i..]) |enqueued| {
+                            if (std.meta.eql(enqueued, w)) {
+                                found = true;
+                            }
+                        }
+                        if (!found)
+                            try wire_queue.append(gpa, w);
                     }
                 }
             }
-
-            if (!dominated) {
-                distances.put(next_state, g_cost) catch @panic("oom");
-                parents.put(next_state, .{
-                    .prev = u_state,
-                    .def = move.def,
-                    .violating = is_violating,
-                    .heading = move.heading,
-                }) catch @panic("oom");
-
-                const f_cost = g_cost + minimumHeuristic(coord, targets, config.delay_cost_multiplier);
-                queue.add(.{
-                    .state = next_state,
-                    .g = g_cost,
-                    .f = f_cost,
-                    .length = g_length,
-                    .delay = g_delay,
-                }) catch @panic("oom");
-            }
+            // Ensure that ownership is set correctly for ports
+            setPortOwnership(&S, &O, &wires, S.size);
         }
     }
-
-    if (final_state == null) {
-        std.log.err("A* completed with {d} iterations. Path not found.", .{counter});
-        return error.PathNotFound;
-    }
-
-    std.log.info("A* completed with {d} iterations, violating={}", .{ counter, is_violating });
-    var final_route = try buildRouteBlocks(a, start_state, final_state.?, parents);
-    final_route.delay += final_merge_cost;
-    return final_route;
-}
-
-fn buildRouteBlocks(a: std.mem.Allocator, start_state: NodeState, final_state: NodeState, parents: std.AutoHashMap(NodeState, Parent)) !Route {
-    var abs_blocks: std.ArrayList(ms.AbsBlock) = .empty;
-    var steps: std.ArrayList(RouteStep) = .empty;
-    var length: u32 = 0;
-    var delay: u32 = 0;
-    var violating = false;
-
-    try steps.append(a, .{
-        .coord = start_state.coord,
-        .signal = start_state.signal,
-        .heading = start_state.heading,
-        .def = null,
-    });
-
-    var curr_state = final_state;
-    var vec = curr_state.coord;
-
-    while (!coordEq(vec, start_state.coord)) {
-        const p = parents.get(curr_state) orelse return error.MissingParent;
-        curr_state = p.prev;
-        vec = curr_state.coord;
-
-        if (p.violating) violating = true;
-        const move_dir = p.heading;
-
-        for (p.def.build_blocks) |block_def| {
-            const rotated_coord = rotateCoord(block_def.offset, move_dir);
-            const rotated_rot = rotateOrientation(block_def.rot, move_dir);
-
-            try abs_blocks.append(a, .{
-                .block = block_def.cat,
-                .loc = vec + rotated_coord,
-                .rot = rotated_rot,
-            });
-        }
-
-        try steps.append(a, .{
-            .coord = vec,
-            .signal = p.prev.signal,
-            .heading = move_dir,
-            .def = p.def,
-        });
-
-        length += p.def.length;
-        delay += p.def.delay;
-    }
-
-    try abs_blocks.append(a, .{ .block = .dust, .loc = final_state.coord, .rot = .center });
-    try abs_blocks.append(a, .{ .block = .block, .loc = final_state.coord + WorldCoord{ 0, -1, 0 }, .rot = .center });
-
-    try steps.append(a, .{
-        .coord = final_state.coord,
-        .signal = final_state.signal,
-        .heading = final_state.heading,
-        .def = null,
-    });
-    try steps.append(a, .{
-        .coord = final_state.coord + WorldCoord{ 0, -1, 0 },
-        .signal = final_state.signal,
-        .heading = final_state.heading,
-        .def = null,
-    });
-
-    return .{
-        .route = abs_blocks,
-        .steps = steps,
-        .delay = delay,
-        .length = length,
-        .violating = violating,
-    };
-}
-
-fn rotateCoord(coord: WorldCoord, dir: WorldCoord) WorldCoord {
-    if (dir[0] > 0) return coord;
-    if (dir[0] < 0) return .{ -coord[0], coord[1], -coord[2] };
-    if (dir[2] > 0) return .{ -coord[2], coord[1], coord[0] };
-    return .{ coord[2], coord[1], -coord[0] };
-}
-
-fn rotateOrientation(rot: ms.Orientation, dir: WorldCoord) ms.Orientation {
-    if (rot == .center) return .center;
-    if (dir[0] > 0) return rot;
-
-    if (dir[0] < 0) {
-        return switch (rot) {
-            .east => .west,
-            .west => .east,
-            .north => .south,
-            .south => .north,
-            else => rot,
-        };
-    }
-    if (dir[2] > 0) {
-        return switch (rot) {
-            .east => .south,
-            .west => .north,
-            .north => .east,
-            .south => .west,
-            else => rot,
-        };
-    }
-
-    return switch (rot) {
-        .east => .north,
-        .west => .south,
-        .north => .west,
-        .south => .east,
-        else => rot,
-    };
+    return S;
 }

@@ -63,6 +63,34 @@ pub fn convertGraphToModel(gpa: std.mem.Allocator, graph: *const glib.Graph(glib
         try nets.append(gpa, net);
     }
 
+    for (instances.items, 0..) |*instance, i| {
+        if (ports_used.items[i] == 1 and (instance.kind == .and_gate or instance.kind == .or_gate)) {
+            std.debug.print("Graph contains a gate that uses one input, replacing with repeater\n", .{});
+            instances.items[i].kind = .pin;
+        }
+    }
+
+    // TODO: Figure out why this causes routing to come to a stand still
+    // for (instances.items, 0..) |*instance, i| {
+    //     if (ports_used.items[i] == 1 and (instance.kind == .and_gate or instance.kind == .or_gate)) {
+    //         std.debug.print("Graph contains a logic gate, but only one input is connected out of two\n", .{});
+    //         for (0..nets.items.len) |j| {
+    //             if (nets.items[j].output.instance == i) {
+    //                 try nets.append(gpa, .{
+    //                     .output = nets.items[j].output,
+    //                     .net = nets.items[j].net,
+    //                     .input = .{
+    //                         .instance = i,
+    //                         .direction = .input,
+    //                         .port = 1 - nets.items[j].input.port,
+    //                     },
+    //                 });
+    //                 break;
+    //             }
+    //         }
+    //     }
+    // }
+
     var nl: model.Netlist = undefined;
     nl.nets = try nets.toOwnedSlice(gpa);
     nl.instances = try instances.toOwnedSlice(gpa);

@@ -11,7 +11,7 @@ pub fn main() !void {
     // defer _ = real_gpa.deinit();
 
     // Read AIGER file
-    const content = try std.fs.cwd().readFileAlloc(gpa, "aiger-examples/serial-adder.aag", std.math.maxInt(usize));
+    const content = try std.fs.cwd().readFileAlloc(gpa, "aiger-examples/8-adder.aag", std.math.maxInt(usize));
     defer _ = gpa.free(content);
 
     // Apply normalization to AIGER file
@@ -23,7 +23,7 @@ pub fn main() !void {
 
     // Convert to schematic and wires
     const placed_schematic = try placement.toSchematic(gpa);
-    const wires = try placement.getWires(gpa);
+    const wires = try placement.getWires(&netlist, gpa);
 
     // Perform routing
     const schematic = try routing_stage(gpa, &placed_schematic, wires);
@@ -79,11 +79,15 @@ fn placement_stage(gpa: std.mem.Allocator, netlist: *const model.Netlist) !model
 
     const plc = @import("placement/placement.zig");
     const annealing_config: plc.AnnealingConfig = .{
-        .initial_temperature = 3,
-        .moves_per_temperature = 8000,
-        .initial_window_size = 80,
-        .alpha = 0.95,
+        .initial_temperature = 30,
+        .moves_per_temperature = 4000,
+        // .moves_per_temperature = 5000,
+        .initial_window_size = 70,
+        .alpha = 0.8,
         .node_padding = 1,
+        .congestion_cost_weight = 100,
+        // .initial_input_y = 20,
+        // .initial_output_y = 130,
     };
     const placement = plc.placement_annealing(gpa, netlist, seed, annealing_config).?;
 
@@ -94,14 +98,18 @@ fn placement_stage(gpa: std.mem.Allocator, netlist: *const model.Netlist) !model
 }
 
 fn routing_stage(gpa: std.mem.Allocator, schem: *const model.Schematic, wires: []model.Wire) !model.Schematic {
-    _ = gpa; // autofix
-    _ = wires; // autofix
-    // TODO: Perform routing
-    return schem.*;
+    const routing = @import("routing/routing.zig");
+    const schematic = try routing.route(wires, schem, gpa);
+    return schematic;
 }
 
 fn validation_stage(gpa: std.mem.Allocator, schematic: *const model.Schematic, netlist: *const model.Netlist, placement: *const model.Placement) !bool {
     const validation = @import("validation/validation.zig");
+
+    // Print list of instances for reference
+    for (netlist.instances, 0..) |inst, i| {
+        std.debug.print("Instance {} is a {} placed at {}\n", .{ i, inst.kind, placement.placement[i].pos });
+    }
 
     // Validate that the schematic is valid
     const schematic_valid = validation.validate_grid(schematic);
@@ -126,6 +134,10 @@ fn visualization_stage(gpa: std.mem.Allocator, schematic: *const model.Schematic
     // Combine the two block lists
     var blocks = std.ArrayList(library.SchemBlock).fromOwnedSlice(schem_blocks);
     try blocks.appendSlice(gpa, place_blocks);
+
+    // Add a floor
+    const floor_blocks = try visualization.addFloor(gpa, &blocks.items);
+    try blocks.appendSlice(gpa, floor_blocks);
 
     return nbt.block_arr_to_schem(gpa, try blocks.toOwnedSlice(gpa));
 }

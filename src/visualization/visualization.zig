@@ -12,7 +12,7 @@ pub fn blockListFromSchematic(gpa: std.mem.Allocator, schematic: *const model.Sc
                 switch (block) {
                     .undef => continue,
                     .predef => continue,
-                    .block => try blocks.append(gpa, .{ .block = .block, .loc = pos, .rot = .center }),
+                    .block => try blocks.append(gpa, .{ .block = .block3, .loc = pos, .rot = .center }),
                     .air => continue,
                     .wire => try blocks.append(gpa, .{ .block = .dust, .loc = pos, .rot = .center }),
                     .repeater_north => try blocks.append(gpa, .{ .block = .repeater, .loc = pos, .rot = .north }),
@@ -45,4 +45,31 @@ pub fn blockListFromPlacement(gpa: std.mem.Allocator, placement: *const model.Pl
         }
     }
     return blocks.toOwnedSlice(gpa);
+}
+
+pub fn addFloor(gpa: std.mem.Allocator, blocks: *const []library.SchemBlock) ![]library.SchemBlock {
+    const first = blocks.*[0];
+    var xmin, var xmax, var ymin, var ymax, var zmin, var zmax = .{ first.loc[0], first.loc[0], first.loc[1], first.loc[1], first.loc[2], first.loc[2] };
+    for (blocks.*) |*block| {
+        xmin = @min(xmin, block.loc[0]);
+        ymin = @min(ymin, block.loc[1]);
+        zmin = @min(zmin, block.loc[2]);
+        xmax = @max(xmax, block.loc[0]);
+        ymax = @max(ymax, block.loc[1]);
+        zmax = @max(zmax, block.loc[2]);
+    }
+
+    var floor = std.ArrayList(library.SchemBlock).empty;
+    const y = ymin - 1;
+    for (xmin..xmax + 1) |x| {
+        for (zmin..zmax + 1) |z| {
+            try floor.append(gpa, .{
+                .block = .floor,
+                .rot = .center,
+                .loc = .{ @intCast(x), @intCast(y), @intCast(z) },
+            });
+        }
+    }
+
+    return floor.toOwnedSlice(gpa);
 }

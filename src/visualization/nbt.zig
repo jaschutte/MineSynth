@@ -13,13 +13,17 @@ pub const NbtTag = [*c]c.nbt_tag_t;
 
 pub fn blockcat_to_id(cat: BlockType) i8 {
     return switch (cat) {
-        .air => 0,
+        .air => 20,
         .dust => 55,
         .repeater => 94,
         .torch => 76,
         .block => 42,
         .block2 => 41,
-        .block3 => 57,
+        .block3 => 5,
+        .input_block => 112,
+        .output_block => 123,
+        .sign => 63,
+        .floor => 98,
     };
 }
 

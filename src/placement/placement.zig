@@ -19,6 +19,7 @@ const congestion_cell_size = 10;
 const max_cell_size: u32 = 3;
 const number_cells = max_chipsize / congestion_cell_size;
 // const number_cells_sqr = number_cells * number_cells;
+const extra_size: u32 = 10;
 
 pub const AnnealingConfig = struct {
     // - "The annealing process starts at a high temperature, such as 4*10^6"
@@ -88,10 +89,12 @@ pub const Orientation = enum {
 
 pub const Position = struct { x: postype, y: postype, orientation: Orientation };
 
+pub const empty: glib.NodeId = std.math.maxInt(glib.NodeId);
+
 pub const Placement = struct {
     locations: std.AutoArrayHashMap(glib.NodeId, Position),
     variants: std.AutoArrayHashMap(glib.NodeId, Variant),
-    occupancy_grid: [max_chipsize + max_cell_size][max_chipsize + max_cell_size]glib.NodeId,
+    occupancy_grid: [max_chipsize + max_cell_size + extra_size][max_chipsize + max_cell_size + extra_size]glib.NodeId,
     output_y: postype, // to fix all outputs to this y position
     input_y: postype, // to fix all inputs to this y position
     output_nodes: std.AutoArrayHashMap(glib.NodeId, void),
@@ -112,7 +115,12 @@ pub const Placement = struct {
     pub fn init(self: *Placement, allocator: std.mem.Allocator) void {
         self.locations = std.AutoArrayHashMap(glib.NodeId, Position).init(allocator);
         self.variants = std.AutoArrayHashMap(glib.NodeId, Variant).init(allocator);
-        self.occupancy_grid = std.mem.zeroes([max_chipsize + max_cell_size][max_chipsize + max_cell_size]glib.NodeId);
+        self.occupancy_grid = std.mem.zeroes([max_chipsize + max_cell_size + extra_size][max_chipsize + max_cell_size + extra_size]glib.NodeId);
+        for (0..max_chipsize + max_cell_size + extra_size) |x| {
+            for (0..max_chipsize + max_cell_size + extra_size) |y| {
+                self.occupancy_grid[x][y] = empty;
+            }
+        }
         self.output_y = 0;
         self.input_y = 0;
         self.output_nodes = std.AutoArrayHashMap(glib.NodeId, void).init(allocator);
@@ -656,14 +664,12 @@ fn tryMove(the_placement: *Placement, id: Id, last_pos: *const Position, new_x: 
     }
 
     const collision_result = try checkCollision(the_placement, id, rect, new_x, new_y, node_padding);
-    if (collision_result != 0) return collision_result;
+    if (collision_result != empty) return collision_result;
 
     // No collision, so move rectangle
     for (last_pos.x - node_padding..last_pos.x + rect.w) |x| {
         for (last_pos.y - node_padding..last_pos.y + rect.h) |y| {
-            const assertion = (the_placement.occupancy_grid[x][y] == 0 or the_placement.occupancy_grid[x][y] == id);
-            std.debug.assert(assertion);
-            the_placement.occupancy_grid[x][y] = 0;
+            the_placement.occupancy_grid[x][y] = empty;
         }
     }
 
@@ -683,14 +689,14 @@ fn checkCollision(the_placement: *const Placement, node_id: glib.NodeId, size: m
     std.debug.assert(size.w >= 1);
     std.debug.assert(size.h >= 1);
 
-    for (new_x - node_padding..new_x + size.w) |x| {
-        for (new_y - node_padding..new_y + size.h) |y| {
-            if (the_placement.occupancy_grid[x][y] != 0 and the_placement.occupancy_grid[x][y] != node_id) {
+    for (new_x - node_padding..new_x + size.w + node_padding) |x| {
+        for (new_y - node_padding..new_y + size.h + node_padding) |y| {
+            if (the_placement.occupancy_grid[x][y] != empty and the_placement.occupancy_grid[x][y] != node_id) {
                 return the_placement.occupancy_grid[x][y];
             }
         }
     }
-    return 0;
+    return empty;
 }
 
 fn clampU32WithDelta(x: postype, dx: i32, max_pos: postype, min_pos: postype) postype {
@@ -764,38 +770,26 @@ fn swap(netlist: *const Netlist, the_placement: *Placement, node_a_id: glib.Node
     const unsigned_new_y_a = pos_b.y;
 
     // check whether a fits at b position
-    for (unsigned_new_x_a - node_padding..unsigned_new_x_a + rect_a.w) |x| {
-        for (unsigned_new_y_a - node_padding..unsigned_new_y_a + rect_a.h) |y| {
-            if (the_placement.occupancy_grid[x][y] != 0 and the_placement.occupancy_grid[x][y] != node_b_id) {
-                return false;
-            }
-        }
-    }
+    const coll_res_a = try checkCollision(the_placement, node_b_id, rect_a, unsigned_new_x_a, unsigned_new_y_a, node_padding);
+    if (coll_res_a != empty) return false;
 
     const unsigned_new_x_b = pos_a.x;
     const unsigned_new_y_b = pos_a.y;
 
     // check whether b fits at a position
-    for (unsigned_new_x_b - node_padding..unsigned_new_x_b + rect_b.w) |x| {
-        for (unsigned_new_y_b - node_padding..unsigned_new_y_b + rect_b.h) |y| {
-            if (the_placement.occupancy_grid[x][y] != 0 and the_placement.occupancy_grid[x][y] != node_a_id) {
-                return false;
-            }
-        }
-    }
+    const coll_res_b = try checkCollision(the_placement, node_a_id, rect_b, unsigned_new_x_b, unsigned_new_y_b, node_padding);
+    if (coll_res_b != empty) return false;
 
     // both fit, so proceed the swap:
     // set both old positions to 0:
-    for (pos_a.x - node_padding..pos_a.x + rect_a.w) |x| {
-        for (pos_a.y - node_padding..pos_a.y + rect_a.h) |y| {
-            std.debug.assert(the_placement.occupancy_grid[x][y] == 0 or the_placement.occupancy_grid[x][y] == node_a_id);
-            the_placement.occupancy_grid[x][y] = 0;
+    for (unsigned_new_x_b - node_padding..unsigned_new_x_b + rect_a.w) |x| {
+        for (unsigned_new_y_b - node_padding..unsigned_new_y_b + rect_a.h) |y| {
+            the_placement.occupancy_grid[x][y] = empty;
         }
     }
-    for (pos_b.x - node_padding..pos_b.x + rect_b.w) |x| {
-        for (pos_b.y - node_padding..pos_b.y + rect_b.h) |y| {
-            std.debug.assert(the_placement.occupancy_grid[x][y] == 0 or the_placement.occupancy_grid[x][y] == node_b_id);
-            the_placement.occupancy_grid[x][y] = 0;
+    for (unsigned_new_x_a - node_padding..unsigned_new_x_a + rect_b.w) |x| {
+        for (unsigned_new_y_a - node_padding..unsigned_new_y_a + rect_b.h) |y| {
+            the_placement.occupancy_grid[x][y] = empty;
         }
     }
 
@@ -845,7 +839,7 @@ fn moveInputOrOutputAxis(netlist: *const Netlist, the_placement: *Placement, win
         std.debug.assert(lasytpos == pos.y);
 
         const collision_result = try checkCollision(the_placement, id, rect, pos.x, new_y, node_padding);
-        if (collision_result != 0) return collision_result;
+        if (collision_result != empty) return collision_result;
     }
 
     // no collision: move all nodes to new position:
