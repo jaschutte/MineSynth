@@ -224,7 +224,7 @@ const Inverter: MinecraftSchematic = .{
             .rot = .east,
         },
         .{
-            .block = .block2,
+            .block = .block,
             .loc = .{ 0, 1, 1 },
             .rot = .center,
         },
@@ -232,6 +232,46 @@ const Inverter: MinecraftSchematic = .{
             .block = .torch,
             .loc = .{ 0, 1, 2 },
             .rot = .south,
+        },
+        .{
+            .block = .air,
+            .loc = .{ 0, 0, 1 },
+            .rot = .center,
+        },
+        .{
+            .block = .air,
+            .loc = .{ 1, 1, 1 },
+            .rot = .center,
+        },
+        .{
+            .block = .air,
+            .loc = .{ -1, 1, 1 },
+            .rot = .center,
+        },
+        .{
+            .block = .air,
+            .loc = .{ 0, 2, 1 },
+            .rot = .center,
+        },
+        .{
+            .block = .air,
+            .loc = .{ 0, 0, 2 },
+            .rot = .center,
+        },
+        .{
+            .block = .air,
+            .loc = .{ 1, 1, 2 },
+            .rot = .center,
+        },
+        .{
+            .block = .air,
+            .loc = .{ -1, 1, 2 },
+            .rot = .center,
+        },
+        .{
+            .block = .air,
+            .loc = .{ 0, 2, 2 },
+            .rot = .center,
         },
     },
 };
@@ -294,6 +334,86 @@ const AndGate: MinecraftSchematic = .{
         .{
             .block = .torch,
             .loc = .{ 2, 2, 1 },
+            .rot = .center,
+        },
+        .{
+            .block = .air,
+            .loc = .{ 0, 3, 1 },
+            .rot = .center,
+        },
+        .{
+            .block = .air,
+            .loc = .{ 2, 3, 1 },
+            .rot = .center,
+        },
+        .{
+            .block = .air,
+            .loc = .{ 0, 1, 2 },
+            .rot = .center,
+        },
+        .{
+            .block = .air,
+            .loc = .{ 1, 0, 2 },
+            .rot = .center,
+        },
+        .{
+            .block = .air,
+            .loc = .{ 2, 1, 2 },
+            .rot = .center,
+        },
+        .{
+            .block = .air,
+            .loc = .{ 0, 2, 2 },
+            .rot = .center,
+        },
+        .{
+            .block = .air,
+            .loc = .{ 2, 2, 2 },
+            .rot = .center,
+        },
+        .{
+            .block = .air,
+            .loc = .{ 1, 2, 2 },
+            .rot = .center,
+        },
+        .{
+            .block = .air,
+            .loc = .{ -1, 1, 1 },
+            .rot = .center,
+        },
+        .{
+            .block = .air,
+            .loc = .{ 3, 1, 1 },
+            .rot = .center,
+        },
+        .{
+            .block = .air,
+            .loc = .{ -1, 2, 1 },
+            .rot = .center,
+        },
+        .{
+            .block = .air,
+            .loc = .{ 3, 2, 1 },
+            .rot = .center,
+        },
+        .{
+            .block = .air,
+            .loc = .{ 0, 2, 0 },
+            .rot = .center,
+        },
+        .{
+            .block = .air,
+            .loc = .{ 2, 2, 0 },
+            .rot = .center,
+        },
+        .{
+            .block = .air,
+            .loc = .{ 0, 0, 1 },
+            .rot = .center,
+        },
+        .{
+            .block = .air,
+            .loc = .{ 2, 0, 1 },
             .rot = .center,
         },
     },

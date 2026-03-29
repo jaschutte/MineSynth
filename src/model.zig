@@ -116,6 +116,14 @@ pub const Schematic = struct {
         return self.grid[x * self.size[1] * self.size[2] + y * self.size[2] + z];
     }
 
+    pub inline fn getPos(self: *const Schematic, pos: Pos) BasicBlock {
+        return self.grid[pos[0] * self.size[1] * self.size[2] + pos[1] * self.size[2] + pos[2]];
+    }
+
+    pub inline fn getPosPtr(self: *const Schematic, pos: Pos) *BasicBlock {
+        return &self.grid[pos[0] * self.size[1] * self.size[2] + pos[1] * self.size[2] + pos[2]];
+    }
+
     pub inline fn getPtr(self: *const Schematic, x: usize, y: usize, z: usize) *BasicBlock {
         return &self.grid[x * self.size[1] * self.size[2] + y * self.size[2] + z];
     }
@@ -124,7 +132,7 @@ pub const Schematic = struct {
 // Describes a placement of the instances of a netlist.
 // Together with a netlist D, Placement[i] indicates the chosen
 // variant and position for instance i in netlist D.
-pub const padding: Pos = .{ 0, 0, 0 };
+pub const padding: Pos = .{ 5, 10, 5 };
 
 pub const Placement = struct {
     placement: []InstancePlacement,
@@ -183,10 +191,21 @@ pub const Placement = struct {
         return ret;
     }
 
-    pub fn getWires(self: *const Placement, gpa: std.mem.Allocator) ![]Wire {
-        _ = self; // autofix
-        _ = gpa; // autofix
-        // TODO: Implement
-        return &.{};
+    pub fn getWires(self: *const Placement, netlist: *const Netlist, gpa: std.mem.Allocator) ![]Wire {
+        var wires = std.ArrayList(Wire).empty;
+        for (netlist.nets) |net| {
+            const from_inst_pos = self.placement[net.output.instance].pos;
+            const from_pos = from_inst_pos + self.placement[net.output.instance].variant.model.outputs[net.output.port].pos;
+            const to_inst_pos = self.placement[net.input.instance].pos;
+            const to_pos = to_inst_pos + self.placement[net.input.instance].variant.model.inputs[net.input.port].pos;
+            try wires.append(gpa, .{
+                .net = net.net,
+                .from = from_pos,
+                .from_power = 15, // TODO: Take from actual schematic
+                .to = to_pos,
+                .to_power = 1, // TODO: Take from actual schematic
+            });
+        }
+        return wires.toOwnedSlice(gpa);
     }
 };

@@ -12,7 +12,7 @@ pub fn blockListFromSchematic(gpa: std.mem.Allocator, schematic: *const model.Sc
                 switch (block) {
                     .undef => continue,
                     .predef => continue,
-                    .block => try blocks.append(gpa, .{ .block = .block, .loc = pos, .rot = .center }),
+                    .block => try blocks.append(gpa, .{ .block = .block3, .loc = pos, .rot = .center }),
                     .air => continue,
                     .wire => try blocks.append(gpa, .{ .block = .dust, .loc = pos, .rot = .center }),
                     .repeater_north => try blocks.append(gpa, .{ .block = .repeater, .loc = pos, .rot = .north }),

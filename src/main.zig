@@ -23,7 +23,7 @@ pub fn main() !void {
 
     // Convert to schematic and wires
     const placed_schematic = try placement.toSchematic(gpa);
-    const wires = try placement.getWires(gpa);
+    const wires = try placement.getWires(&netlist, gpa);
 
     // Perform routing
     const schematic = try routing_stage(gpa, &placed_schematic, wires);
@@ -79,11 +79,13 @@ fn placement_stage(gpa: std.mem.Allocator, netlist: *const model.Netlist) !model
 
     const plc = @import("placement/placement.zig");
     const annealing_config: plc.AnnealingConfig = .{
-        .initial_temperature = 3,
-        .moves_per_temperature = 1000,
+        .initial_temperature = 8.1,
+        .moves_per_temperature = 2000,
         .initial_window_size = 80,
         .alpha = 0.5,
-        .node_padding = 1,
+        .node_padding = 5,
+        // .initial_input_y = 20,
+        // .initial_output_y = 130,
     };
     const placement = plc.placement_annealing(gpa, netlist, seed, annealing_config).?;
 
@@ -94,10 +96,9 @@ fn placement_stage(gpa: std.mem.Allocator, netlist: *const model.Netlist) !model
 }
 
 fn routing_stage(gpa: std.mem.Allocator, schem: *const model.Schematic, wires: []model.Wire) !model.Schematic {
-    _ = gpa; // autofix
-    _ = wires; // autofix
-    // TODO: Perform routing
-    return schem.*;
+    const routing = @import("routing/routing.zig");
+    const schematic = try routing.route(wires, schem, gpa);
+    return schematic;
 }
 
 fn validation_stage(gpa: std.mem.Allocator, schematic: *const model.Schematic, netlist: *const model.Netlist, placement: *const model.Placement) !bool {

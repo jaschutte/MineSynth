@@ -412,31 +412,31 @@ fn initialPlacement(gpa: std.mem.Allocator, netlist: *const Netlist, annealing_c
 
     var count: u32 = 0;
 
-    for (0..netlist.instances.len) |i| {
-        // if there are no input edges connected to this node, it is considered an input to the chip
-        if (netlist.numInputPorts(i) == 0) {
-            try place(placement, i, x, y, .North, annealing_config.node_padding);
-            try placement.input_nodes.put(i, {});
-            count += 1;
-            std.debug.assert(placement.locations.count() == count);
-            x = x + spacing;
-        }
-    }
+    // for (0..netlist.instances.len) |i| {
+    //     // if there are no input edges connected to this node, it is considered an input to the chip
+    //     if (netlist.numInputPorts(i) == 0) {
+    //         try place(placement, i, x, y, .North, annealing_config.node_padding);
+    //         try placement.input_nodes.put(i, {});
+    //         count += 1;
+    //         std.debug.assert(placement.locations.count() == count);
+    //         x = x + spacing;
+    //     }
+    // }
 
     // place output nodes:
     x = first_x_pos;
     y = placement.output_y;
 
-    for (0..netlist.instances.len) |i| {
-        // if there are no output edges connected to this node, it is considered an output to the chip
-        if (netlist.numOutputPorts(i) == 0) {
-            try place(placement, i, x, y, .North, annealing_config.node_padding);
-            try placement.output_nodes.put(i, {});
-            count += 1;
-            std.debug.assert(placement.locations.count() == count);
-            x = x + spacing;
-        }
-    }
+    // for (0..netlist.instances.len) |i| {
+    //     // if there are no output edges connected to this node, it is considered an output to the chip
+    //     if (netlist.numOutputPorts(i) == 0) {
+    //         try place(placement, i, x, y, .North, annealing_config.node_padding);
+    //         try placement.output_nodes.put(i, {});
+    //         count += 1;
+    //         std.debug.assert(placement.locations.count() == count);
+    //         x = x + spacing;
+    //     }
+    // }
 
     x = first_x_pos;
     y = placement.input_y + spacing;
