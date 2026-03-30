@@ -821,11 +821,13 @@ fn swap(netlist: *const Netlist, the_placement: *Placement, node_a_id: glib.Node
 
     // first, test whether they would overlap each other after a swap:
     const can_swap =
-        (pos_b.x + rect_a.w <= pos_a.x) or
-        (pos_b.x >= pos_a.x + rect_b.w) or
-        (pos_b.y + rect_a.h <= pos_a.y) or
-        (pos_b.y >= pos_a.y + rect_b.h);
+        (pos_b.x + rect_a.w <= pos_a.x - node_padding) or // A' is left of B'
+        (pos_a.x + rect_b.w <= pos_b.x - node_padding) or // B' is left of A'
+        (pos_b.y + rect_a.h <= pos_a.y - node_padding) or // A' is above B'
+        (pos_a.y + rect_b.h <= pos_b.y - node_padding); // B' is above A'
     if (!can_swap) return false;
+
+    // 104 + 5 <= 109 == true
 
     // check whether a fits at b position
     const coll_res_a = try checkCollisionSwap(the_placement, node_a_id, unsigned_new_x_a, unsigned_new_y_a, node_padding, node_b_id);

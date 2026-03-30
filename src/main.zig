@@ -11,7 +11,7 @@ pub fn main() !void {
     // defer _ = real_gpa.deinit();
 
     // Read AIGER file
-    const content = try std.fs.cwd().readFileAlloc(gpa, "aiger-examples/2-adder.aag", std.math.maxInt(usize));
+    const content = try std.fs.cwd().readFileAlloc(gpa, "aiger-examples/8-adder.aag", std.math.maxInt(usize));
     defer _ = gpa.free(content);
 
     // Apply normalization to AIGER file
