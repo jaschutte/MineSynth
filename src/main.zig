@@ -85,7 +85,7 @@ fn placement_stage(gpa: std.mem.Allocator, netlist: *const model.Netlist) !model
         .initial_window_size = 70,
         .alpha = 0.8,
         .node_padding = 1,
-        .congestion_cost_weight = 100,
+        .congestion_cost_weight = 50,
         // .initial_input_y = 20,
         // .initial_output_y = 130,
     };
