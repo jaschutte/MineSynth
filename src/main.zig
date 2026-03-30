@@ -88,6 +88,7 @@ fn placement_stage(gpa: std.mem.Allocator, netlist: *const model.Netlist) !model
         .congestion_cost_weight = 50,
         // .initial_input_y = 20,
         // .initial_output_y = 130,
+        .fix_inoutputs = false,
     };
     const placement = plc.placement_annealing(gpa, netlist, seed, annealing_config).?;
 
