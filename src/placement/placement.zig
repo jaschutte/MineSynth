@@ -278,7 +278,9 @@ pub fn printOccupancyGrid(self: *const Placement, string: *std.io.Writer.Allocat
         y -= 1; // now y goes: 299 → 0
 
         for (0..100) |x| {
-            string.writer.print("{:>2}", .{self.occupancy_grid[x][y]}) catch {};
+            var char = self.occupancy_grid[x][y];
+            if (char == empty) char = "o";
+            string.writer.print("{:>2}", .{char}) catch {};
         }
         string.writer.print("\n", .{}) catch {};
     }
@@ -349,7 +351,7 @@ pub fn print(netlist: *const Netlist, placement: *Placement, allocator: std.mem.
 
     try renderAscii(netlist, placement, &string);
 
-    printOccupancyGrid(placement, &string);
+    // printOccupancyGrid(placement, &string);
     std.debug.print("{s}", .{string.written()});
 
     string.deinit();
@@ -639,8 +641,7 @@ fn place(the_placement: *Placement, id: Id, new_x: postype, new_y: postype, orie
 
     for (new_x - node_padding..new_x + rect.w) |x| {
         for (new_y - node_padding..new_y + rect.h) |y| {
-            const assertion = (the_placement.occupancy_grid[x][y] == 0 or the_placement.occupancy_grid[x][y] == id);
-            std.debug.assert(assertion);
+            std.debug.assert(the_placement.occupancy_grid[x][y] == empty or the_placement.occupancy_grid[x][y] == id);
             the_placement.occupancy_grid[x][y] = id;
         }
     }
@@ -682,7 +683,7 @@ fn tryMove(the_placement: *Placement, id: Id, last_pos: *const Position, new_x: 
             std.debug.assert(the_placement.occupancy_grid[x][y] == id);
         }
     }
-    return 0;
+    return empty;
 }
 
 fn checkCollision(the_placement: *const Placement, node_id: glib.NodeId, size: model.Rect, new_x: postype, new_y: postype, node_padding: u8) !glib.NodeId {
@@ -821,8 +822,6 @@ fn moveInputOrOutputAxis(netlist: *const Netlist, the_placement: *Placement, win
 
     const dy = random.intRangeLessThan(i32, min_to_use, size_to_use) * min_spacing;
     const new_y: postype = clampU32WithDelta(y_to_use, dy, max_chipsize, node_padding);
-    var lasytpos: ?postype = null;
-
     const hashmap_to_use = if (useInput) the_placement.input_nodes else the_placement.output_nodes;
 
     // check for collisions:
@@ -832,12 +831,6 @@ fn moveInputOrOutputAxis(netlist: *const Netlist, the_placement: *Placement, win
         const variant = the_placement.variants.get(id).?;
         const rect = variant.model.brect();
         const pos = the_placement.locations.getPtr(id).?;
-        if (lasytpos == null) {
-            lasytpos = pos.y;
-        }
-        // ensure all in/output nodes are kept on the same y axis
-        std.debug.assert(lasytpos == pos.y);
-
         const collision_result = try checkCollision(the_placement, id, rect, pos.x, new_y, node_padding);
         if (collision_result != empty) return collision_result;
     }
@@ -846,14 +839,18 @@ fn moveInputOrOutputAxis(netlist: *const Netlist, the_placement: *Placement, win
     var it2 = hashmap_to_use.iterator();
     while (it2.next()) |entry| {
         const id: glib.NodeId = entry.key_ptr.*;
-        const pos = the_placement.locations.getPtr(id).?;
         const variant = the_placement.variants.get(id).?;
         const rect = variant.model.brect();
-        // confirmed to have thrown an error at least once fsr:
-        std.debug.assert(0 == try checkCollision(the_placement, id, rect, pos.x, new_y, node_padding));
+        const pos = the_placement.locations.getPtr(id).?;
+        const collision_result = try checkCollision(the_placement, id, rect, pos.x, new_y, node_padding);
+        std.debug.assert(collision_result == empty);
         const result = try tryMove(the_placement, id, pos, pos.x, new_y, node_padding);
         // std.debug.print("moved once {d},{d}", .{ before, result });
-        std.debug.assert(result == 0);
+        std.debug.assert(result == empty);
+
+        const newpos = the_placement.locations.getPtr(id).?;
+        // ensure all in/output nodes are kept on the same y axis
+        std.debug.assert(new_y == newpos.y);
     }
 
     if (useInput) {
@@ -862,7 +859,7 @@ fn moveInputOrOutputAxis(netlist: *const Netlist, the_placement: *Placement, win
         the_placement.output_y = new_y;
     }
 
-    return 0;
+    return empty;
 }
 
 fn getRandomNodeID(
@@ -898,7 +895,7 @@ fn perturb(netlist: *const Netlist, the_placement: *Placement, random: std.Rando
             // _ = moveRandomFixedY(the_graph, the_placement, to_perturb, @intFromFloat(@ceil(current_window_size)), random, annealing_config.grid_size, annealing_config.grid_size, the_placement.input_y);
         } else {
             const result = randomMove(netlist, the_placement, to_perturb, @intFromFloat(@ceil(current_window_size)), random, annealing_config.grid_size, null, annealing_config.node_padding); // use grid size as the minimum y position, so it stays nicely alligned if we changed it in the future
-            if (result != 0) {
+            if (result != empty) {
                 _ = swap(netlist, the_placement, to_perturb, result, annealing_config.node_padding);
             }
         }
