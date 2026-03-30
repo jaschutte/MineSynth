@@ -73,8 +73,11 @@ pub fn validate_logical_equivalence(D: *const model.Netlist, S: *const model.Sch
     var ports = std.AutoHashMap(model.Pos, model.Port).init(gpa);
     for (c.placement, 0..) |instance, i| {
         const pos = instance.pos;
-        for (instance.variant.model.inputs, 0..) |ipos, j| {
-            const port_pos = .{ pos[0] + ipos.pos[0], pos[1] + ipos.pos[1], pos[2] + ipos.pos[2] };
+        for (instance.variant.model.inputs, 0..) |_, j| {
+            // TODO: Changed by julian, this could break things if gates are used of which the inputs can't simply be swapped:
+            const inputpos = instance.variant.model.getInputPos(j, instance.mirorred);
+
+            const port_pos = .{ pos[0] + inputpos.pos[0], pos[1] + inputpos.pos[1], pos[2] + inputpos.pos[2] };
             try ports.put(port_pos, model.Port{
                 .instance = i,
                 .direction = .input,

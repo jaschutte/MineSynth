@@ -420,15 +420,7 @@ fn getPortAbsolutePositions(the_placement: *const Placement, edge: *const Net, c
     const port_output = schematic_output.outputs[from_node.port];
     const schematic_input = the_placement.variants.get(to_node.instance).?.model;
     if (schematic_input.inputs.len <= to_node.port) @panic("cry");
-    var input_index = to_node.port;
-    // calculate new port index:
-    if (input_instance_mirrorred) {
-        input_index += 1;
-        if (input_index >= schematic_input.inputs.len) {
-            input_index = 0;
-        }
-    }
-    const port_input = schematic_input.inputs[input_index];
+    const port_input = schematic_input.getInputPos(to_node.port, input_instance_mirrorred);
 
     const pos_from = the_placement.locations.getPtr(from_node.instance) orelse {
         std.debug.print("node 'from_node_id' {d} not placed\n", .{from_node.instance});

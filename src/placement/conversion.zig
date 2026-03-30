@@ -16,7 +16,7 @@ pub fn convertPlacement(gpa: std.mem.Allocator, plc_orig: *const plc.Placement) 
         instances.items[id] = .{
             .pos = pos,
             .variant = variant,
-            .inverted_ports = loc.mirrorred,
+            .mirorred = loc.mirrorred,
         };
     }
 

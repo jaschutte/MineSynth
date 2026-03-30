@@ -47,7 +47,7 @@ pub const Net = struct {
 // Placement of a gate in a grid
 pub const InstancePlacement = struct {
     pos: Pos,
-    inverted_ports: bool,
+    mirorred: bool,
     variant: library.InstanceVariant,
 };
 pub const Instance = struct {
@@ -105,6 +105,20 @@ pub const Schematic = struct {
     size: Size, // Size of the grid
     grid: []BasicBlock, // Grid of blocks, indexed with grid[x*size[1]*size[2] + y*size[2] + z]
     delay: usize, // End-to-end delay of the Schematic
+
+    // mirrored gates should be a separate schematic, or similar to how rotations will be implemented.
+    // but since that is a lot of work lets do it like this for now:
+    pub fn getInputPos(self: *const Schematic, index: usize, mirorred: bool) PortPos {
+        if (mirorred) {
+            var to_use = index + 1;
+            if (to_use >= self.inputs.len) {
+                to_use = 0;
+            }
+            return self.inputs[to_use];
+        } else {
+            return self.inputs[index];
+        }
+    }
 
     pub fn brect(self: *const Schematic) Rect {
         return Rect{
@@ -198,18 +212,9 @@ pub const Placement = struct {
             // mirroring is implemented in placement, so we use getAbsolutePositions:
             const from_inst_pos = self.placement[net.output.instance].pos;
             const from_pos = from_inst_pos + self.placement[net.output.instance].variant.model.outputs[net.output.port].pos;
-            // calculate new port index based on mirror:
-            var input_port_index = net.input.port;
             const input_instance = self.placement[net.input.instance];
-            if (input_instance.inverted_ports) {
-                // shuffle is sufficient for now, but needs changing for more complicated gates
-                input_port_index += 1;
-                if (input_port_index >= input_instance.variant.model.inputs.len) {
-                    input_port_index = 0;
-                }
-            }
-            const to_inst_pos = self.placement[net.input.instance].pos;
-            const to_pos = to_inst_pos + input_instance.variant.model.inputs[input_port_index].pos;
+            const to_inst_pos = input_instance.pos;
+            const to_pos = to_inst_pos + input_instance.variant.model.getInputPos(net.input.port, input_instance.mirorred).pos;
             try wires.append(gpa, .{
                 .net = net.net,
                 .from = from_pos,
