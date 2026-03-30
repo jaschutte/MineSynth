@@ -406,8 +406,7 @@ fn getEdgeFromToNodes(the_graph: *const Graph, the_placement: *const Placement, 
 // returns 2 coordinates of the ports connected to this edge, the 'from' port (output port of the input node) , and the 'to' port (input port of the output node)
 // min_pos is to avoid writing in/output ports outside of bounds.
 // vector returned as .{port_pos_from, port_pos_to}
-fn getPortAbsolutePositions(netlist: *const Netlist, the_placement: *const Placement, edge: *const Net, chip_height_coordinate: postype) ?[2]model.Pos {
-    _ = netlist; // autofix
+fn getPortAbsolutePositions(the_placement: *const Placement, edge: *const Net, chip_height_coordinate: postype) ?[2]model.Pos {
     // do not allow rotations for now
     const net = edge;
 
@@ -547,7 +546,8 @@ fn cost(netlist: *const Netlist, the_placement: *const Placement, annealing_conf
 
 // computes wire length estimation of given net
 fn HPWL(netlist: *const Netlist, the_placement: *const Placement, annealing_config: AnnealingConfig, net: *const Net) f32 {
-    const positions = getPortAbsolutePositions(netlist, the_placement, net, annealing_config.chip_height_coordinate).?;
+    _ = netlist;
+    const positions = getPortAbsolutePositions(the_placement, net, annealing_config.chip_height_coordinate).?;
 
     const port_pos_from = positions[0];
     const port_pos_to = positions[1];
@@ -599,7 +599,7 @@ fn computeCongestionRUDY(netlist: *const Netlist, the_placement: *const Placemen
 }
 
 fn computeNetDensity(netlist: *const Netlist, the_placement: *const Placement, annealing_config: AnnealingConfig, net: *const Net, grid: *Density) void {
-    const positions = getPortAbsolutePositions(netlist, the_placement, net, annealing_config.chip_height_coordinate).?;
+    const positions = getPortAbsolutePositions(the_placement, net, annealing_config.chip_height_coordinate).?;
 
     const port_pos_from = positions[0];
     const port_pos_to = positions[1];
@@ -821,9 +821,19 @@ fn swap(netlist: *const Netlist, the_placement: *Placement, node_a_id: glib.Node
     const node_b = the_placement.variants.get(node_b_id).?;
     const pos_a = the_placement.locations.getPtr(node_a_id).?.*; // dereference so we store a copy, since it is modified after place()
     const pos_b = the_placement.locations.getPtr(node_b_id).?.*; // dereference so we store a copy, since it is modified after place()
+    const rect_a = node_a.model.brect();
+    const rect_b = node_b.model.brect();
 
     const unsigned_new_x_a = pos_b.x;
     const unsigned_new_y_a = pos_b.y;
+
+    // first, test whether they would overlap each other after a swap:
+    const can_swap =
+        (pos_b.x + rect_a.w <= pos_a.x) or
+        (pos_b.x >= pos_a.x + rect_b.w) or
+        (pos_b.y + rect_a.h <= pos_a.y) or
+        (pos_b.y >= pos_a.y + rect_b.h);
+    if (!can_swap) return false;
 
     // check whether a fits at b position
     const coll_res_a = try checkCollisionSwap(the_placement, node_a_id, unsigned_new_x_a, unsigned_new_y_a, node_padding, node_b_id);
@@ -841,8 +851,6 @@ fn swap(netlist: *const Netlist, the_placement: *Placement, node_a_id: glib.Node
     clearOccupancy(the_placement, node_a_id, node_padding);
     clearOccupancy(the_placement, node_b_id, node_padding);
 
-    const rect_a = node_a.model.brect();
-    const rect_b = node_b.model.brect();
     for (pos_a.x - node_padding..pos_a.x + rect_a.w) |x| {
         for (pos_a.y - node_padding..pos_a.y + rect_a.h) |y| {
             std.debug.assert(the_placement.occupancy_grid[x][y] == empty);
@@ -884,7 +892,7 @@ fn swap(netlist: *const Netlist, the_placement: *Placement, node_a_id: glib.Node
     const result4 = try checkCollision(the_placement, node_b_id, unsigned_new_x_b, unsigned_new_y_b, node_padding);
     if (result3 != empty or result4 != empty) {
         print(the_placement, tempgpa.?, true);
-        std.debug.print("attempted to swap {d} with {d} at: ({d},{d}) and: ({d},{d})\n", .{ node_a_id, node_b_id, pos_a.x, pos_a.y, (pos_b.x), (pos_b.y) });
+        std.debug.print("attempted to swap {d} (w:{d},h:{d}) with {d}(w:{d},h:{d}) at: ({d},{d}) and: ({d},{d})\n", .{ node_a_id, rect_a.w, rect_a.h, node_b_id, rect_b.w, rect_b.h, pos_a.x, pos_a.y, (pos_b.x), (pos_b.y) });
         for (pos_a.x - node_padding..pos_a.x + rect_a.w) |x| {
             for (pos_a.y - node_padding..pos_a.y + rect_a.h) |y| {
                 std.debug.print("checking a: ({d},{d}):{d} \n", .{ x, y, the_placement.occupancy_grid[x][y] });
@@ -961,13 +969,6 @@ fn moveInputOrOutputAxis(netlist: *const Netlist, the_placement: *Placement, win
                 }
             }
             std.debug.print("we shouldnt get here\n", .{});
-        } else {
-            for (pos.x - node_padding..pos.x + rect.w) |x| {
-                for (new_y - node_padding..new_y + rect.h) |y| {
-                    // std.debug.print("checked: ({d},{d})\n", .{ x, y });
-                    std.debug.assert(the_placement.occupancy_grid[x][y] == id);
-                }
-            }
         }
 
         // std.debug.print("moved once: {d},{d}\n", .{ (collision_result), (result) });

@@ -47,6 +47,7 @@ pub const Net = struct {
 // Placement of a gate in a grid
 pub const InstancePlacement = struct {
     pos: Pos,
+    inverted_ports: bool,
     variant: library.InstanceVariant,
 };
 pub const Instance = struct {
@@ -194,10 +195,21 @@ pub const Placement = struct {
     pub fn getWires(self: *const Placement, netlist: *const Netlist, gpa: std.mem.Allocator) ![]Wire {
         var wires = std.ArrayList(Wire).empty;
         for (netlist.nets) |net| {
+            // mirroring is implemented in placement, so we use getAbsolutePositions:
             const from_inst_pos = self.placement[net.output.instance].pos;
             const from_pos = from_inst_pos + self.placement[net.output.instance].variant.model.outputs[net.output.port].pos;
+            // calculate new port index based on mirror:
+            var input_port_index = net.input.port;
+            const input_instance = self.placement[net.input.instance];
+            if (input_instance.inverted_ports) {
+                // shuffle is sufficient for now, but needs changing for more complicated gates
+                input_port_index += 1;
+                if (input_port_index >= input_instance.variant.model.inputs.len) {
+                    input_port_index = 0;
+                }
+            }
             const to_inst_pos = self.placement[net.input.instance].pos;
-            const to_pos = to_inst_pos + self.placement[net.input.instance].variant.model.inputs[net.input.port].pos;
+            const to_pos = to_inst_pos + input_instance.variant.model.inputs[input_port_index].pos;
             try wires.append(gpa, .{
                 .net = net.net,
                 .from = from_pos,
