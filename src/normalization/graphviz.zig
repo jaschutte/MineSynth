@@ -2,10 +2,15 @@ const std = @import("std");
 const nl = @import("netlist.zig");
 const glib = @import("graph.zig");
 const placement = @import("../placement/placement.zig");
+const model = @import("../model.zig");
+const library = @import("../library.zig");
 
 // https://magjac.com/graphviz-visual-editor/
 
-pub fn printNode(string: *std.io.Writer.Allocating, node: *glib.GateGraph.Node, position: ?@Vector(2, placement.postype)) void {
+const posmultiplier = 1;
+const pointsperinch = 1;
+
+pub fn printNode(string: *std.io.Writer.Allocating, node: *glib.GateGraph.Node, position: ?@Vector(2, placement.postype), rect: ?model.Rect) void {
     errdefer @panic("Skill issue");
 
     const symbol = node.body.symbol;
@@ -25,7 +30,27 @@ pub fn printNode(string: *std.io.Writer.Allocating, node: *glib.GateGraph.Node, 
     }
     try string.writer.print("\", fillcolor={s}, tooltip=\"{}\"", .{ color, node.id });
     if (position != null) {
-        try string.writer.print(", pos=\"{d},{d}!, pin=true\"", .{ position.?[0], position.?[1] });
+        if (rect != null) {
+            // manually set correct position for accurate visualization:
+            const center_x = position.?[0] + (rect.?.w * pointsperinch) / 2;
+            const center_y = position.?[1] + (rect.?.h * pointsperinch) / 2;
+
+            try string.writer.print(", pos=\"{d},{d}!\", pin=true", .{
+                center_x * posmultiplier,
+                center_y * posmultiplier,
+            });
+        } else {
+            try string.writer.print(", pos=\"{d},{d}!\", pin=true", .{
+                position.?[0] * posmultiplier,
+                position.?[1] * posmultiplier,
+            });
+        }
+    }
+    if (rect != null) {
+        try string.writer.print(", shape=box, width={d}, height={d}", .{
+            rect.?.w,
+            rect.?.h,
+        });
     }
     try string.writer.print("];\n", .{});
 }
@@ -49,24 +74,51 @@ pub fn printEdge(graph: *const glib.GateGraph, string: *std.io.Writer.Allocating
     try string.writer.print("\", color={s}, tooltip=\"{}\"]\n", .{ color, edge.id });
 }
 
-pub fn printPlacement(gpa: std.mem.Allocator, graph: *const glib.GateGraph, the_placement: *const placement.Placement) void {
+pub fn printPlacement(gpa: std.mem.Allocator, graph: *const glib.GateGraph, the_placement: *const placement.Placement, netlist: ?*const model.Netlist) void {
     errdefer @panic("Skill issue");
 
     var string = std.io.Writer.Allocating.init(gpa);
     try string.writer.writeAll("digraph {\n");
-    try string.writer.writeAll("    layout = fdp;\n");
+    try string.writer.writeAll("    layout = neato;\n");
     try string.writer.writeAll("    node [style=filled];\n");
 
-    for (graph.edges.values()) |*edge| {
-        printEdge(graph, &string, edge);
-    }
+    if (netlist != null) {
+        var id_mapping: std.AutoArrayHashMap(model.Id, usize) = .init(gpa);
+        defer id_mapping.deinit();
+        // So the only annoying thing is that the id's in the placement assume netlist id. so we recreate the netlist id mappings as was done when creating
+        // the original netlist. we do not even need the netlist of all
+        for (graph.nodes.values(), 0..) |*node, netlistid| {
+            // Insert instance id into mapping list
+            try id_mapping.put(node.id, netlistid);
+        }
 
-    for (graph.nodes.values()) |*node| {
-        const pos = the_placement.locations.get(node.id) orelse {
-            std.debug.print("node {d} not placed\n", .{node.id});
-            continue;
-        };
-        printNode(&string, node, @Vector(2, placement.postype){ pos.x, pos.y });
+        for (graph.edges.values()) |*edge| {
+            printEdge(graph, &string, edge);
+        }
+
+        // iterate over all nodes
+        for (graph.nodes.values()) |*node| {
+            const instance_id = id_mapping.get(node.id).?;
+            const pos = the_placement.locations.get(instance_id) orelse {
+                std.debug.print("node {d} not placed\n", .{node.id});
+                continue;
+            };
+            const instance = netlist.?.instances[instance_id];
+            const variant = netlist.?.lib.variants.getPtr(instance.kind).?.items[0];
+            printNode(&string, node, @Vector(2, placement.postype){ pos.x, pos.y }, variant.model.brect());
+        }
+    } else {
+        for (graph.edges.values()) |*edge| {
+            printEdge(graph, &string, edge);
+        }
+
+        for (graph.nodes.values()) |*node| {
+            const pos = the_placement.locations.get(node.id) orelse {
+                std.debug.print("node {d} not placed\n", .{node.id});
+                continue;
+            };
+            printNode(&string, node, @Vector(2, placement.postype){ pos.x, pos.y }, null);
+        }
     }
 
     try string.writer.writeAll("}\n");
@@ -74,6 +126,36 @@ pub fn printPlacement(gpa: std.mem.Allocator, graph: *const glib.GateGraph, the_
     std.debug.print("{s}", .{string.written()});
     string.deinit();
 }
+
+// pub fn printPlacementNetlist(gpa: std.mem.Allocator, netlist: *const model.Netlist, the_placement: *const placement.Placement) void {
+//     errdefer @panic("Skill issue");
+
+//     var string = std.io.Writer.Allocating.init(gpa);
+//     try string.writer.writeAll("digraph {\n");
+//     try string.writer.writeAll("    layout = fdp;\n");
+//     try string.writer.writeAll("    node [style=filled];\n");
+
+//     for (netlist.nets) |net| {
+//         printEdge(graph, &string, edge);
+//     }
+
+//     for (graph.edges.values()) |*edge| {
+//         printEdge(graph, &string, edge);
+//     }
+
+//     for (graph.nodes.values()) |*node| {
+//         const pos = the_placement.locations.get(node.id) orelse {
+//             std.debug.print("node {d} not placed\n", .{node.id});
+//             continue;
+//         };
+//         printNode(&string, node, @Vector(2, placement.postype){ pos.x, pos.y });
+//     }
+
+//     try string.writer.writeAll("}\n");
+
+//     std.debug.print("{s}", .{string.written()});
+//     string.deinit();
+// }
 
 pub fn printGate(gpa: std.mem.Allocator, graph: *const glib.GateGraph) void {
     errdefer @panic("Skill issue");
@@ -88,7 +170,7 @@ pub fn printGate(gpa: std.mem.Allocator, graph: *const glib.GateGraph) void {
     }
 
     for (graph.nodes.values()) |*node| {
-        printNode(&string, node, null);
+        printNode(&string, node, null, null);
     }
 
     try string.writer.writeAll("}\n");

@@ -3,6 +3,11 @@ const model = @import("model.zig");
 const library = @import("library.zig");
 const nbt = @import("visualization/nbt.zig");
 
+// temp for presenation pictures:
+const print_thingy: bool = true;
+const glibtemp = @import("normalization/graph.zig");
+var temp_graph: ?*glibtemp.GateGraph = null;
+
 pub fn main() !void {
     // Initialize allocator
     // var real_gpa: std.heap.DebugAllocator(.{}) = .init;
@@ -11,7 +16,7 @@ pub fn main() !void {
     // defer _ = real_gpa.deinit();
 
     // Read AIGER file
-    const content = try std.fs.cwd().readFileAlloc(gpa, "aiger-examples/8-adder.aag", std.math.maxInt(usize));
+    const content = try std.fs.cwd().readFileAlloc(gpa, "aiger-examples/2-adder.aag", std.math.maxInt(usize));
     defer _ = gpa.free(content);
 
     // Apply normalization to AIGER file
@@ -56,7 +61,13 @@ fn normalization_stage(gpa: std.mem.Allocator, aiger_file: []u8) !model.Netlist 
     const preprocessor = @import("normalization/preprocessor.zig");
     const sta = @import("normalization/sta.zig");
     const graph = glib.GraphConstructors.fromNetlist(gpa, &netlist);
-    defer graph.deinit();
+    if (print_thingy) {
+        temp_graph = graph; // store reference
+        // trust the graph to be deinit later
+    } else {
+        defer graph.deinit();
+    }
+
     preprocessor.PreProcessor(glib.GateBody).preprocess(graph);
     sta.AAT(graph, &lib); // Perform static timing analysis
 
@@ -85,12 +96,20 @@ fn placement_stage(gpa: std.mem.Allocator, netlist: *const model.Netlist) !model
         .initial_window_size = 70,
         .alpha = 0.8,
         .node_padding = 1,
-        .congestion_cost_weight = 50,
+        .congestion_cost_weight = 10,
         // .initial_input_y = 20,
         // .initial_output_y = 130,
-        .fix_inoutputs = false,
+        .fix_inoutputs = true,
+        .print_results = true,
     };
     const placement = plc.placement_annealing(gpa, netlist, seed, annealing_config).?;
+
+    // print final placement:
+    if (temp_graph != null and print_thingy) {
+        const graphviz = @import("normalization/graphviz.zig");
+        graphviz.printPlacement(gpa, temp_graph.?, placement, netlist);
+        defer temp_graph.?.deinit();
+    }
 
     const conversion = @import("placement/conversion.zig");
     const plac = try conversion.convertPlacement(gpa, placement);
