@@ -36,6 +36,12 @@ pub fn substituteInOrs(graph: *glib.GateGraph) void {
             if (root_input_ids.len != 1) continue :or_finder;
             const and_gate = graph.getConstNode(root_input_ids[0]).?;
             if (and_gate.body.kind != .and_gate) continue :or_finder;
+            {
+                const and_outputs = and_gate.relatedNodes(glib.GateGraph.Edge.Relation.output);
+                defer graph.gpa.free(and_outputs);
+                if (and_outputs.len != 1) continue :or_finder;
+            }
+
             const outputs = node.relatedNodes(glib.GateGraph.Edge.Relation.output);
             defer graph.gpa.free(outputs);
             if (outputs.len != 1) continue :or_finder;
